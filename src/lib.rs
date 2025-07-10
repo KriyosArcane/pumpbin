@@ -257,13 +257,13 @@ impl Pumpbin {
                         let file = AsyncFileDialog::new()
                             .set_directory(desktop_dir().unwrap_or(".".into()))
                             .set_file_name("shellcode.enc")
-                            .set_can_create_directories(true)
                             .set_title("Save encrypted shellcode")
                             .save_file()
                             .await
                             .ok_or(anyhow!("Canceled the saving of encrypted shellcode."))?;
 
-                        fs::write(file.path(), final_shellcode.formated_shellcode())?;
+                        fs::write(file.path(), final_shellcode.formated_shellcode())
+                            .map_err(anyhow::Error::from)?;
                     }
 
                     anyhow::Ok((output.pass().to_vec(), url))
@@ -298,23 +298,42 @@ impl Pumpbin {
                 );
 
                 let generate = async move {
+                    // Improved error handling for shellcode file
+                    let save_type = if plugin.replace().size_holder().is_some() {
+                        ShellcodeSaveType::Local
+                    } else {
+                        ShellcodeSaveType::Remote
+                    };
+                    if save_type == ShellcodeSaveType::Local {
+                        let path = std::path::Path::new(&shellcode_src);
+                        if !path.exists() {
+                            return Err(anyhow!("Shellcode file not found: {}", shellcode_src));
+                        }
+                        let data = std::fs::read(path)
+                            .map_err(|e| anyhow!("Failed to read shellcode file: {}: {}", shellcode_src, e))?;
+                        if data.is_empty() {
+                            return Err(anyhow!("Shellcode file is empty: {}", shellcode_src));
+                        }
+                        if data.windows(b"$$SHELLCODE$$".len()).any(|w| w == b"$$SHELLCODE$$") {
+                            return Err(anyhow!("Shellcode file contains placeholder: {}", shellcode_src));
+                        }
+                    }
                     plugin.replace_binary(&mut bin, shellcode_src, pass)?;
 
                     // write generated binary
                     let file = AsyncFileDialog::new()
                         .set_directory(desktop_dir().unwrap_or(".".into()))
                         .set_file_name("binary.gen")
-                        .set_can_create_directories(true)
                         .set_title("Save generated binary")
                         .save_file()
                         .await
                         .ok_or(anyhow!("Canceled the saving of the generated binary."))?;
 
-                    fs::write(file.path(), bin)?;
+                    fs::write(file.path(), bin).map_err(anyhow::Error::from)?;
 
-                    anyhow::Ok(())
+                    Ok(())
                 }
-                .map_err(|e| e.to_string());
+                .map_err(|e: anyhow::Error| e.to_string());
 
                 return Task::perform(generate, Message::GenerateDone);
             }

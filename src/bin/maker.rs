@@ -14,6 +14,7 @@ use iced::{
     },
     Length, Size, Task, Theme,
 };
+use memchr::memmem;
 use pumpbin::{
     plugin::{Plugin, PluginInfo, PluginReplace},
     utils::{self, error_dialog, message_dialog},
@@ -283,6 +284,8 @@ impl Maker {
                     return Task::none();
                 }
 
+                let src_prefix_bytes = self.src_prefix().as_bytes().to_vec();
+
                 let mut plugin = Plugin {
                     version: self.pumpbin_version().to_string(),
                     info: PluginInfo {
@@ -313,7 +316,7 @@ impl Maker {
                         },
                     },
                     replace: PluginReplace {
-                        src_prefix: self.src_prefix().as_bytes().to_vec(),
+                        src_prefix: src_prefix_bytes.clone(),
                         size_holder: match self.shellcode_save_type() {
                             ShellcodeSaveType::Local => {
                                 Some(self.size_holder().as_bytes().to_vec())
@@ -357,7 +360,17 @@ impl Maker {
                     for (path_str, file_type) in paths {
                         if path_str.is_empty().not() {
                             let path = PathBuf::from(path_str);
-                            let data = fs::read(path)?;
+                            let data = fs::read(&path)?;
+
+                            // Check if the binary still contains the placeholder
+                            if memmem::find(&data, &src_prefix_bytes).is_none() {
+                                bail!(
+                                    "The binary at '{}' does not contain the specified shellcode prefix ('{}'). Please recompile it with the correct placeholder.",
+                                    path.display(),
+                                    String::from_utf8_lossy(&src_prefix_bytes)
+                                );
+                            }
+
                             let bin = match file_type {
                                 ChooseFileType::WindowsExe => plugin.bins.windows.executable_mut(),
                                 ChooseFileType::WindowsLib => {
@@ -389,11 +402,10 @@ impl Maker {
                     let file = AsyncFileDialog::new()
                         .set_directory(desktop_dir().unwrap_or(".".into()))
                         .set_file_name(format!("{}.b1n", plugin.info().plugin_name()))
-                        .set_can_create_directories(true)
                         .set_title("Save generated plugin")
                         .save_file()
                         .await
-                        .ok_or(anyhow!("Canceled the saving of the generated plugin."))?;
+                        .ok_or(anyhow!("Canceled the saving of the plugin."))?;
 
                     fs::write(file.path(), plugin.encode_to_vec()?)?;
 
