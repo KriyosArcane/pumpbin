@@ -20,3 +20,12 @@ pub fn unselected(theme: &Theme, _: Status) -> Style {
     style.border.color = palette.primary.base.color;
     style
 }
+
+pub fn secondary(theme: &Theme, _: Status) -> Style {
+    let palette = theme.extended_palette();
+    let mut style = Style::default();
+    style.border.width = 1.0;
+    style.text_color = palette.secondary.base.color;
+    style.border.color = palette.secondary.base.color;
+    style
+}

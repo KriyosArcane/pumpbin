@@ -7,12 +7,14 @@ use dirs::{desktop_dir, home_dir};
 use iced::{
     alignment::{Horizontal, Vertical},
     application,
+    event::{self, Event},
     futures::TryFutureExt,
+    keyboard::{self, Key},
     widget::{
         button, column, horizontal_rule, pick_list, radio, row, svg::Handle, text, text_editor,
         text_input, Column, Svg,
     },
-    Length, Size, Task, Theme,
+    Length, Size, Subscription, Task, Theme,
 };
 use memchr::memmem;
 use pumpbin::{
@@ -39,6 +41,7 @@ fn try_main() -> anyhow::Result<()> {
         .settings(utils::settings())
         .window(window_settings)
         .theme(Maker::theme)
+        .subscription(Maker::subscription)
         .run()?;
 
     Ok(())
@@ -85,6 +88,7 @@ enum MakerMessage {
     B1nClicked,
     GithubClicked,
     ThemeChanged(Theme),
+    KeyboardEvent(Event),
 }
 
 #[derive(Debug)]
@@ -133,6 +137,11 @@ impl Maker {
         if let ShellcodeSaveType::Local = self.shellcode_save_type() {
             if self.size_holder().is_empty() {
                 bail!("Size Holder is empty.");
+            }
+            
+            // Validate that size holder is a valid number
+            if self.size_holder().parse::<usize>().is_err() {
+                bail!("Size Holder must be a valid number.");
             }
         };
 
@@ -468,6 +477,18 @@ impl Maker {
                 }
             }
             MakerMessage::ThemeChanged(x) => self.selected_theme = x,
+            MakerMessage::KeyboardEvent(event) => {
+                // Handle keyboard events for tab navigation
+                if let Event::Keyboard(keyboard::Event::KeyPressed {
+                    key: Key::Named(keyboard::key::Named::Tab),
+                    modifiers,
+                    ..
+                }) = event
+                {
+                    // Tab navigation is handled by the framework automatically
+                    // This is here for potential future keyboard shortcuts
+                }
+            }
         }
 
         Task::none()
@@ -487,27 +508,27 @@ impl Maker {
             row![
                 column![
                     text("Plugin Name"),
-                    text_input("", self.plugin_name()).on_input(MakerMessage::PluginNameChanged),
+                    text_input("e.g first_plugin", self.plugin_name()).on_input(MakerMessage::PluginNameChanged),
                 ]
                 .align_x(Horizontal::Left),
                 column![
                     text("Author"),
-                    text_input("", self.author()).on_input(MakerMessage::AuthorChanged),
+                    text_input("e.g kr1yos", self.author()).on_input(MakerMessage::AuthorChanged),
                 ]
                 .align_x(Horizontal::Left),
                 column![
                     text("Version"),
-                    text_input("", self.version()).on_input(MakerMessage::VersionChanged),
+                    text_input("e.g 1.0.0", self.version()).on_input(MakerMessage::VersionChanged),
                 ]
                 .align_x(Horizontal::Left),
                 column![
                     text("Prefix"),
-                    text_input("", self.src_prefix()).on_input(MakerMessage::SrcPrefixChanged),
+                    text_input("$$SHELLCODE$$", self.src_prefix()).on_input(MakerMessage::SrcPrefixChanged),
                 ]
                 .align_x(Horizontal::Left),
                 column![
                     text("Max Len"),
-                    text_input("", self.max_len()).on_input(MakerMessage::MaxLenChanged),
+                    text_input("1048589", self.max_len()).on_input(MakerMessage::MaxLenChanged),
                 ]
                 .align_x(Horizontal::Left),
             ]
@@ -533,7 +554,7 @@ impl Maker {
                     ShellcodeSaveType::Local => Some(
                         row![
                             text("Size Holder: "),
-                            text_input("", self.size_holder())
+                            text_input("999999", self.size_holder())
                                 .on_input(MakerMessage::SizeHolderChanged)
                         ]
                         .align_y(Vertical::Center)
@@ -549,12 +570,12 @@ impl Maker {
                 text("Windows"),
                 row![
                     text("Exe:"),
-                    row![text_input("", self.windows_exe())
+                    row![text_input("/path/to/windows.exe", self.windows_exe())
                         .on_input(MakerMessage::WindowsExeChanged)],
                     choose_button()
                         .on_press(MakerMessage::ChooseFileClicked(ChooseFileType::WindowsExe)),
                     text("Lib:"),
-                    text_input("", self.windows_lib()).on_input(MakerMessage::WindowsLibChanged),
+                    text_input("/path/to/windows.dll", self.windows_lib()).on_input(MakerMessage::WindowsLibChanged),
                     choose_button()
                         .on_press(MakerMessage::ChooseFileClicked(ChooseFileType::WindowsLib)),
                 ]
@@ -566,11 +587,11 @@ impl Maker {
                 text("Linux"),
                 row![
                     text("Exe:"),
-                    row![text_input("", self.linux_exe()).on_input(MakerMessage::LinuxExeChanged)],
+                    row![text_input("/path/to/linux_binary", self.linux_exe()).on_input(MakerMessage::LinuxExeChanged)],
                     choose_button()
                         .on_press(MakerMessage::ChooseFileClicked(ChooseFileType::LinuxExe)),
                     text("Lib:"),
-                    text_input("", self.linux_lib()).on_input(MakerMessage::LinuxLibChanged),
+                    text_input("/path/to/linux.so", self.linux_lib()).on_input(MakerMessage::LinuxLibChanged),
                     choose_button()
                         .on_press(MakerMessage::ChooseFileClicked(ChooseFileType::LinuxLib)),
                 ]
@@ -582,12 +603,12 @@ impl Maker {
                     text("Darwin"),
                     row![
                         text("Exe:"),
-                        row![text_input("", self.darwin_exe())
+                        row![text_input("/path/to/darwin_binary", self.darwin_exe())
                             .on_input(MakerMessage::DarwinExeChanged)],
                         choose_button()
                             .on_press(MakerMessage::ChooseFileClicked(ChooseFileType::DarwinExe)),
                         text("Lib:"),
-                        text_input("", self.darwin_lib()).on_input(MakerMessage::DarwinLibChanged),
+                        text_input("/path/to/darwin.dylib", self.darwin_lib()).on_input(MakerMessage::DarwinLibChanged),
                         choose_button()
                             .on_press(MakerMessage::ChooseFileClicked(ChooseFileType::DarwinLib)),
                     ]
@@ -599,7 +620,7 @@ impl Maker {
                 column![column![
                     text("Encrypt Shellcode Plug-in"),
                     row![
-                        text_input("", self.encrypt_shellcode_plugin())
+                        text_input("/path/to/encrypt_plugin.wasm", self.encrypt_shellcode_plugin())
                             .on_input(MakerMessage::EncryptShllcodePluginChanged),
                         choose_button().on_press(MakerMessage::ChooseFileClicked(
                             ChooseFileType::EncryptShellcodePlugin
@@ -614,7 +635,7 @@ impl Maker {
                     ShellcodeSaveType::Remote => Some(column![
                         text("Format Url Remote Plug-in"),
                         row![
-                            text_input("", self.format_url_remote_plugin())
+                            text_input("/path/to/format_url_plugin.wasm", self.format_url_remote_plugin())
                                 .on_input(MakerMessage::FormatUrlRemotePluginChanged),
                             choose_button().on_press(MakerMessage::ChooseFileClicked(
                                 ChooseFileType::FormatUrlRemote
@@ -629,7 +650,7 @@ impl Maker {
                 column![column![
                     text("Format Encrypted Shellcode Plug-in"),
                     row![
-                        text_input("", self.format_encrypted_shellcode_plugin())
+                        text_input("/path/to/format_encrypted_plugin.wasm", self.format_encrypted_shellcode_plugin())
                             .on_input(MakerMessage::FormatEncryptedShellcodePluginChanged),
                         choose_button().on_press(MakerMessage::ChooseFileClicked(
                             ChooseFileType::FormatEncryptedShellcodePlugin
@@ -645,7 +666,7 @@ impl Maker {
                         column![
                             text("Upload Final Shellcode Remote Plug-in"),
                             row![
-                                text_input("", self.upload_final_shellcode_remote_plugin())
+                                text_input("/path/to/upload_plugin.wasm", self.upload_final_shellcode_remote_plugin())
                                     .on_input(
                                         MakerMessage::UploadFinalShellcodeRemotePluginChanged
                                     ),
@@ -734,5 +755,9 @@ impl Maker {
 
     pub fn theme(&self) -> Theme {
         self.selected_theme()
+    }
+
+    pub fn subscription(&self) -> Subscription<MakerMessage> {
+        event::listen().map(MakerMessage::KeyboardEvent)
     }
 }

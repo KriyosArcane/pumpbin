@@ -10,20 +10,23 @@ use std::{fmt::Display, fs, ops::Not, path::PathBuf};
 
 use anyhow::anyhow;
 use dirs::{desktop_dir, home_dir};
+use open;
 use iced::{
     alignment::{Horizontal, Vertical},
     futures::TryFutureExt,
+    keyboard,
+    event,
     widget::{
         button, column, container, horizontal_rule, pick_list, row,
         svg::{self, Handle},
         text, text_editor, text_input, vertical_rule, Column, Scrollable, Svg,
     },
-    Background, Length, Task, Theme,
+    Background, Length, Task, Theme, Subscription, Event,
 };
 use plugin::{Plugin, Plugins};
 use plugin_system::Pass;
-use rfd::{AsyncFileDialog, MessageLevel};
-use utils::{message_dialog, JETBRAINS_MONO_FONT};
+use rfd::{AsyncFileDialog, MessageLevel, MessageDialogResult};
+use utils::{message_dialog, confirm_dialog, JETBRAINS_MONO_FONT};
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -38,6 +41,8 @@ pub enum Message {
     BinaryTypeChanged(BinaryType),
     AddPluginClicked,
     AddPluginDone(Result<(u32, u32, Plugins), String>),
+    ConfirmRemovePlugin(String),
+    ConfirmRemovePluginResult(MessageDialogResult),
     RemovePlugin(String),
     RemovePluginDone(Result<Plugins, String>),
     PluginItemClicked(String),
@@ -45,6 +50,18 @@ pub enum Message {
     B1nClicked,
     GithubClicked,
     ThemeChanged(Theme),
+    ClearShellcodeSource,
+    OpenRecentFile(PathBuf),
+    ShowAbout,
+    KeyboardShortcut(KeyboardShortcut),
+}
+
+#[derive(Debug, Clone)]
+pub enum KeyboardShortcut {
+    AddPlugin,
+    Generate,
+    ChooseShellcode,
+    ClearSource,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,6 +125,10 @@ pub struct Pumpbin {
     plugin_desc: text_editor::Content,
     pass: Vec<Pass>,
     selected_theme: Theme,
+    recent_files: Vec<PathBuf>,
+    is_loading: bool,
+    loading_message: String,
+    pending_remove_plugin: Option<String>,
 }
 
 impl Default for Pumpbin {
@@ -124,6 +145,10 @@ impl Default for Pumpbin {
             plugin_desc: Default::default(),
             pass: Default::default(),
             selected_theme: Theme::CatppuccinMacchiato,
+            recent_files: Vec::new(),
+            is_loading: false,
+            loading_message: String::new(),
+            pending_remove_plugin: None,
         }
     }
 }
@@ -196,6 +221,40 @@ impl Pumpbin {
     pub fn selected_theme(&self) -> Theme {
         self.selected_theme.clone()
     }
+
+    pub fn recent_files(&self) -> &[PathBuf] {
+        &self.recent_files
+    }
+
+    pub fn is_loading(&self) -> bool {
+        self.is_loading
+    }
+
+    pub fn loading_message(&self) -> &str {
+        &self.loading_message
+    }
+
+    // Helper methods for new QoL features
+    fn add_recent_file(&mut self, path: PathBuf) {
+        // Remove if already exists to avoid duplicates
+        self.recent_files.retain(|p| p != &path);
+        
+        // Add to front
+        self.recent_files.insert(0, path);
+        
+        // Keep only last 5 files
+        self.recent_files.truncate(5);
+    }
+
+    fn set_loading(&mut self, loading: bool, message: String) {
+        self.is_loading = loading;
+        self.loading_message = message;
+    }
+
+    fn clear_source(&mut self) {
+        self.shellcode_src = String::new();
+        self.pass = Vec::new();
+    }
 }
 
 impl Pumpbin {
@@ -223,6 +282,7 @@ impl Pumpbin {
             Message::ChooseShellcodeDone(x) => {
                 if let Some(path) = x {
                     self.shellcode_src = path.to_string_lossy().to_string();
+                    self.add_recent_file(path);
                 }
             }
             Message::PlatformChanged(x) => {
@@ -285,6 +345,7 @@ impl Pumpbin {
                 };
             }
             Message::GenerateClicked => {
+                self.set_loading(true, "Generating implant...".to_string());
                 // unwrap is safe.
                 // UI implemented strict restrictions.
                 let plugin = self.selected_plugin().unwrap().to_owned();
@@ -338,13 +399,19 @@ impl Pumpbin {
                 return Task::perform(generate, Message::GenerateDone);
             }
             Message::GenerateDone(x) => {
+                self.set_loading(false, String::new());
                 match x {
-                    Ok(_) => message_dialog("Generate done.".into(), MessageLevel::Info),
-                    Err(e) => message_dialog(e, MessageLevel::Error),
+                    Ok(_) => {
+                        message_dialog("Generate done.".into(), MessageLevel::Info);
+                    },
+                    Err(e) => {
+                        message_dialog(e, MessageLevel::Error);
+                    },
                 };
             }
             Message::BinaryTypeChanged(x) => self.selected_binary_type = Some(x),
             Message::AddPluginClicked => {
+                self.set_loading(true, "Adding plugins...".to_string());
                 let mut plugins = self.plugins().clone();
 
                 let add_plugins = async move {
@@ -382,6 +449,7 @@ impl Pumpbin {
                 return Task::perform(add_plugins, Message::AddPluginDone);
             }
             Message::AddPluginDone(x) => {
+                self.set_loading(false, String::new());
                 match x {
                     Ok((success, failed, plugins)) => {
                         // if selected_plugin, reselect this plugin
@@ -403,7 +471,31 @@ impl Pumpbin {
                     }
                 }
             }
+            Message::ConfirmRemovePlugin(x) => {
+                self.pending_remove_plugin = Some(x.clone());
+                let confirm_message = format!("Are you sure you want to remove the plugin '{}'?\n\nThis action cannot be undone.", x);
+                let confirm_task = confirm_dialog(confirm_message, "Confirm Plugin Removal".to_string());
+                
+                return confirm_task.map(Message::ConfirmRemovePluginResult);
+            }
+            Message::ConfirmRemovePluginResult(result) => {
+                if let Some(plugin_name) = self.pending_remove_plugin.take() {
+                    match result {
+                        MessageDialogResult::Yes => {
+                            return self.update(Message::RemovePlugin(plugin_name));
+                        }
+                        _ => {
+                            // User cancelled, do nothing
+                        }
+                    }
+                }
+            }
             Message::RemovePlugin(x) => {
+                if x.is_empty() {
+                    return Task::none(); // Handle no-op case
+                }
+                
+                self.set_loading(true, "Removing plugin...".to_string());
                 let mut plugins = self.plugins().clone();
 
                 let remove_plugin = async move {
@@ -417,6 +509,7 @@ impl Pumpbin {
                 return Task::perform(remove_plugin, Message::RemovePluginDone);
             }
             Message::RemovePluginDone(x) => {
+                self.set_loading(false, String::new());
                 match x {
                     Ok(plugins) => {
                         self.plugins = plugins;
@@ -424,16 +517,22 @@ impl Pumpbin {
                         if let Some(name) = self.plugins().get_sorted_names().first() {
                             _ = self.update(Message::PluginItemClicked(name.to_owned()));
                         } else {
+                            // Reset all state when no plugins remain
                             self.supported_binary_types = Default::default();
                             self.selected_binary_type = None;
                             self.supported_platforms = Default::default();
                             self.selected_platform = None;
                             self.selected_plugin = None;
                             self.shellcode_save_type = ShellcodeSaveType::Local;
+                            self.shellcode_src = String::new();
+                            self.plugin_desc = text_editor::Content::new();
+                            self.pass = Vec::new();
                         }
+                        
+                        message_dialog("Plugin removed successfully.".to_string(), MessageLevel::Info);
                     }
                     Err(e) => {
-                        message_dialog(e, MessageLevel::Error);
+                        message_dialog(format!("Failed to remove plugin: {}", e), MessageLevel::Error);
                     }
                 };
             }
@@ -474,42 +573,152 @@ impl Pumpbin {
                 }
             }
             Message::ThemeChanged(x) => self.selected_theme = x,
+            Message::ClearShellcodeSource => {
+                self.clear_source();
+                message_dialog("Shellcode source cleared.".to_string(), MessageLevel::Info);
+            }
+            Message::OpenRecentFile(path) => {
+                self.shellcode_src = path.to_string_lossy().to_string();
+                self.add_recent_file(path);
+            }
+            Message::ShowAbout => {
+                let about_text = format!(
+                    "PumpBin v{}\n\nAn Implant Generation Platform\n\n• Powerful, simple, and comfortable UI\n• Support for Local and Remote plugins\n• Extism plugin system for extensibility\n• Unique encrypted implants with random keys\n\nHomepage: {}\nRepository: {}",
+                    env!("CARGO_PKG_VERSION"),
+                    env!("CARGO_PKG_HOMEPAGE"),
+                    env!("CARGO_PKG_REPOSITORY")
+                );
+                message_dialog(about_text, MessageLevel::Info);
+            }
+            Message::KeyboardShortcut(shortcut) => {
+                match shortcut {
+                    KeyboardShortcut::AddPlugin => {
+                        return self.update(Message::AddPluginClicked);
+                    }
+                    KeyboardShortcut::Generate => {
+                        if self.selected_binary_type().is_some() && !self.shellcode_src().is_empty() {
+                            return self.update(Message::GenerateClicked);
+                        }
+                    }
+                    KeyboardShortcut::ChooseShellcode => {
+                        return self.update(Message::ChooseShellcodeClicked);
+                    }
+                    KeyboardShortcut::ClearSource => {
+                        return self.update(Message::ClearShellcodeSource);
+                    }
+                }
+            }
         }
 
         Task::none()
+    }
+
+    pub fn subscription(&self) -> Subscription<Message> {
+        event::listen_with(|event, _status, _window| match event {
+            Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Character(c),
+                modifiers,
+                ..
+            }) => {
+                // Ctrl+O: Open file
+                if modifiers.command() && c.as_ref() == "o" {
+                    Some(Message::KeyboardShortcut(KeyboardShortcut::ChooseShellcode))
+                }
+                // Ctrl+Shift+A: Add plugin
+                else if modifiers.command() && modifiers.shift() && c.as_ref() == "a" {
+                    Some(Message::KeyboardShortcut(KeyboardShortcut::AddPlugin))
+                }
+                // Ctrl+G: Generate
+                else if modifiers.command() && c.as_ref() == "g" {
+                    Some(Message::KeyboardShortcut(KeyboardShortcut::Generate))
+                }
+                // Ctrl+K: Clear source
+                else if modifiers.command() && c.as_ref() == "k" {
+                    Some(Message::KeyboardShortcut(KeyboardShortcut::ClearSource))
+                }
+                else {
+                    None
+                }
+            }
+            Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Named(keyboard::key::Named::F1),
+                ..
+            }) => {
+                Some(Message::ShowAbout)
+            }
+            _ => None,
+        })
     }
 
     pub fn view(&self) -> Column<Message> {
         let padding = 20;
         let spacing = 20;
 
-        let shellcode_src = row![
-            text_input(
-                match self.shellcode_save_type() {
-                    ShellcodeSaveType::Local => "Shellcode path:",
-                    ShellcodeSaveType::Remote => "Shellcode url:",
-                },
-                &self.shellcode_src
-            )
-            .on_input(Message::ShellcodeSrcChanged)
-            .icon(text_input::Icon {
-                font: JETBRAINS_MONO_FONT,
-                code_point: '󱓞',
-                size: None,
-                spacing: 12.0,
-                side: text_input::Side::Left,
-            }),
-            button(match self.shellcode_save_type() {
-                ShellcodeSaveType::Local => row![Svg::new(Handle::from_memory(include_bytes!(
-                    "../assets/svg/three-dots.svg"
-                )))
-                .width(20)],
-                ShellcodeSaveType::Remote => row![text("󰒃 Encrypt")],
-            })
-            .on_press(Message::ChooseShellcodeClicked),
+        let shellcode_src = column![
+            row![
+                text_input(
+                    match self.shellcode_save_type() {
+                        ShellcodeSaveType::Local => "Shellcode path:",
+                        ShellcodeSaveType::Remote => "Shellcode url:",
+                    },
+                    &self.shellcode_src
+                )
+                .on_input(Message::ShellcodeSrcChanged)
+                .icon(text_input::Icon {
+                    font: JETBRAINS_MONO_FONT,
+                    code_point: '󱓞',
+                    size: None,
+                    spacing: 12.0,
+                    side: text_input::Side::Left,
+                }),
+                button(match self.shellcode_save_type() {
+                    ShellcodeSaveType::Local => row![Svg::new(Handle::from_memory(include_bytes!(
+                        "../assets/svg/three-dots.svg"
+                    )))
+                    .width(20)],
+                    ShellcodeSaveType::Remote => row![text("󰒃 Encrypt")],
+                })
+                .on_press(Message::ChooseShellcodeClicked),
+                button("󰝒 Clear")
+                    .on_press(Message::ClearShellcodeSource)
+                    .style(button::secondary),
+            ]
+            .spacing(3)
+            .align_y(Vertical::Center),
+            // Recent files section (only show if we have recent files and it's local mode)
+            if !self.recent_files().is_empty() && self.shellcode_save_type() == ShellcodeSaveType::Local {
+                container(
+                    column(
+                        self.recent_files().iter().take(3).map(|path| {
+                            button(
+                                row![
+                                    text("󰈙"),
+                                    text(path.file_name().unwrap_or_default().to_string_lossy())
+                                        .size(12)
+                                ]
+                                .spacing(5)
+                                .align_y(Vertical::Center)
+                            )
+                            .on_press(Message::OpenRecentFile(path.clone()))
+                            .style(button::text)
+                            .width(Length::Fill)
+                            .into()
+                        }).collect::<Vec<_>>()
+                    )
+                    .spacing(2)
+                )
+                .padding(5)
+                .style(|theme: &Theme| {
+                    let palette = theme.extended_palette();
+                    container::Style::default()
+                        .with_background(palette.background.weak.color)
+                        .with_border(palette.background.strong.color, 1)
+                })
+            } else {
+                container(text(""))
+            }
         ]
-        .spacing(3)
-        .align_y(Vertical::Center);
+        .spacing(5);
 
         let pick_list_handle = || pick_list::Handle::Dynamic {
             closed: pick_list::Icon {
@@ -818,7 +1027,7 @@ impl Pumpbin {
                         )
                         .on_press_maybe(
                             self.selected_plugin()
-                                .map(|x| Message::RemovePlugin(x.info().plugin_name().to_string()))
+                                .map(|x| Message::ConfirmRemovePlugin(x.info().plugin_name().to_string()))
                         )
                         .style(|theme: &Theme, status| {
                             let palette = theme.extended_palette();
@@ -892,9 +1101,14 @@ impl Pumpbin {
         let footer = column![
             horizontal_rule(0),
             row![
-                column![version]
-                    .width(Length::Fill)
-                    .align_x(Horizontal::Left),
+                column![
+                    version,
+                    text("F1: About • Ctrl+O: Open • Ctrl+G: Generate • Ctrl+Shift+A: Add Plugin • Ctrl+K: Clear")
+                        .size(10)
+                        .color(self.theme().extended_palette().background.base.text)
+                ]
+                .width(Length::Fill)
+                .align_x(Horizontal::Left),
                 column![row![b1n, github].align_y(Vertical::Center)]
                     .width(Length::Shrink)
                     .align_x(Horizontal::Center),
@@ -907,7 +1121,7 @@ impl Pumpbin {
         ]
         .align_x(Horizontal::Center);
 
-        let home = column![
+        let mut home = column![
             column![setting_panel, plugin_panel]
                 .padding(padding)
                 .align_x(Horizontal::Center)
@@ -916,10 +1130,32 @@ impl Pumpbin {
         ]
         .align_x(Horizontal::Center);
 
+        // Add loading overlay if loading
+        if self.is_loading() {
+            home = home.push(
+                container(
+                    column![
+                        text("󰔟").size(30),
+                        text(&self.loading_message).size(14)
+                    ]
+                    .spacing(10)
+                    .align_x(Horizontal::Center)
+                )
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .style(|_theme: &Theme| {
+                    container::Style::default()
+                        .with_background(iced::Color::from_rgba(0.0, 0.0, 0.0, 0.7))
+                })
+            );
+        }
+
         home
     }
 
     pub fn theme(&self) -> Theme {
-        self.selected_theme()
+        self.selected_theme.clone()
     }
 }

@@ -31,6 +31,16 @@ pub fn message_dialog(message: String, level: MessageLevel) -> Task<MessageDialo
     Task::future(dialog)
 }
 
+pub fn confirm_dialog(message: String, title: String) -> Task<MessageDialogResult> {
+    let dialog = AsyncMessageDialog::new()
+        .set_buttons(MessageButtons::YesNo)
+        .set_description(message)
+        .set_level(MessageLevel::Warning)
+        .set_title(title)
+        .show();
+    Task::future(dialog)
+}
+
 pub fn settings() -> Settings {
     Settings {
         fonts: vec![include_bytes!("../assets/JetBrainsMonoNerdFont-Regular.ttf").into()],
