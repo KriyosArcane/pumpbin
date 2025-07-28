@@ -29,13 +29,9 @@ extism = "1.4.1"
 serde = { version = "1.0.189", features = ["derive"] }
 serde_json = "1.0.107"
 flate2 = "1.0.30"
+iced_aw = { version = "0.11.0", default-features = false, features = ["menu"] }
 
-[dependencies.iced]
-version = "0.13.0-dev"
-git = "https://github.com/iced-rs/iced"
-rev = "143f4c86caeb43cfff6573fe192c8eb877bb044c"
-default-features = false
-features = ["wgpu", "tiny-skia", "advanced", "svg", "tokio", "image"]
+iced = { version = "0.13.1", default-features = false, features = ["wgpu", "tiny-skia", "advanced", "svg", "tokio", "image"] }
 
 [package.metadata.winresource]
 LegalCopyright = "Copyright (c) 2024 b1n <b1n@b1n.io>"

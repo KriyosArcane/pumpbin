@@ -21,7 +21,7 @@ use iced::{
         svg::{self, Handle},
         text, text_editor, text_input, vertical_rule, Column, Scrollable, Svg,
     },
-    Background, Length, Task, Theme, Subscription, Event,
+    Background, Length, Task, Theme, Subscription, Event, Border,
 };
 use plugin::{Plugin, Plugins};
 use plugin_system::Pass;
@@ -54,6 +54,8 @@ pub enum Message {
     OpenRecentFile(PathBuf),
     ShowAbout,
     KeyboardShortcut(KeyboardShortcut),
+    // Drag & Drop Support
+    FilesDropped(Vec<PathBuf>),
 }
 
 #[derive(Debug, Clone)]
@@ -351,11 +353,13 @@ impl Pumpbin {
                 let plugin = self.selected_plugin().unwrap().to_owned();
                 let shellcode_src = self.shellcode_src().to_owned();
                 let pass = self.pass().to_vec();
+                let platform = self.selected_platform().unwrap();
+                let binary_type = self.selected_binary_type().unwrap();
 
                 // get that binary
                 let mut bin = plugin.bins().get_that_binary(
-                    self.selected_platform().unwrap(),
-                    self.selected_binary_type().unwrap(),
+                    platform,
+                    binary_type,
                 );
 
                 let generate = async move {
@@ -381,11 +385,21 @@ impl Pumpbin {
                     }
                     plugin.replace_binary(&mut bin, shellcode_src, pass)?;
 
+                    // Determine the appropriate file extension based on platform and binary type
+                    let (filename, file_description) = match (platform, binary_type) {
+                        (Platform::Windows, BinaryType::Executable) => ("binary.exe", "Windows executable"),
+                        (Platform::Windows, BinaryType::DynamicLibrary) => ("binary.dll", "Windows library"),
+                        (Platform::Linux, BinaryType::Executable) => ("binary", "Linux executable"),
+                        (Platform::Linux, BinaryType::DynamicLibrary) => ("binary.so", "Linux library"),
+                        (Platform::Darwin, BinaryType::Executable) => ("binary", "macOS executable"),
+                        (Platform::Darwin, BinaryType::DynamicLibrary) => ("binary.dylib", "macOS library"),
+                    };
+
                     // write generated binary
                     let file = AsyncFileDialog::new()
                         .set_directory(desktop_dir().unwrap_or(".".into()))
-                        .set_file_name("binary.gen")
-                        .set_title("Save generated binary")
+                        .set_file_name(filename)
+                        .set_title(&format!("Save generated {}", file_description))
                         .save_file()
                         .await
                         .ok_or(anyhow!("Canceled the saving of the generated binary."))?;
@@ -608,6 +622,70 @@ impl Pumpbin {
                     }
                 }
             }
+            Message::FilesDropped(paths) => {
+                // Handle drag & drop files
+                let mut shellcode_files = Vec::new();
+                let mut plugin_files = Vec::new();
+                
+                // Categorize dropped files
+                for path in paths {
+                    let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
+                    
+                    match extension.to_lowercase().as_str() {
+                        "b1n" => plugin_files.push(path),
+                        _ => shellcode_files.push(path),
+                    }
+                }
+                
+                // Handle plugin files first
+                if !plugin_files.is_empty() {
+                    self.set_loading(true, "Adding dropped plugins...".to_string());
+                    let mut plugins = self.plugins().clone();
+                    
+                    let add_dropped_plugins = async move {
+                        let mut success = 0;
+                        let mut failed = 0;
+                        
+                        for path in plugin_files {
+                            match fs::read(&path) {
+                                Ok(buf) => {
+                                    if let Ok(plugin) = Plugin::decode_from_slice(&buf) {
+                                        let plugin_name = plugin.info().plugin_name();
+                                        plugins.insert(plugin_name.to_string(), buf);
+                                        success += 1;
+                                    } else {
+                                        failed += 1;
+                                    }
+                                }
+                                Err(_) => {
+                                    failed += 1;
+                                }
+                            }
+                        }
+                        
+                        plugins.uptade_plugins()?;
+                        anyhow::Ok((success, failed, plugins))
+                    }
+                    .map_err(|e| e.to_string());
+                    
+                    return Task::perform(add_dropped_plugins, Message::AddPluginDone);
+                }
+                
+                // Handle shellcode files
+                if let Some(path) = shellcode_files.first() {
+                    if self.shellcode_save_type() == ShellcodeSaveType::Local {
+                        self.shellcode_src = path.to_string_lossy().to_string();
+                        self.add_recent_file(path.clone());
+                        message_dialog(
+                            format!("Shellcode file loaded: {}", path.file_name().unwrap_or_default().to_string_lossy()),
+                            MessageLevel::Info,
+                        );
+                    } else {
+                        // For remote mode, process the file for encryption
+                        return self.update(Message::EncryptShellcode(Some(path.clone())));
+                    }
+                }
+            }
         }
 
         Task::none()
@@ -645,6 +723,9 @@ impl Pumpbin {
                 ..
             }) => {
                 Some(Message::ShowAbout)
+            }
+            Event::Window(iced::window::Event::FileDropped(path)) => {
+                Some(Message::FilesDropped(vec![path]))
             }
             _ => None,
         })
@@ -711,8 +792,12 @@ impl Pumpbin {
                 .style(|theme: &Theme| {
                     let palette = theme.extended_palette();
                     container::Style::default()
-                        .with_background(palette.background.weak.color)
-                        .with_border(palette.background.strong.color, 1)
+                        .background(palette.background.weak.color)
+                        .border(Border {
+                            color: palette.background.strong.color,
+                            width: 1.0,
+                            radius: iced::border::Radius::from(0.0),
+                        })
                 })
             } else {
                 container(text(""))
@@ -1056,7 +1141,11 @@ impl Pumpbin {
         .height(Length::Fill)
         .style(|theme: &Theme| {
             let palette = theme.extended_palette();
-            container::Style::default().with_border(palette.background.strong.color, 1)
+            container::Style::default().border(Border {
+                color: palette.background.strong.color,
+                width: 1.0,
+                radius: iced::border::Radius::from(0.0),
+            })
         });
 
         let plugin_panel = row![
@@ -1103,7 +1192,7 @@ impl Pumpbin {
             row![
                 column![
                     version,
-                    text("F1: About • Ctrl+O: Open • Ctrl+G: Generate • Ctrl+Shift+A: Add Plugin • Ctrl+K: Clear")
+                    text("F1: About • Ctrl+O: Open • Ctrl+G: Generate • Ctrl+Shift+A: Add Plugin • Ctrl+K: Clear • Drag & Drop: Files")
                         .size(10)
                         .color(self.theme().extended_palette().background.base.text)
                 ]
@@ -1147,7 +1236,7 @@ impl Pumpbin {
                 .center_y(Length::Fill)
                 .style(|_theme: &Theme| {
                     container::Style::default()
-                        .with_background(iced::Color::from_rgba(0.0, 0.0, 0.0, 0.7))
+                        .background(iced::Color::from_rgba(0.0, 0.0, 0.0, 0.7))
                 })
             );
         }
