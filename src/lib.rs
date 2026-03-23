@@ -11,6 +11,7 @@ use std::{fmt::Display, fs, ops::Not, path::PathBuf};
 use anyhow::anyhow;
 use dirs::{desktop_dir, home_dir};
 use open;
+use chrono::Local;
 use iced::{
     alignment::{Horizontal, Vertical},
     futures::TryFutureExt,
@@ -396,9 +397,27 @@ impl Pumpbin {
                     };
 
                     // write generated binary
+                    let now = Local::now();
+                    let timestamp = now.format("%Y%m%d_%H%M%S").to_string();
+                    let plugin_name_sanitized = plugin.info().plugin_name().to_lowercase().replace(' ', "_");
+                    let platform_str = platform.to_string().to_lowercase();
+                    let bin_type_str = match binary_type {
+                        BinaryType::Executable => "exe",
+                        BinaryType::DynamicLibrary => "dll"
+                    };
+                                        let default_name = format!("{}_{}_{}_{}.{}", plugin_name_sanitized, platform_str, bin_type_str, timestamp, match (platform, binary_type) {
+                        (Platform::Windows, BinaryType::Executable) => "exe",
+                        (Platform::Windows, BinaryType::DynamicLibrary) => "dll",
+                        (Platform::Linux, BinaryType::Executable) => "elf",
+                        (Platform::Linux, BinaryType::DynamicLibrary) => "so",
+                        (Platform::Darwin, BinaryType::Executable) => "macho",
+                        (Platform::Darwin, BinaryType::DynamicLibrary) => "dylib",
+                    });
+
                     let file = AsyncFileDialog::new()
                         .set_directory(desktop_dir().unwrap_or(".".into()))
-                        .set_file_name(filename)
+                        .set_file_name(&default_name)
+                        .set_can_create_directories(true)
                         .set_title(&format!("Save generated {}", file_description))
                         .save_file()
                         .await
