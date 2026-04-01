@@ -1,11 +1,5 @@
 /target
 /VERSION
 /.DS_Store
-
-# Claude Code
 .claude/
-
-# TODO file
-TODO.md
-IMPROVEMENT_PLAN.md
-IMPROVEMENT_PLAN.md
+.vscode

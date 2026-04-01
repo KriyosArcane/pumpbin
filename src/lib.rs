@@ -2,6 +2,7 @@ pub mod plugin;
 mod plugin_system;
 pub mod style;
 pub mod utils;
+pub mod maker;
 pub mod plugin_capnp {
     include!("../capnp/plugin_capnp.rs");
 }
@@ -12,6 +13,7 @@ use anyhow::anyhow;
 use dirs::{desktop_dir, home_dir};
 use open;
 use chrono::Local;
+use serde::{Deserialize, Serialize};
 use iced::{
     alignment::{Horizontal, Vertical},
     futures::TryFutureExt,
@@ -22,12 +24,18 @@ use iced::{
         svg::{self, Handle},
         text, text_editor, text_input, vertical_rule, Column, Scrollable, Svg,
     },
-    Background, Length, Task, Theme, Subscription, Event, Border,
+    Background, Length, Task, Theme, Subscription, Event, Border, Element,
 };
 use plugin::{Plugin, Plugins};
 use plugin_system::Pass;
 use rfd::{AsyncFileDialog, MessageLevel, MessageDialogResult};
 use utils::{message_dialog, confirm_dialog, JETBRAINS_MONO_FONT};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Workspace {
+    Generator,
+    Maker,
+}
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -57,6 +65,8 @@ pub enum Message {
     KeyboardShortcut(KeyboardShortcut),
     // Drag & Drop Support
     FilesDropped(Vec<PathBuf>),
+    WorkspaceChanged(Workspace),
+    MakerMsg(crate::maker::MakerMessage),
 }
 
 #[derive(Debug, Clone)]
@@ -82,7 +92,7 @@ impl Display for BinaryType {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ShellcodeSaveType {
     #[default]
     Local,
@@ -132,6 +142,8 @@ pub struct Pumpbin {
     is_loading: bool,
     loading_message: String,
     pending_remove_plugin: Option<String>,
+    active_workspace: Workspace,
+    maker_state: crate::maker::Maker,
 }
 
 impl Default for Pumpbin {
@@ -152,6 +164,8 @@ impl Default for Pumpbin {
             is_loading: false,
             loading_message: String::new(),
             pending_remove_plugin: None,
+            active_workspace: Workspace::Generator,
+            maker_state: crate::maker::Maker::default(),
         }
     }
 }
@@ -357,6 +371,18 @@ impl Pumpbin {
                 let platform = self.selected_platform().unwrap();
                 let binary_type = self.selected_binary_type().unwrap();
 
+                if let Err(e) = plugin.validate_for_generation(platform, binary_type) {
+                    self.set_loading(false, String::new());
+                    let _ = message_dialog(e.to_string(), MessageLevel::Error);
+                    return Task::none();
+                }
+
+                if let Err(e) = plugin.validate_shellcode_source(&shellcode_src) {
+                    self.set_loading(false, String::new());
+                    let _ = message_dialog(e.to_string(), MessageLevel::Error);
+                    return Task::none();
+                }
+
                 // get that binary
                 let mut bin = plugin.bins().get_that_binary(
                     platform,
@@ -364,26 +390,8 @@ impl Pumpbin {
                 );
 
                 let generate = async move {
-                    // Improved error handling for shellcode file
-                    let save_type = if plugin.replace().size_holder().is_some() {
-                        ShellcodeSaveType::Local
-                    } else {
-                        ShellcodeSaveType::Remote
-                    };
-                    if save_type == ShellcodeSaveType::Local {
-                        let path = std::path::Path::new(&shellcode_src);
-                        if !path.exists() {
-                            return Err(anyhow!("Shellcode file not found: {}", shellcode_src));
-                        }
-                        let data = std::fs::read(path)
-                            .map_err(|e| anyhow!("Failed to read shellcode file: {}: {}", shellcode_src, e))?;
-                        if data.is_empty() {
-                            return Err(anyhow!("Shellcode file is empty: {}", shellcode_src));
-                        }
-                        if data.windows(b"$$SHELLCODE$$".len()).any(|w| w == b"$$SHELLCODE$$") {
-                            return Err(anyhow!("Shellcode file contains placeholder: {}", shellcode_src));
-                        }
-                    }
+                    plugin.validate_for_generation(platform, binary_type)?;
+                    plugin.validate_shellcode_source(&shellcode_src)?;
                     plugin.replace_binary(&mut bin, shellcode_src, pass)?;
 
                     // Determine the appropriate file extension based on platform and binary type
@@ -705,13 +713,34 @@ impl Pumpbin {
                     }
                 }
             }
+            Message::WorkspaceChanged(workspace) => {
+                self.active_workspace = workspace;
+            }
+            Message::MakerMsg(msg) => {
+                if let crate::maker::MakerMessage::GenerateDone(Ok(result)) = &msg {
+                    self.plugins
+                        .insert(result.plugin_name.clone(), result.plugin_bytes.clone());
+
+                    if let Err(e) = self.plugins.uptade_plugins() {
+                        let _ = message_dialog(
+                            format!("Generated plugin was saved, but auto-add failed: {}", e),
+                            MessageLevel::Error,
+                        );
+                    } else {
+                        self.selected_plugin = None;
+                        let _ = self.update(Message::PluginItemClicked(result.plugin_name.clone()));
+                    }
+                }
+
+                return self.maker_state.update(msg).map(Message::MakerMsg);
+            }
         }
 
         Task::none()
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        event::listen_with(|event, _status, _window| match event {
+        let main_subscription = event::listen_with(|event, _status, _window| match event {
             Event::Keyboard(keyboard::Event::KeyPressed {
                 key: keyboard::Key::Character(c),
                 modifiers,
@@ -747,10 +776,17 @@ impl Pumpbin {
                 Some(Message::FilesDropped(vec![path]))
             }
             _ => None,
-        })
+        });
+
+        let maker_subscription = match self.active_workspace {
+            Workspace::Maker => self.maker_state.subscription().map(Message::MakerMsg),
+            Workspace::Generator => Subscription::none(),
+        };
+
+        Subscription::batch(vec![main_subscription, maker_subscription])
     }
 
-    pub fn view(&self) -> Column<Message> {
+    pub fn generator_view(&self) -> Column<Message> {
         let padding = 20;
         let spacing = 20;
 
@@ -1211,7 +1247,7 @@ impl Pumpbin {
             row![
                 column![
                     version,
-                    text("F1: About • Ctrl+O: Open • Ctrl+G: Generate • Ctrl+Shift+A: Add Plugin • Ctrl+K: Clear • Drag & Drop: Files")
+                    text("F1: About • Ctrl+O: Open • Ctrl+N: New (Maker) • Ctrl+G: Generate • Ctrl+Shift+A: Add Plugin • Ctrl+K: Clear • Drag & Drop: Files")
                         .size(10)
                         .color(self.theme().extended_palette().background.base.text)
                 ]
@@ -1261,6 +1297,41 @@ impl Pumpbin {
         }
 
         home
+    }
+
+    pub fn view(&self) -> Column<'_, Message> {
+        let workspace_tabs = row![
+            button("Generator")
+                .on_press(Message::WorkspaceChanged(Workspace::Generator))
+                .style(if self.active_workspace == Workspace::Generator {
+                    style::button::selected
+                } else {
+                    style::button::unselected
+                }),
+            button("Maker")
+                .on_press(Message::WorkspaceChanged(Workspace::Maker))
+                .style(if self.active_workspace == Workspace::Maker {
+                    style::button::selected
+                } else {
+                    style::button::unselected
+                }),
+        ]
+        .spacing(10)
+        .padding([10, 20]);
+
+        let workspace_content: Element<'_, Message> = match self.active_workspace {
+            Workspace::Generator => self.generator_view().into(),
+            Workspace::Maker => Element::from(self.maker_state.view()).map(Message::MakerMsg),
+        };
+
+        column![
+            workspace_tabs,
+            container(workspace_content)
+                .width(Length::Fill)
+                .height(Length::Fill)
+        ]
+        .width(Length::Fill)
+        .height(Length::Fill)
     }
 
     pub fn theme(&self) -> Theme {

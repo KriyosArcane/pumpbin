@@ -1,6 +1,4 @@
-use std::iter;
-
-use anyhow::anyhow;
+use std::{iter};
 use iced::{
     advanced::graphics::image::image_rs::ImageFormat,
     window::{self, Level, Position},
@@ -9,6 +7,7 @@ use iced::{
 use memchr::memmem;
 use rand::RngCore;
 use rfd::{AsyncMessageDialog, MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
+use thiserror::Error;
 
 pub const JETBRAINS_MONO_FONT: Font = Font::with_name("JetBrainsMono NF");
 
@@ -52,7 +51,7 @@ pub fn settings() -> Settings {
 }
 
 pub fn window_settings() -> window::Settings {
-    let size = Size::new(1000.0, 600.0);
+    let size = Size::new(1200.0, 800.0);
 
     window::Settings {
         size,
@@ -73,17 +72,30 @@ pub fn window_settings() -> window::Settings {
     }
 }
 
+#[derive(Debug, Error)]
+pub enum ReplaceError {
+    #[error("Holder '{0}' not found in binary")]
+    HolderNotFound(String),
+    #[error("Replacement data too long: {0} bytes (max: {1} bytes)")]
+    ReplacementTooLong(usize, usize),
+}
+
 pub fn replace(
     bin: &mut [u8],
     holder: &[u8],
     replace_by: &[u8],
     max_len: usize,
-) -> anyhow::Result<()> {
+) -> Result<(), ReplaceError> {
+    if replace_by.len() > max_len {
+        return Err(ReplaceError::ReplacementTooLong(replace_by.len(), max_len));
+    }
+
     let mut replace_by = replace_by.to_owned();
 
     let position = memmem::find_iter(bin, holder)
         .next()
-        .ok_or(anyhow!("Not found {}.", String::from_utf8_lossy(holder)))?;
+        .ok_or_else(|| ReplaceError::HolderNotFound(String::from_utf8_lossy(holder).to_string()))?;
+        
     let mut random: Vec<u8> = iter::repeat(b'0')
         .take(max_len - replace_by.len())
         .collect();

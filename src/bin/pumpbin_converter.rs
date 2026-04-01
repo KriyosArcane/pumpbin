@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::io::{self, Write};
+use std::io::{self};
 use anyhow::{Result, Context, bail};
 use regex::Regex;
 
@@ -10,7 +10,7 @@ struct ConversionConfig {
     plugin_name: String,
     shellcode_size_mb: usize,
     backup_original: bool,
-    force_overwrite: bool,
+    _force_overwrite: bool,
 }
 
 #[derive(Debug)]
@@ -98,13 +98,13 @@ fn get_user_config() -> Result<ConversionConfig> {
         plugin_name,
         shellcode_size_mb,
         backup_original,
-        force_overwrite: false,
+        _force_overwrite: false,
     })
 }
 
 #[derive(Debug)]
 struct ProjectAnalysis {
-    has_main_rs: bool,
+    _has_main_rs: bool,
     has_build_rs: bool,
     main_rs_path: PathBuf,
     shellcode_patterns: Vec<ShellcodePattern>,
@@ -131,7 +131,7 @@ fn analyze_project(project_path: &Path) -> Result<ProjectAnalysis> {
     let target_os = detect_target_os(&main_content, &cargo_content);
     
     Ok(ProjectAnalysis {
-        has_main_rs: true,
+        _has_main_rs: true,
         has_build_rs: project_path.join("build.rs").exists(),
         main_rs_path,
         shellcode_patterns,
@@ -334,7 +334,7 @@ fn main() {{
     Ok(())
 }
 
-fn update_main_rs(config: &ConversionConfig, analysis: &ProjectAnalysis) -> Result<()> {
+fn update_main_rs(_config: &ConversionConfig, analysis: &ProjectAnalysis) -> Result<()> {
     let mut content = fs::read_to_string(&analysis.main_rs_path)?;
     
     // Add required imports at the top

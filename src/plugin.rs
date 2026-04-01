@@ -426,17 +426,97 @@ impl Plugin {
         anyhow::Ok(compressed)
     }
 
+    pub fn save_type(&self) -> ShellcodeSaveType {
+        if self.replace().size_holder().is_some() {
+            ShellcodeSaveType::Local
+        } else {
+            ShellcodeSaveType::Remote
+        }
+    }
+
+    pub fn validate_shellcode_source(&self, shellcode_src: &str) -> anyhow::Result<()> {
+        if shellcode_src.trim().is_empty() {
+            bail!("Shellcode source cannot be empty.");
+        }
+
+        match self.save_type() {
+            ShellcodeSaveType::Local => {
+                let path = Path::new(shellcode_src);
+                if path.exists().not() {
+                    bail!("Shellcode file not found: {}", shellcode_src);
+                }
+
+                let data = fs::read(path).map_err(|e| {
+                    anyhow!("Failed to read shellcode file: {}: {}", shellcode_src, e)
+                })?;
+
+                if data.is_empty() {
+                    bail!("Shellcode file is empty: {}", shellcode_src);
+                }
+
+                if data
+                    .windows(b"$$SHELLCODE$$".len())
+                    .any(|w| w == b"$$SHELLCODE$$")
+                {
+                    bail!("Shellcode file contains placeholder: {}", shellcode_src);
+                }
+            }
+            ShellcodeSaveType::Remote => {
+                if shellcode_src.starts_with("http://").not()
+                    && shellcode_src.starts_with("https://").not()
+                {
+                    bail!("Remote shellcode source must start with http:// or https://");
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn validate_for_generation(
+        &self,
+        platform: Platform,
+        bin_type: BinaryType,
+    ) -> anyhow::Result<()> {
+        let save_type = self.save_type();
+
+        let platform_bins = match platform {
+            Platform::Windows => self.bins().windows(),
+            Platform::Linux => self.bins().linux(),
+            Platform::Darwin => self.bins().darwin(),
+        };
+
+        let binary_exists = match bin_type {
+            BinaryType::Executable => platform_bins.executable().is_some(),
+            BinaryType::DynamicLibrary => platform_bins.dynamic_library().is_some(),
+        };
+
+        if !binary_exists {
+            bail!(
+                "Binary for {} ({}) is not included in this plugin.",
+                platform,
+                bin_type
+            );
+        }
+
+        if save_type == ShellcodeSaveType::Local && self.replace().size_holder().is_none() {
+            bail!("Local save type requires a size holder, but none is defined.");
+        }
+
+        if self.replace().max_len() == 0 {
+            bail!("Maximum shellcode length cannot be zero.");
+        }
+
+        Ok(())
+    }
+
     pub fn replace_binary(
         &self,
         bin: &mut [u8],
         shellcode_src: String,
         mut pass: Vec<Pass>,
     ) -> anyhow::Result<()> {
-        let save_type = if self.replace().size_holder().is_some() {
-            ShellcodeSaveType::Local
-        } else {
-            ShellcodeSaveType::Remote
-        };
+        let save_type = self.save_type();
 
         // replace shellcode src
         let shellcode_src = match save_type {

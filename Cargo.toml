@@ -10,30 +10,27 @@ homepage = "https://b1n.io"
 repository = "https://github.com/pumpbin/pumpbin"
 license = "MIT"
 build = "build.rs"
-default-run = "pumpbin"
-
-[[bin]]
-name = "maker"
-path = "src/bin/maker.rs"
 
 [dependencies]
-rfd = "0.12.0"
+rfd = "0.14"
 dirs = "5.0.1"
-open = "5.0.0"
+open = "5.3"
 bincode = { version = "2.0.0-rc.3", default-features = false , features = ["alloc", "derive", "std"]}
-anyhow = "1.0.86"
+anyhow = "1.0"
+thiserror = "1.0"
 chrono = "0.4"
-chrono = "0.4"
-rand = "0.8.5"
-memchr = "2.7.4"
+rand = "0.8"
+memchr = "2.7"
 capnp = "0.19"
-extism = "1.4.1"
-serde = { version = "1.0.189", features = ["derive"] }
-serde_json = "1.0.107"
-flate2 = "1.0.30"
-iced_aw = { version = "0.11.0", default-features = false, features = ["menu"] }
+extism = "1.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+flate2 = "1.0"
+iced_aw = { version = "0.11", default-features = false, features = ["menu"] }
 
-iced = { version = "0.13.1", default-features = false, features = ["wgpu", "tiny-skia", "advanced", "svg", "tokio", "image"] }
+iced = { version = "0.13", default-features = false, features = ["wgpu", "tiny-skia", "advanced", "svg", "tokio", "image"] }
+regex = "1.10"
+clap = { version = "4.5", features = ["derive"] }
 
 [package.metadata.winresource]
 LegalCopyright = "Copyright (c) 2024 b1n <b1n@b1n.io>"
