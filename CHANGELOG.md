@@ -1,5 +1,60 @@
 # CHANGELOG
 
+## v1.1.12
+
+Seventh chip of v2.0 Phase 0: `OnError::Skip` dispatcher semantics.
+The variant has existed on `RuntimeConfig::on_error` since v1.1.7 but
+the `EventManager::fire_post_binary` dispatcher always treated module
+errors as fatal. v1.1.12 actually honors the variant — a failing
+module whose schema declares `on_error = Skip` logs a `warn!` and the
+chain continues with the unmodified binary.
+
+### Added
+- **Per-module `OnError` enforcement** in `plugin_system::EventManager::fire_post_binary`:
+  - On a WASM call error: if the module's schema declares
+    `on_error = Skip`, log `tracing::warn!(module_index, error)` and
+    continue the chain with the unmodified binary.
+  - On a JSON-deserialize error (malformed `PostBinaryOutput`): same
+    Skip-or-bubble logic.
+  - On `Ok(None)` (module doesn't export `post_binary`): silent skip,
+    same as before.
+  - Default behavior (no schema, or `on_error = Abort`): bubble the
+    error up, same as pre-v1.1.12.
+- **`tests/on_error_skip.rs`** (3 tests):
+  - Empty module list returns input unchanged.
+  - A module that doesn't export `post_binary` (the bundled
+    `aes_gcm_encrypt.wasm`) is silently skipped.
+  - Invalid WASM bytes under the default Abort policy surface an
+    error (regression guard against the v1.1.12 refactor accidentally
+    swallowing errors).
+
+### Plan update
+
+Phase 0.10 ("collapse legacy single-WASM dispatch") was originally
+slated as a v1.1.x hotfix chip. It changes the `.b1n` binary format
+(capnp schema), which would break every shipped plugin mid-1.x train
+and violate SemVer. The plan file (`staged-watching-shannon.md`) is
+updated to document the deferral: 0.10 lands in v2.0 alongside the
+already-planned migrate-or-rebuild story. The 1.x line keeps the
+legacy `Option<Vec<u8>>` fallback fields read-only-honored.
+
+### Verification
+```
+cargo test --all-targets    -> 54/54 pass + 1 wine-gated ignored (was 51)
+cargo fmt --check           -> clean
+cargo clippy --all-targets -- -D warnings -> clean
+```
+
+### Roadmap
+
+Remaining v2.0 Phase 0 items deferred to a later chip:
+- Maker `fs::read` off the UI thread (Phase 0.8 — needs `&mut self`
+  cache plumbing that's bigger than fits in a single chip)
+- Signature migration to `PumpBinResult<T>` (whole-codebase refactor;
+  saved for the v2.0 boundary cut)
+- Collapse legacy single-WASM dispatch — deferred to v2.0 per plan
+  update above
+
 ## v1.1.11
 
 Repair release. The v1.1.9 changelog claimed a rewritten CI workflow

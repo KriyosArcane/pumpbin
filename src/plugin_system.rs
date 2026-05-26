@@ -365,6 +365,13 @@ impl EventManager {
     /// Run `post_binary` through ALL modules in order, passing the output of
     /// each into the next. This allows chaining: e.g. strip → sign → obfuscate.
     /// A module that doesn't export `post_binary` is skipped.
+    ///
+    /// Per-module `OnError` policy (v1.1.12): if a module returns an
+    /// error AND its schema declares `runtime.on_error = Skip`, the
+    /// dispatcher logs a `warn!` with the module's policy name + error
+    /// detail and continues the chain with the unmodified binary. The
+    /// default `OnError::Abort` behavior bubbles the error up as before.
+    /// Modules without a schema fall through to defaults (Abort).
     pub fn fire_post_binary(
         modules: &[Vec<u8>],
         initial: Vec<u8>,
@@ -372,16 +379,57 @@ impl EventManager {
     ) -> anyhow::Result<Vec<u8>> {
         let mut binary = initial;
 
-        for wasm in modules {
+        for (idx, wasm) in modules.iter().enumerate() {
+            // Look up this module's on_error policy. resolve_policy
+            // already gave us a ResolvedPolicy, but that doesn't carry
+            // on_error (which is dispatcher-only, not extism-side).
+            // Read the schema directly here.
+            let on_error = match get_plugin_config_schema(wasm) {
+                Ok(Some(schema)) => schema
+                    .runtime
+                    .as_ref()
+                    .map(|r| r.on_error)
+                    .unwrap_or(OnError::Abort),
+                _ => OnError::Abort,
+            };
+
             let input = PostBinaryInput {
                 final_binary: binary.clone(),
                 binary: vec![],
             };
 
-            if let Some(raw) = run_module(wasm, "post_binary", &input, config)? {
-                let output: PostBinaryOutput = serde_json::from_slice(&raw)?;
-                if output.changed && !output.final_binary.is_empty() {
-                    binary = output.final_binary;
+            match run_module(wasm, "post_binary", &input, config) {
+                Ok(Some(raw)) => match serde_json::from_slice::<PostBinaryOutput>(&raw) {
+                    Ok(output) => {
+                        if output.changed && !output.final_binary.is_empty() {
+                            binary = output.final_binary;
+                        }
+                    }
+                    Err(e) => {
+                        if matches!(on_error, OnError::Skip) {
+                            tracing::warn!(
+                                module_index = idx,
+                                error = %e,
+                                "post_binary module returned invalid JSON; skipping per on_error=Skip"
+                            );
+                        } else {
+                            return Err(e.into());
+                        }
+                    }
+                },
+                Ok(None) => {
+                    // Module doesn't export post_binary — silently skip.
+                }
+                Err(e) => {
+                    if matches!(on_error, OnError::Skip) {
+                        tracing::warn!(
+                            module_index = idx,
+                            error = %e,
+                            "post_binary module failed; skipping per on_error=Skip"
+                        );
+                    } else {
+                        return Err(e);
+                    }
                 }
             }
         }
