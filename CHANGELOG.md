@@ -1,5 +1,37 @@
 # CHANGELOG
 
+## v1.4.3
+
+**Fixture cleanup.** The repo's bundled `hello.b1n` demo plugin
+(126,691 bytes) had no `$$99999$$` size_holder in its template, so
+running `pumpbin-cli generate --plugin hello.b1n ...` failed with
+`PB-E0001 Placeholder "$$99999$$" not found in binary`. This was
+documented as QA finding N4 in v1.1.3's `QA_REPORT.md` and slated
+for v1.2.0 rebuild but slipped. v1.4.3 actually fixes it.
+
+### Fixed
+- **`hello.b1n` rebuilt** as a working v1.4.x-style Local-mode demo
+  plugin (239 bytes — tiny because it's just the synthetic template
+  with both placeholders, no embedded WASM modules). Generate now
+  works:
+  ```
+  $ pumpbin-cli generate --plugin hello.b1n --shellcode my.bin \
+        --platform windows --type exe --output impl.exe
+  INFO Generation complete output="impl.exe"
+  ```
+- **`pumpbin-cli inspect hello.b1n`** also works and shows the
+  correct metadata (Plugin=hello, Author=kriyos, Version=1.0.0,
+  Save type=Local, src_prefix="$$SHELLCODE$$", size_holder="$$99999$$").
+
+### Verification
+
+Local cargo test/fmt/clippy unchanged from v1.4.2.
+Functional smoke against the new fixture:
+```
+pumpbin-cli inspect hello.b1n        # works
+pumpbin-cli generate --plugin hello.b1n ...  # works
+```
+
 ## v1.4.2
 
 **CI fix release.** Every v1.x release since the v1.1.11 CI matrix
