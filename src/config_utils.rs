@@ -101,19 +101,15 @@ pub fn config_value_error(
         }
 
         match field.field_type.to_ascii_lowercase().as_str() {
-            "number" if !trimmed.is_empty() => {
-                if trimmed.parse::<f64>().is_err() {
-                    return Some("expected a number".to_string());
-                }
+            "number" if !trimmed.is_empty() && trimmed.parse::<f64>().is_err() => {
+                return Some("expected a number".to_string());
             }
             "boolean" if !trimmed.is_empty() => match trimmed.to_ascii_lowercase().as_str() {
                 "1" | "true" | "yes" | "on" | "0" | "false" | "no" | "off" => {}
                 _ => return Some("expected true/false".to_string()),
             },
-            "choice" if !trimmed.is_empty() => {
-                if !field.options.contains(&trimmed.to_string()) {
-                    return Some(format!("expected one of: {}", field.options.join(", ")));
-                }
+            "choice" if !trimmed.is_empty() && !field.options.contains(&trimmed.to_string()) => {
+                return Some(format!("expected one of: {}", field.options.join(", ")));
             }
             "file" | "file_base64" if !trimmed.is_empty() => {
                 let file_path = maybe_expand_home_path(trimmed);

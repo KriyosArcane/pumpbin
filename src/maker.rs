@@ -1077,28 +1077,18 @@ impl Maker {
                         Key::Named(keyboard::key::Named::Tab) => {
                             // Tab navigation is handled by the framework automatically
                         }
-                        Key::Character(ch) => {
-                            if modifiers.control() {
-                                match ch.as_str() {
-                                    "o" => {
-                                        return Task::perform(async {}, |_| {
-                                            MakerMessage::OpenB1nClicked
-                                        });
-                                    }
-                                    "n" => {
-                                        return Task::perform(async {}, |_| {
-                                            MakerMessage::NewPluginClicked
-                                        });
-                                    }
-                                    "g" => {
-                                        return Task::perform(async {}, |_| {
-                                            MakerMessage::GenerateClicked
-                                        });
-                                    }
-                                    _ => {}
-                                }
+                        Key::Character(ch) if modifiers.control() => match ch.as_str() {
+                            "o" => {
+                                return Task::perform(async {}, |_| MakerMessage::OpenB1nClicked);
                             }
-                        }
+                            "n" => {
+                                return Task::perform(async {}, |_| MakerMessage::NewPluginClicked);
+                            }
+                            "g" => {
+                                return Task::perform(async {}, |_| MakerMessage::GenerateClicked);
+                            }
+                            _ => {}
+                        },
                         _ => {}
                     }
                 }

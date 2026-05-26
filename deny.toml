@@ -39,6 +39,13 @@ confidence-threshold = 0.8
 allow = ["OpenSSL"]
 name = "ring"
 
+# webpki-roots ships a snapshot of the Mozilla root certificate store under
+# CDLA-Permissive-2.0 (data-only license). Permissive, no source-disclosure
+# obligations, no patent traps. Scoped to this single crate.
+[[licenses.exceptions]]
+allow = ["CDLA-Permissive-2.0"]
+name = "webpki-roots"
+
 [bans]
 multiple-versions = "warn"
 wildcards = "warn"

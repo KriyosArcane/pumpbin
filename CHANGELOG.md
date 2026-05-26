@@ -1,5 +1,46 @@
 # CHANGELOG
 
+## v1.4.4
+
+**CI hotfix.** v1.4.2 turned the `clippy` and `cargo deny` jobs back on
+after the capnp install fix landed, which surfaced two real failures
+that v1.4.3 didn't touch (it only rebuilt the demo fixture).
+
+### Fixed
+
+- **clippy 1.95 `collapsible_match`** (3 sites). CI's
+  `dtolnay/rust-toolchain@stable` pulls 1.95, which catches a lint
+  that local 1.90 doesn't. Each `match arm => if cond { ... }` block
+  was rewritten as a `match arm if cond => { ... }` guard:
+  - `src/config_utils.rs:104` — `"number"`, `"boolean"`, `"choice"`,
+    `"file"`/`"file_base64"` arms in `config_value_error`.
+  - `src/maker.rs:1081` — `Key::Character(ch)` + `modifiers.control()`
+    in the keyboard-shortcut handler.
+  - `src/bin/pumpbin-cli.rs:1082` — `"choice"` arm in
+    `validate_module_config`.
+- **`cargo deny` rejected `CDLA-Permissive-2.0`.** Transitive dep
+  `webpki-roots` (pulled in by `extism` → `ureq`) ships the Mozilla
+  root CA bundle under that license. CDLA-Permissive-2.0 is a
+  permissive data license — no source-disclosure obligations, no
+  patent traps — but it wasn't in our allowlist. Added as a scoped
+  exception (`name = "webpki-roots"`) rather than a blanket allow,
+  so any new dep under the same license would still trip the gate
+  and need explicit review.
+
+### Verification
+
+```
+cargo clippy --offline --all-targets -- -D warnings   # clean
+cargo test --offline --all-targets                    # 19 test bins pass
+cargo fmt --check                                     # clean
+```
+
+`cargo deny check` not runnable locally (binary not installed); the
+diagnosis is pinned to the v1.4.2 CI run failure log (run id
+26436672876, `cargo deny` job, exit "rejected: license is not
+explicitly allowed" for webpki-roots 0.26.11 and 1.0.2). Expectation:
+this exception clears both crate versions in CI.
+
 ## v1.4.3
 
 **Fixture cleanup.** The repo's bundled `hello.b1n` demo plugin

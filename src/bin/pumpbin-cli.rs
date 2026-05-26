@@ -1079,15 +1079,13 @@ fn normalize_runtime_config_for_schema(
                 };
                 *value = normalized.to_string();
             }
-            "choice" => {
-                if field.options.is_empty().not() && field.options.contains(value).not() {
-                    return Err(anyhow!(
-                        "Config '{}' expects one of [{}], got '{}'.",
-                        field.key,
-                        field.options.join(", "),
-                        value
-                    ));
-                }
+            "choice" if field.options.is_empty().not() && field.options.contains(value).not() => {
+                return Err(anyhow!(
+                    "Config '{}' expects one of [{}], got '{}'.",
+                    field.key,
+                    field.options.join(", "),
+                    value
+                ));
             }
             "file" | "file_base64" => {
                 *value = normalize_file_value(&field.key, value)?;
