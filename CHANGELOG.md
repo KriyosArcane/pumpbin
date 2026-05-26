@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Changed (build-time, not runtime)
+
+- **`[profile.dev]` and `[profile.test]` now use
+  `debug = "line-tables-only"` + `split-debuginfo = "unpacked"`.**
+  `target/debug/` after a full `cargo test --no-run` shrinks from
+  ~16 GB to ~5.1 GB (-68%). Each test binary drops from ~500 MB to
+  ~155 MB (-71%). No source change, no behavior change — panics and
+  backtraces still report `file:line` (line-tables retained); only
+  per-type DWARF and unpacked DWARF are dropped from the executable
+  itself.
+
 ### Fixed (post-v1.4.6 cargo-deny followup)
 
 - **v1.4.6's `[patch.crates-io] extism = git...` was a silent no-op.**

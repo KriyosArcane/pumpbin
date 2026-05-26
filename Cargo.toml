@@ -64,6 +64,22 @@ opt-level = 3
 lto = true
 codegen-units = 1
 
+# Slim the dev / test target tree. Each test binary was statically
+# linking the full DWARF for wasmtime + cranelift, ballooning
+# target/debug to ~16 GB on a fresh build (~500 MB per test binary,
+# 17 test binaries). `line-tables-only` keeps panic/backtrace info
+# while dropping per-type debug info; `unpacked` split-debuginfo
+# moves the remaining DWARF into sibling .dwo/.dwp files instead of
+# embedding in the binary. Together they shrink target/debug ~5x
+# with no source change and no measurable behavior change for tests.
+[profile.dev]
+debug = "line-tables-only"
+split-debuginfo = "unpacked"
+
+[profile.test]
+debug = "line-tables-only"
+split-debuginfo = "unpacked"
+
 # NOTE: v1.4.6 attempted to pin extism to git HEAD to pull wasmtime
 # 43 here, but the patch silently no-op'd — upstream extism's HEAD
 # Cargo.toml declares `version = "0.0.0+replaced-by-ci"` (a CI
