@@ -632,10 +632,15 @@ impl Plugin {
                     .into());
                 }
 
-                let data = fs::read(path).map_err(|source| PumpBinError::ShellcodeReadFailed {
-                    path: shellcode_src.to_string(),
-                    source,
-                })?;
+                // Wrap the read in SecretBuf so the heap bytes are zeroized
+                // when this scope exits — even on the success path where we
+                // only used the bytes to check for the placeholder marker.
+                let data: crate::secret::SecretBuf = fs::read(path)
+                    .map_err(|source| PumpBinError::ShellcodeReadFailed {
+                        path: shellcode_src.to_string(),
+                        source,
+                    })?
+                    .into();
 
                 if data.is_empty() {
                     return Err(PumpBinError::ShellcodeFileEmpty {

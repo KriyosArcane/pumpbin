@@ -1,5 +1,97 @@
 # CHANGELOG
 
+## v1.1.8
+
+Fourth chip of v2.0 Phase 0: zeroize-on-drop wrapper for shellcode bytes.
+v1.1.6 stopped shellcode from leaking into the JSON log file (via
+`#[instrument(skip(...))]`); v1.1.8 stops it from sitting in freed heap
+pages after the host releases it.
+
+### Rationale
+
+PumpBin briefly holds shellcode in `Vec<u8>` heap allocations while
+checking for the placeholder marker, computing length, etc. Without
+explicit zeroization, those bytes survive in physical memory until the
+allocator hands the page to another caller — or, on swap-enabled
+systems, to disk. The fix is a thin `SecretBuf` wrapper that derives
+`zeroize::ZeroizeOnDrop`, so every in-memory copy is wiped before the
+allocator reuses the page.
+
+### Added
+- **`pumpbin::secret` module** with `SecretBuf(Vec<u8>)`. Derives
+  `Zeroize` + `ZeroizeOnDrop`. Constructible from `Vec<u8>` and `&[u8]`.
+  `Deref<Target=[u8]>` so existing call sites that expect `&[u8]` need
+  no change. `Debug` impl prints `<redacted N bytes>` instead of the
+  raw contents (belt + braces alongside the `#[instrument(skip)]`
+  guards from v1.1.6).
+- **`SecretBuf::into_vec()`** as the documented escape hatch when bytes
+  must cross a serde boundary. Caller takes responsibility for
+  re-wrapping or zeroizing the result.
+- **`Plugin::validate_shellcode_source`** (`src/plugin.rs`) now wraps
+  the `fs::read` result in `SecretBuf` so the shellcode bytes are wiped
+  on scope exit — even on the success path where we only used them to
+  scan for the placeholder marker.
+- **`SecretBuf` re-exported** at the crate root: `pumpbin::SecretBuf`.
+- **`tests/zeroize_secrets.rs`** (new, 6 tests):
+  - constructs from Vec / slice / `new()`
+  - `Debug` impl never leaks the bytes (raw, Vec-debug, or hex form)
+  - `explicit_zeroize` wipes in place and preserves the pointer
+  - `Deref` lets existing `&[u8]`-taking callers receive `&SecretBuf`
+  - `into_vec` returns the raw bytes for serde escape hatches
+  - end-to-end: `validate_shellcode_source` still returns `PB-E0006`
+    on empty files (proves the SecretBuf-wrapped read path works)
+
+### Intentional scope
+
+- The on-wire `Pass.holder` / `Pass.replace_by` JSON shape **does not
+  change.** Those fields cross the WASM boundary via `serde_json`, and
+  the host can't re-wrap bytes that have already been serialized to a
+  shared buffer. `SecretBuf` is an in-process hygiene feature, not full
+  containment. The CHANGELOG entry documents this honestly.
+- WASM module memory (the Wasmtime guest heap) is also outside the
+  wrapper's reach. Bytes the module holds internally during a hook
+  call survive until the Wasmtime instance drops. v2.0 Phase 0
+  signature migration to `PumpBinResult<T>` will let us audit the full
+  data-flow path more aggressively.
+
+### What zeroize does (and doesn't) buy you
+
+Wiping `Vec<u8>` on drop defeats the most common leak vector — the
+kernel handing the same physical page to another process, or to the
+same process after `free`. It does NOT defeat a debugger attached to
+the live process, swap-file forensics taken before the wipe runs, or
+core dumps captured while bytes are in flight. Treat this as hygiene.
+
+### Dependencies
+- `zeroize = "1.8"` with the `derive` feature.
+
+### Verification
+```
+cargo test --all-targets    -> 48/48 pass + 1 wine-gated ignored (was 42)
+  - golden          : 2
+  - pass_merge      : 1
+  - preflight       : 6
+  - parity_harness  : 5
+  - cli_exit_codes  : 5
+  - error_codes     : 12
+  - log_redaction   : 1
+  - wasm_policy     : 10
+  - zeroize_secrets : 6   (new)
+cargo fmt --check           -> clean
+cargo clippy --all-targets  -> clean of new warnings
+                               (pre-existing maker.rs:951 should_persist)
+```
+
+### Roadmap
+
+Remaining v2.0 Phase 0 items deferred to a later chip:
+- CI matrix (Linux/macOS/Windows + clippy + fmt + cargo deny)
+- Maker `fs::read` off the UI thread
+- Recent-files LRU cap
+- Collapse legacy single-WASM dispatch path
+- `OnError::Skip` runtime semantics in the dispatch chain
+- Signature migration to `PumpBinResult<T>`
+
 ## v1.1.7
 
 Third chip of v2.0 Phase 0: per-module WASM policy. Eliminates the

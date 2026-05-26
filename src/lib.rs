@@ -4,6 +4,7 @@ pub mod logging;
 pub mod maker;
 pub mod plugin;
 pub mod plugin_system;
+pub mod secret;
 pub mod style;
 pub mod utils;
 pub mod plugin_capnp {
@@ -16,6 +17,7 @@ pub use plugin_system::{
     get_plugin_config_schema, OnError, Pass, PluginConfigField, PluginConfigSchema, RuntimeConfig,
     PUMPBIN_SDK_VERSION,
 };
+pub use secret::SecretBuf;
 
 use std::{collections::BTreeMap, fmt::Display, fs, path::PathBuf};
 

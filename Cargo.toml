@@ -1,6 +1,6 @@
 [package]
 name = "pumpbin"
-version = "1.1.7"
+version = "1.1.8"
 authors = ["b1n <b1n@b1n.io>"]
 edition = "2021"
 description = "PumpBin is an Implant Generation Platform."
@@ -36,6 +36,7 @@ clap_complete = "4.5"
 tempfile = "3.10"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt", "json", "ansi", "std"] }
+zeroize = { version = "1.8.2", features = ["derive"] }
 
 [[bin]]
 name = "pumpbin-cli"
