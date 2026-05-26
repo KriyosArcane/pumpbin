@@ -211,7 +211,85 @@ impl PluginConfigField {
     }
 }
 
-/// The schema returned by `plugin_schema`. Declares all config fields.
+/// Current PumpBin SDK version. Bump on breaking schema changes only.
+/// Plugins declare the SDK version they target via `RuntimeConfig::sdk_version`;
+/// the host refuses to load a plugin whose declared version doesn't match.
+/// `None` (the default when `runtime` is absent) is treated as "compatible
+/// with any host" for backward compatibility with pre-1.1.7 plugins.
+pub const PUMPBIN_SDK_VERSION: u32 = 1;
+
+/// Per-module runtime policy declared by the plugin author.
+///
+/// Returned as part of [`PluginConfigSchema`]. Every field has a safe default,
+/// so older plugins that don't ship a `runtime` block run under the host's
+/// strict defaults (3-second timeout, no network).
+///
+/// # Example
+/// ```rust,ignore
+/// PluginConfigSchema {
+///     version: 1,
+///     fields: vec![...],
+///     runtime: Some(RuntimeConfig {
+///         timeout_ms: 10_000,                    // signing can be slow
+///         allowed_hosts: vec!["api.signer.example".into()],
+///         on_error: OnError::Abort,
+///         sdk_version: Some(PUMPBIN_SDK_VERSION),
+///     }),
+/// }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeConfig {
+    /// Maximum wall-clock time the module may run for one hook invocation.
+    /// Default: 3000 ms. Bounds: 1..=600_000 ms (10 minutes).
+    #[serde(default = "default_timeout_ms")]
+    pub timeout_ms: u64,
+    /// Explicit allowlist of hosts the module may contact via Extism's
+    /// HTTP host functions. Default: empty list = no network. Use `["*"]`
+    /// only if your plugin genuinely needs unrestricted access (and only
+    /// works when the host profile sets
+    /// `security.allow_unrestricted_network = true`).
+    #[serde(default)]
+    pub allowed_hosts: Vec<String>,
+    /// What the chain dispatcher does if this module returns an error.
+    /// Default: `Abort` — stop the chain and bubble the error up.
+    /// `Skip` — log and continue to the next module.
+    #[serde(default)]
+    pub on_error: OnError,
+    /// The PumpBin SDK version this plugin was compiled against. Host
+    /// compares against [`PUMPBIN_SDK_VERSION`]; mismatch on major version
+    /// refuses to load. `None` is "any" for backward compatibility.
+    #[serde(default)]
+    pub sdk_version: Option<u32>,
+}
+
+fn default_timeout_ms() -> u64 {
+    3000
+}
+
+impl Default for RuntimeConfig {
+    fn default() -> Self {
+        Self {
+            timeout_ms: 3000,
+            allowed_hosts: Vec::new(),
+            on_error: OnError::Abort,
+            sdk_version: Some(PUMPBIN_SDK_VERSION),
+        }
+    }
+}
+
+/// What the chain dispatcher does when a module errors.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OnError {
+    /// Stop the chain and propagate the error.
+    #[default]
+    Abort,
+    /// Log a warning and continue to the next module.
+    Skip,
+}
+
+/// The schema returned by `plugin_schema`. Declares all config fields and
+/// (optionally) the runtime policy this module needs.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct PluginConfigSchema {
     /// Schema version — set to `1`.
@@ -220,10 +298,24 @@ pub struct PluginConfigSchema {
     /// Ordered list of config fields.
     #[serde(default)]
     pub fields: Vec<PluginConfigField>,
+    /// Per-module runtime policy. `None` means the host applies safe
+    /// defaults (3s timeout, no network, abort-on-error).
+    #[serde(default)]
+    pub runtime: Option<RuntimeConfig>,
 }
 
 impl PluginConfigSchema {
     pub fn new(fields: Vec<PluginConfigField>) -> Self {
-        Self { version: 1, fields }
+        Self {
+            version: 1,
+            fields,
+            runtime: None,
+        }
+    }
+
+    /// Attach a runtime policy. Chainable on top of `new`.
+    pub fn with_runtime(mut self, runtime: RuntimeConfig) -> Self {
+        self.runtime = Some(runtime);
+        self
     }
 }

@@ -1,5 +1,132 @@
 # CHANGELOG
 
+## v1.1.7
+
+Third chip of v2.0 Phase 0: per-module WASM policy. Eliminates the
+unconditional `with_allowed_host("*")` and the hardcoded 5-second
+timeout that have shipped since the plugin system landed. Modules now
+declare their needs (timeout, network hosts, SDK version) via the
+`runtime` block in their `plugin_schema()` export; the host enforces
+those declarations. Modules that don't declare anything get safe
+defaults (3-second timeout, no network).
+
+### Breaking-ish (backward-compatible default behavior)
+
+- **Default WASM timeout drops from 5s to 3s.** Modules that need
+  longer must declare `timeout_ms` in their `RuntimeConfig`. Existing
+  plugins built before v1.1.7 hit the new 3s default; if your AES /
+  signing / network module was already slow it may start failing —
+  add a runtime block with the correct `timeout_ms` to fix.
+- **Default network policy: no network.** Pre-v1.1.7, every WASM module
+  was loaded with `with_allowed_host("*")`. v1.1.7 loads modules with
+  zero allowed hosts. Modules that call `extism_pdk::http::request`
+  now get `PB-E0021 WasmHostDenied` unless they declare the host in
+  their `RuntimeConfig::allowed_hosts`. The `upload_final_shellcode_remote`
+  hook is the main affected path — those plugins must declare their
+  upload endpoint explicitly.
+- **SDK version checking is now strict.** Modules that declare
+  `sdk_version: Some(n)` in their `RuntimeConfig` are refused on
+  mismatch with the host's `PUMPBIN_SDK_VERSION` (currently `1`).
+  Modules with `runtime: None` or `sdk_version: None` are treated as
+  "any" for backward compat with pre-v1.1.7 plugins.
+
+### Added
+- **`RuntimeConfig`** struct in both `pumpbin-plugin-sdk` and
+  `pumpbin::plugin_system`. Fields: `timeout_ms` (default 3000),
+  `allowed_hosts` (default empty), `on_error` (`Abort` | `Skip`,
+  default `Abort`), `sdk_version` (default `Some(1)`).
+- **`OnError`** enum exported alongside. Currently consumed by
+  documentation only; per-module skip-on-error behavior in the
+  dispatch chain is on the v2.0 Phase 0 roadmap.
+- **`PUMPBIN_SDK_VERSION`** constant (currently `1`) exported from
+  both crates. Plugins set their `RuntimeConfig::sdk_version` to this
+  value to opt into strict version checking.
+- **`ResolvedPolicy`** in `plugin_system`. Carries the validated
+  per-module policy built from `RuntimeConfig`. Two constructors:
+  `from_runtime(name, &RuntimeConfig)` (validates bounds, may return
+  `PB-E0023`) and `defaults(name)` (the safe baseline).
+- **`resolve_policy(wasm, name) -> ResolvedPolicy`** — bootstrap helper
+  that reads the schema from a WASM module and builds the policy. Used
+  by `run_module` on every call so per-call policy comes from the
+  module's own declaration.
+- **`manifest_from_wasm_with_policy(wasm, &ResolvedPolicy)`** —
+  replaces the old hardcoded-host/timeout `manifest_from_wasm`. The
+  legacy wrapper has been deleted; all callers go through the policy
+  path.
+- **3 new `PumpBinError` variants**:
+  - `PB-E0021 WasmHostDenied { module, host }` — module tried to
+    contact a host not in its allowlist
+  - `PB-E0022 WasmSdkVersionMismatch { module, declared, host_version }`
+    — module SDK version doesn't match host
+  - `PB-E0023 WasmTimeoutInvalid { module, timeout_ms }` — declared
+    `timeout_ms` outside the 1..=600_000 ms range
+
+### Tests
+- **`tests/wasm_policy.rs`** (new, 10 tests):
+  - `from_runtime` bounds checking (0, in-range, above-max)
+  - `defaults_are_safe` (3s, no network)
+  - `runtime_config_default_matches_resolved_defaults`
+  - `host_sdk_version_is_one` (locks the constant for the 1.x line)
+  - `pre_v1_1_7_wasm_loads_under_default_policy` — proves the AES
+    example plugin still works under the strict defaults (backward
+    compat regression guard)
+  - error-message well-formedness for `PB-E0021` and `PB-E0022`
+- **`tests/error_codes.rs`** — extended the uniqueness check with all
+  3 new variants.
+
+### Migration notes for plugin authors
+
+If your plugin previously relied on the implicit "any host, 5-second
+timeout" defaults, add a `runtime` block to your `plugin_schema()`:
+
+```rust
+use pumpbin_plugin_sdk::*;
+
+#[plugin_fn]
+pub fn plugin_schema() -> FnResult<Json<PluginConfigSchema>> {
+    Ok(Json(PluginConfigSchema::new(vec![/* fields */])
+        .with_runtime(RuntimeConfig {
+            timeout_ms: 10_000,                             // need 10s
+            allowed_hosts: vec!["api.signer.example".into()],
+            on_error: OnError::Abort,
+            sdk_version: Some(PUMPBIN_SDK_VERSION),
+        })))
+}
+```
+
+The existing `aes-gcm-encrypt`, `xor-encrypt`, `url-format`, and
+`pe-version-info` example plugins don't ship a `runtime` block and
+therefore run under the new defaults. They've been smoke-tested under
+v1.1.7 and work unchanged. Plugins that take longer than 3s or need
+network should add the block.
+
+### Verification
+```
+cargo test --all-targets    -> 42/42 pass + 1 wine-gated ignored (was 32)
+  - golden          : 2
+  - pass_merge      : 1
+  - preflight       : 6
+  - parity_harness  : 5
+  - cli_exit_codes  : 5
+  - error_codes     : 12
+  - log_redaction   : 1
+  - wasm_policy     : 10  (new)
+cargo fmt --check           -> clean
+cargo clippy --all-targets  -> clean of new warnings
+```
+
+### Roadmap
+
+Remaining v2.0 Phase 0 items deferred to a later chip:
+- Signature migration to `PumpBinResult<T>`
+- `zeroize` on shellcode + Pass buffers
+- CI matrix (Linux/macOS/Windows + clippy + fmt + cargo deny)
+- Maker `fs::read` off the UI thread
+- Recent-files LRU cap
+- Collapse legacy single-WASM dispatch path
+- `OnError::Skip` runtime semantics in the dispatch chain (currently
+  only the variant exists; chain behavior is always Abort)
+
 ## v1.1.6
 
 Second chip of v2.0 Phase 0: `tracing` initialization + `#[instrument]`

@@ -275,6 +275,20 @@ fn all_codes_are_unique_and_well_formed() {
         PumpBinError::MakerSourcePrefixCollision,
         PumpBinError::MakerPreflightFailed { report: "x".into() },
         PumpBinError::MakerMaxLenInvalid { reason: "x" },
+        // v1.1.7 WASM policy variants
+        PumpBinError::WasmHostDenied {
+            module: "x".into(),
+            host: "x".into(),
+        },
+        PumpBinError::WasmSdkVersionMismatch {
+            module: "x".into(),
+            declared: 99,
+            host_version: 1,
+        },
+        PumpBinError::WasmTimeoutInvalid {
+            module: "x".into(),
+            timeout_ms: 0,
+        },
     ];
 
     use std::collections::HashSet;

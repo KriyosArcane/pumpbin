@@ -147,6 +147,36 @@ pub enum PumpBinError {
     /// PB-E0020 — Maker max_len is invalid (empty, non-numeric, or zero).
     #[error("[PB-E0020] Maker max_len is invalid: {reason}")]
     MakerMaxLenInvalid { reason: &'static str },
+
+    // ── WASM policy (plugin_system.rs, v1.1.7) ──
+    /// PB-E0021 — a WASM module attempted to contact a host that's not
+    /// on the module's declared `allowed_hosts` list. With the default
+    /// empty allowlist this means any network access at all is refused.
+    /// To grant access, declare it in the plugin's `RuntimeConfig`.
+    #[error("[PB-E0021] WASM module {module:?} denied access to host {host:?}")]
+    WasmHostDenied { module: String, host: String },
+
+    /// PB-E0022 — a WASM module declared an SDK version the host doesn't
+    /// support. v1.1.7 introduced strict SDK-version checking; plugins
+    /// built against a future SDK can't load on older hosts.
+    #[error(
+        "[PB-E0022] WASM module {module:?} targets SDK version {declared}, but host supports {host_version}. \
+         Either rebuild the plugin against SDK {host_version} or upgrade PumpBin."
+    )]
+    WasmSdkVersionMismatch {
+        module: String,
+        declared: u32,
+        host_version: u32,
+    },
+
+    /// PB-E0023 — a WASM module's declared `timeout_ms` falls outside the
+    /// host's accepted bounds (1..=600_000). Set a reasonable value or
+    /// remove the field to use the 3000 ms default.
+    #[error(
+        "[PB-E0023] WASM module {module:?} declared timeout_ms={timeout_ms}; \
+         valid range is 1..=600000 ms (10 minutes)"
+    )]
+    WasmTimeoutInvalid { module: String, timeout_ms: u64 },
 }
 
 impl PumpBinError {
@@ -175,6 +205,9 @@ impl PumpBinError {
             Self::MakerSourcePrefixCollision => "PB-E0018",
             Self::MakerPreflightFailed { .. } => "PB-E0019",
             Self::MakerMaxLenInvalid { .. } => "PB-E0020",
+            Self::WasmHostDenied { .. } => "PB-E0021",
+            Self::WasmSdkVersionMismatch { .. } => "PB-E0022",
+            Self::WasmTimeoutInvalid { .. } => "PB-E0023",
         }
     }
 }

@@ -12,7 +12,10 @@ pub mod plugin_capnp {
 
 use anyhow::anyhow;
 pub use error::{PumpBinError, PumpBinResult};
-pub use plugin_system::{get_plugin_config_schema, Pass, PluginConfigField};
+pub use plugin_system::{
+    get_plugin_config_schema, OnError, Pass, PluginConfigField, PluginConfigSchema, RuntimeConfig,
+    PUMPBIN_SDK_VERSION,
+};
 
 use std::{collections::BTreeMap, fmt::Display, fs, path::PathBuf};
 
