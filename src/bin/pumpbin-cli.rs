@@ -29,8 +29,64 @@ struct Cli {
     #[arg(long, global = true, value_name = "FILTER")]
     log_level: Option<String>,
 
+    /// Emit machine-readable JSON on stdout instead of human-readable
+    /// text. Schema: `{"schema":"pumpbin.cli/v1","ok":bool,
+    /// "data":{...} (when ok),"error":{"code":"PB-Exxxx","message":"..."}
+    /// (when !ok)}`. Tracing logs still go to stderr.
+    #[arg(long, global = true)]
+    json: bool,
+
     #[command(subcommand)]
     command: Commands,
+}
+
+const CLI_JSON_SCHEMA: &str = "pumpbin.cli/v1";
+
+#[derive(serde::Serialize)]
+struct JsonEnvelope<T: serde::Serialize> {
+    schema: &'static str,
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<T>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<JsonError>,
+}
+
+#[derive(serde::Serialize)]
+struct JsonError {
+    code: String,
+    message: String,
+}
+
+fn emit_json_ok<T: serde::Serialize>(data: T) {
+    let env = JsonEnvelope::<T> {
+        schema: CLI_JSON_SCHEMA,
+        ok: true,
+        data: Some(data),
+        error: None,
+    };
+    if let Ok(s) = serde_json::to_string(&env) {
+        println!("{s}");
+    }
+}
+
+fn emit_json_err(e: &anyhow::Error) {
+    let code = e
+        .downcast_ref::<pumpbin::PumpBinError>()
+        .map(|pb| pb.code().to_string())
+        .unwrap_or_else(|| "PB-E0000".to_string());
+    let env = JsonEnvelope::<()> {
+        schema: CLI_JSON_SCHEMA,
+        ok: false,
+        data: None,
+        error: Some(JsonError {
+            code,
+            message: e.to_string(),
+        }),
+    };
+    if let Ok(s) = serde_json::to_string(&env) {
+        println!("{s}");
+    }
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -247,6 +303,20 @@ fn main() -> Result<()> {
     let _ = pumpbin::logging::init(log_cfg);
     tracing::debug!("pumpbin-cli starting");
 
+    let result = dispatch(&cli);
+    // JSON error envelope: when --json is set and the dispatch errored,
+    // emit a structured error to stdout so CI parsers can match on the
+    // PB-Exxxx code. Then propagate the error so the process exit
+    // status is still non-zero.
+    if cli.json {
+        if let Err(e) = &result {
+            emit_json_err(e);
+        }
+    }
+    result
+}
+
+fn dispatch(cli: &Cli) -> Result<()> {
     match &cli.command {
         Commands::Generate {
             plugin,
@@ -611,7 +681,26 @@ fn main() -> Result<()> {
         Commands::Verify { binary } => verify_binary(binary),
         Commands::Inspect { binary, diff } => {
             let left = pumpbin::inspect::inspect(binary)?;
-            if let Some(other_path) = diff {
+            if cli.json {
+                if let Some(other_path) = diff {
+                    let right = pumpbin::inspect::inspect(other_path)?;
+                    // JSON diff form: emit both reports + a diff field.
+                    #[derive(serde::Serialize)]
+                    struct DiffPayload<'a> {
+                        left: &'a pumpbin::inspect::InspectReport,
+                        right: &'a pumpbin::inspect::InspectReport,
+                        text: String,
+                    }
+                    let payload = DiffPayload {
+                        left: &left,
+                        right: &right,
+                        text: pumpbin::inspect::render_diff(&left, &right),
+                    };
+                    emit_json_ok(payload);
+                } else {
+                    emit_json_ok(&left);
+                }
+            } else if let Some(other_path) = diff {
                 let right = pumpbin::inspect::inspect(other_path)?;
                 print!("{}", pumpbin::inspect::render_diff(&left, &right));
             } else {
@@ -635,6 +724,9 @@ fn main() -> Result<()> {
                 bytes = artifact.bytes_written,
                 "Build complete"
             );
+            if cli.json {
+                emit_json_ok(&artifact);
+            }
             Ok(())
         }
         Commands::Completions {

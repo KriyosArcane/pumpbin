@@ -6,6 +6,7 @@ pub mod maker;
 pub mod plugin;
 pub mod plugin_system;
 pub mod profile;
+pub mod sbom;
 pub mod secret;
 pub mod style;
 pub mod utils;
@@ -20,6 +21,7 @@ pub use plugin_system::{
     PUMPBIN_SDK_VERSION,
 };
 pub use profile::{BuildArtifact, Profile, PROFILE_SCHEMA};
+pub use sbom::{Sbom, SBOM_SCHEMA};
 pub use secret::SecretBuf;
 
 /// LRU cap on the recent-files list (both Generator and Maker workspaces).

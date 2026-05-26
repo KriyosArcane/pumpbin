@@ -91,13 +91,20 @@ pub enum ShellcodeSource {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OutputSpec {
     pub path: PathBuf,
+    /// When true, `Profile::execute` writes a `<output>.pbom.json`
+    /// SBOM alongside the implant. Default: false.
+    #[serde(default)]
+    pub sbom: bool,
 }
 
 /// Outcome of a successful build.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct BuildArtifact {
     pub output_path: PathBuf,
     pub bytes_written: usize,
+    /// Path to the emitted `.pbom.json` SBOM, if `output.sbom = true`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sbom_path: Option<PathBuf>,
 }
 
 impl Profile {
@@ -204,14 +211,68 @@ impl Profile {
             Some(&self.module_config)
         };
 
+        let build_start = std::time::Instant::now();
+
+        // Capture shellcode bytes for the SBOM hash before replace_binary
+        // takes ownership. Local mode reads from disk; Remote mode hashes
+        // the URL bytes (it's what gets embedded in the implant anyway).
+        let shellcode_for_sbom: Vec<u8> = match &self.shellcode {
+            ShellcodeSource::Url { url } => url.as_bytes().to_vec(),
+            _ => std::fs::read(&shellcode_src).unwrap_or_default(),
+        };
+
         let bin = plugin.replace_binary(bin, shellcode_src, vec![], runtime_config)?;
+        let bytes_written = bin.len();
 
         crate::utils::atomic_write(&self.output.path, &bin)?;
+
+        // SBOM emission (opt-in via output.sbom = true).
+        let sbom_path = if self.output.sbom {
+            let sbom_path = sbom_companion_path(&self.output.path);
+            let build_id = build_id_for_run();
+            let duration_ms = build_start.elapsed().as_millis();
+            let sbom = crate::sbom::build_sbom(
+                build_id,
+                &self.plugin.source,
+                &plugin_bytes,
+                plugin.info().plugin_name(),
+                plugin.info().version(),
+                plugin.plugins().modules(),
+                &shellcode_for_sbom,
+                &self.module_config,
+                &self.output.path,
+                bytes_written,
+                duration_ms,
+            );
+            crate::sbom::write_sbom(&sbom, &sbom_path)?;
+            Some(sbom_path)
+        } else {
+            None
+        };
+
         Ok(BuildArtifact {
             output_path: self.output.path.clone(),
-            bytes_written: bin.len(),
+            bytes_written,
+            sbom_path,
         })
     }
+}
+
+fn sbom_companion_path(output: &std::path::Path) -> PathBuf {
+    let file_name = output
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "implant".to_string());
+    let parent = output.parent().unwrap_or(std::path::Path::new("."));
+    parent.join(format!("{file_name}.pbom.json"))
+}
+
+/// Build-time identifier shared between the JSON log filename and the
+/// SBOM build_id. Matches the format used in `logging::build_id`.
+fn build_id_for_run() -> String {
+    let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    let pid = std::process::id();
+    format!("{ts}-{pid}")
 }
 
 fn parse_platform(s: &str) -> anyhow::Result<Platform> {

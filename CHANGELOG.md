@@ -1,5 +1,129 @@
 # CHANGELOG
 
+## v1.3.2
+
+Third chip of v2.0 Phase 1: `--json` versioned CLI output + SBOM
+emission. This is the chip that makes PumpBin **actually scriptable**
+for CI/CD use — every CLI invocation can now emit a machine-parseable
+JSON envelope with a stable schema header, and every build can drop
+a `.pbom.json` SBOM next to the implant for provenance.
+
+### Added
+- **Global `--json` flag** on every subcommand. When set, stdout
+  carries ONE JSON document per invocation:
+  ```json
+  {
+    "schema": "pumpbin.cli/v1",
+    "ok": true,
+    "data": { ... }                  // present when ok
+  }
+  ```
+  On failure:
+  ```json
+  {
+    "schema": "pumpbin.cli/v1",
+    "ok": false,
+    "error": {
+      "code": "PB-E0021",
+      "message": "[PB-E0021] WASM module ..."
+    }
+  }
+  ```
+  PB-Exxxx codes from `PumpBinError` flow through automatically via
+  downcast; non-PB errors get `PB-E0000` as the catch-all code.
+  Tracing logs continue to go to stderr regardless of `--json`, so
+  pipelines can split structured output (stdout) from human-readable
+  progress (stderr).
+- **`Commands::Build --json`** emits the `BuildArtifact` (output path,
+  bytes written, SBOM path if any) in the `data` field.
+- **`Commands::Inspect --json`** emits the full `InspectReport` (plugin
+  metadata, replace config, platforms, modules with sha256 + runtime
+  policy + config fields). With `--diff`, emits a payload containing
+  both reports plus a rendered text diff.
+- **`pumpbin::sbom` module** with `Sbom`, `build_sbom`, `write_sbom`,
+  `SBOM_SCHEMA = "pumpbin.sbom/v1"`. Re-exported at crate root:
+  `pumpbin::Sbom`, `pumpbin::SBOM_SCHEMA`.
+- **`output.sbom = true`** in `pumpbin.toml` profiles enables SBOM
+  emission. Writes `<output>.pbom.json` alongside the implant:
+  ```json
+  {
+    "schema": "pumpbin.sbom/v1",
+    "build_id": "20260526-023058-311455",
+    "build_time": "2026-05-26T02:30:58-04:00",
+    "builder": { "hostname": "...", "user": "...",
+                 "pumpbin_version": "1.3.2" },
+    "plugin": { "source": "...", "name": "...", "version": "...",
+                "sha256": "...", "size": ... },
+    "modules": [ { "index": 0, "sha256": "...", "size": ...,
+                   "sdk_version": Some(1) } ],
+    "shellcode_sha256": "...",
+    "shellcode_bytes": ...,
+    "runtime_config": { ... password-like keys redacted ... },
+    "output_path": "...",
+    "output_bytes": ...,
+    "duration_ms": ...
+  }
+  ```
+- **Secret redaction in SBOM**: any `runtime_config` value whose key
+  contains `password`, `secret`, `token`, `_key`, `pfx`, or
+  `donor_pe_b64` (case-insensitive) is replaced with
+  `<redacted N chars>`. So the SBOM for a cert-blob-steal build
+  doesn't leak the donor PE bytes.
+- **`BuildArtifact.sbom_path: Option<PathBuf>`** — when `output.sbom`
+  is true, this is `Some(path/to/<output>.pbom.json)`. Surfaced in
+  both the human-readable build log and the `--json` envelope.
+
+### Operator workflow
+
+```
+$ pumpbin-cli --json build -f pumpbin.toml
+{"schema":"pumpbin.cli/v1","ok":true,"data":{"output_path":"...",
+"bytes_written":4233,"sbom_path":"....pbom.json"}}
+
+$ pumpbin-cli --json inspect plugin.b1n | jq '.data.modules[0].sha256'
+"6a173529ba8584463cba837c325ca017fff99e86d23de5d3abcafbc2e5bc0f9c"
+
+$ pumpbin-cli --json verify --binary implant.exe
+# (when failure path returns Err)
+{"schema":"pumpbin.cli/v1","ok":false,"error":{"code":"PB-E0000",
+"message":"verify reported 2 failure(s): ..."}}
+```
+
+### Intentional scope
+
+- `--json` is only meaningful for subcommands that produce structured
+  data (`build`, `inspect`). For `verify`, `completions`, `create-b1n`,
+  etc. the existing human-readable stdout is the deliverable; `--json`
+  only fires on error path to surface the PB-Exxxx code. v2.0 may
+  extend this if operator demand surfaces.
+- SBOM emission is profile-scoped (set `output.sbom = true`). The
+  ad-hoc-flag `generate` / `batch` subcommands do NOT auto-emit
+  SBOM; per the v2.0 plan they become thin wrappers over Profile
+  eventually, and SBOM falls out for free.
+
+### Verification
+```
+cargo test --all-targets    -> 62/62 pass + 1 wine-gated ignored
+cargo fmt --check           -> clean
+cargo clippy --all-targets -- -D warnings -> clean
+
+# Smoke tests
+pumpbin-cli --json inspect plugin.b1n | jq .data.plugin_name   # works
+pumpbin-cli --json build -f profile.toml | jq .data.sbom_path  # works
+cat implant.exe.pbom.json | jq .plugin.sha256                  # works
+```
+
+### Roadmap
+
+Next chips on the v1.3.x / v2.0 train:
+- Phase 2: plugin presets in `.b1n`, OPSEC profile at
+  `~/.config/pumpbin/opsec.toml`, `pumpbin-cli convert`
+  (raw/hex/c/csharp/python/base64), GUI validation status indicator
+- Phase 3: marketplace + `plugin {install,list,search,uninstall}` +
+  signature verification + rust-shellcode template conversion +
+  SDK PE/codec helpers
+- Phase 4: mdBook docs (CLI ref, SDK ref, OPSEC, positioning)
+
 ## v1.3.1
 
 Second chip of v2.0 Phase 1: `pumpbin-cli inspect`. `.b1n` plugin

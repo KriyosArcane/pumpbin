@@ -14,18 +14,23 @@ use crate::plugin::Plugin;
 use crate::plugin_system::{
     get_plugin_config_schema, PluginConfigField, ResolvedPolicy, RuntimeConfig,
 };
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 /// One inspected `.b1n` file's worth of metadata.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct InspectReport {
     pub path: PathBuf,
     pub plugin_name: String,
     pub author: String,
     pub plugin_version: String,
     pub description: String,
+    /// Hex-encoded for JSON safety (raw Vec<u8> serializes as a byte array
+    /// otherwise, which downstream JSON consumers find awkward).
+    #[serde(serialize_with = "ser_bytes_as_lossy_string")]
     pub src_prefix: Vec<u8>,
+    #[serde(serialize_with = "ser_opt_bytes_as_lossy_string")]
     pub size_holder: Option<Vec<u8>>,
     pub max_len: usize,
     pub save_type: String,
@@ -34,13 +39,27 @@ pub struct InspectReport {
     pub legacy_module_count: usize,
 }
 
-#[derive(Debug, Clone)]
+fn ser_bytes_as_lossy_string<S: serde::Serializer>(bytes: &[u8], s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(&String::from_utf8_lossy(bytes))
+}
+
+fn ser_opt_bytes_as_lossy_string<S: serde::Serializer>(
+    bytes: &Option<Vec<u8>>,
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    match bytes {
+        Some(b) => s.serialize_str(&String::from_utf8_lossy(b)),
+        None => s.serialize_none(),
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct PlatformReport {
     pub name: String,
     pub binary_types: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ModuleReport {
     pub index: usize,
     pub size: usize,
@@ -48,6 +67,9 @@ pub struct ModuleReport {
     /// Parsed runtime policy (if the module exports `plugin_schema`).
     pub runtime: Option<RuntimeConfig>,
     /// Resolved policy after host validation (None if defaults applied).
+    /// Not serialized — duplicate of `runtime` semantically; included
+    /// in struct for downstream consumers using the rust API.
+    #[serde(skip)]
     pub resolved_policy: Option<ResolvedPolicy>,
     /// Config schema fields the module declares.
     pub config_fields: Vec<PluginConfigField>,
