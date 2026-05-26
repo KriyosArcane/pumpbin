@@ -1,5 +1,100 @@
 # CHANGELOG
 
+## v1.2.0
+
+**Minor release** — first signer plugin, picking up the slot left
+empty when v1.1.2 deleted the in-core `host_self_sign`. Pure WASM,
+no host helper needed, ships under `plugin-examples/signers/`.
+
+The other two planned signer plugins (osslsigncode-BYO-PFX and
+signtool-Windows) require a host-side subprocess helper to fork the
+signing tool from inside the WASM hook. That helper is its own
+non-trivial chip (extism `with_function` plumbing + per-OS PATH
+resolution) and is deferred to a follow-up release; v1.2.0 ships
+the one signer that's complete and end-to-end tested.
+
+### Added
+- **`plugin-examples/signers/cert-blob-steal/`** — pure-WASM signer
+  plugin. `post_binary` hook lifts the `WIN_CERTIFICATE` blob from a
+  donor signed PE (passed in as `donor_pe_b64` config) and grafts it
+  onto the generated implant. Patches the implant's
+  `IMAGE_DIRECTORY_ENTRY_SECURITY` data-dir entry to point at the
+  appended blob. 8-byte alignment respected per PE spec.
+- **Declared runtime policy**: `timeout_ms = 5000`, `allowed_hosts = []`
+  (local only, no network), `on_error = Abort`,
+  `sdk_version = PUMPBIN_SDK_VERSION`. Honored by the v1.1.7 policy
+  enforcement layer.
+
+### Honest scope
+
+The grafted signature **does not pass `WinVerifyTrust`**. The cert in
+the blob is genuine (it came from a real signed PE), but the
+Authenticode hash embedded in the blob is the donor's hash, not the
+implant's. Windows checks both. Documented in the plugin's module
+docstring.
+
+What this DOES defeat:
+- YARA / string rules keyed on `IMAGE_DIRECTORY_ENTRY_SECURITY.Size == 0`
+  or `"unsigned"` markers
+- Explorer's "publisher unknown" warning banner (donor's signer name
+  shows in the dialog)
+- File-properties dialogs that show "Digital Signatures" tab populated
+
+What this does NOT defeat:
+- `signtool verify`, `osslsigncode verify`, or any tool that runs the
+  real Authenticode hash check
+- EDR signature-chain validation
+- Windows SmartScreen
+
+### End-to-end verification
+
+Built a signed donor PE via `msfvenom + openssl + osslsigncode`,
+embedded it in a `.b1n` plugin pack with the cert-blob-steal wasm,
+generated an implant. The output PE went from
+`Authenticode directory: va=0x00000000, size=0` (no signature) to
+`va=0x00002C70, size=1496 bytes (present)` (1496 byte donor blob
+correctly grafted, dir entry patched, donor blob found at exact
+declared offset).
+
+### Operator workflow
+
+```
+# 1. Get a signed donor PE (any signed Windows binary works)
+cp /path/to/signed/binary.exe donor.exe
+DONOR_B64=$(base64 -w 0 donor.exe)
+
+# 2. Build a .b1n with cert-blob-steal as a module
+pumpbin-cli create-b1n \
+    --output implant.b1n --name 'stealth' \
+    --template template.exe --platform windows --type exe \
+    --module plugin-examples/target/wasm32-wasip1/release/cert_blob_steal.wasm
+
+# 3. Generate, passing the donor at runtime
+pumpbin-cli generate \
+    --plugin implant.b1n --shellcode payload.bin \
+    --platform windows --type exe --output implant.exe \
+    --module-config "donor_pe_b64=$DONOR_B64"
+```
+
+The plugin reads the donor at generate-time (not bake-time) so each
+build can use a different donor; the implant's signature blob always
+reflects what the operator chose for that specific build.
+
+### Verification
+```
+cargo test --all-targets    -> 54/54 pass + 1 wine-gated ignored (unchanged)
+cargo fmt --check           -> clean
+cargo clippy --all-targets -- -D warnings -> clean
+```
+
+### Deferred to a future v1.2.x
+
+- `osslsigncode-sign` plugin (BYO PFX + password): needs host-side
+  `with_function` exposing a `sign_with_osslsigncode(in, pfx, pass)`
+  helper. Cross-platform but external subprocess.
+- `signtool-sign` plugin (Windows-only, cert store or PFX): needs
+  same host helper, refuses to load on non-Windows hosts.
+
 ## v1.1.13
 
 Eighth chip of v2.0 Phase 0: Maker preflight off the UI thread (Phase

@@ -1,0 +1,17 @@
+[package]
+name = "cert-blob-steal"
+version = "0.1.0"
+edition = "2021"
+description = "PumpBin signer module: lift the WIN_CERTIFICATE blob from a donor signed PE and graft it onto the generated implant"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+pumpbin-plugin-sdk = { path = "../../../plugin-sdk" }
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
+
+[profile.release]
+opt-level = "z"
+strip = true
+lto = true
