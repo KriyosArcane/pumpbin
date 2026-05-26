@@ -1,5 +1,26 @@
 # CHANGELOG
 
+## Unreleased
+
+### Added
+
+- **Execute-QA harness** — `scripts/qa-execute.sh` generates a real
+  implant on each platform (Linux ELF locally, Windows PE over `ssh
+  pumpbin-w10`), runs it, and confirms a hand-written sentinel
+  shellcode actually executed by checking for a `PB-QA-OK` file on
+  disk. Catches loader regressions that unit tests can't (PEB walks,
+  shadow-space layout, cross-target codegen drift).
+- **`tests/qa_execute.rs`** — Rust integration tests
+  (`#[ignore]`-gated) that drive the harness. Windows test skips
+  gracefully if the SSH host isn't reachable.
+- **`scripts/install-qa-hook.sh`** — installs a `pre-push` git hook
+  that gates `git push <remote> v*.*.*` on the execute-QA harness
+  passing. Non-tag pushes are unaffected.
+- **`tests/fixtures/qa/`** — committed sentinel shellcode (NASM
+  source + assembled blob), Linux/Windows loader `.b1n`s, README
+  explaining how to rebuild each fixture and how to wire SSH for the
+  Windows side.
+
 ## v1.4.6
 
 **Real wasmtime CVE fix.** v1.4.5 cleared four RUSTSEC advisories but

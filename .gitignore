@@ -4,6 +4,8 @@
 /.DS_Store
 .claude/
 .vscode
+# Per-developer MCP server config; contains lab IPs/keys.
+/.mcp.json
 # Build artifact emitted by examples/create_thread/build.rs
 examples/create_thread/shellcode
 examples/create_thread_encrypt/shellcode
