@@ -1,6 +1,6 @@
 [package]
 name = "pumpbin"
-version = "1.4.5"
+version = "1.4.6"
 authors = ["b1n <b1n@b1n.io>"]
 edition = "2021"
 description = "PumpBin is an Implant Generation Platform."
@@ -63,3 +63,11 @@ strip = true
 opt-level = 3
 lto = true
 codegen-units = 1
+
+# Pin extism to HEAD (commit 7038ad1c, 2026-05-20) to pick up its
+# wasmtime 37 -> 43 bump, which clears 14 RUSTSEC sandbox-escape and
+# panic advisories filed against wasmtime 37 (RUSTSEC-2026-008x..0114).
+# Remove this patch the moment extism cuts a release > 1.21.0 that
+# carries the same bump.
+[patch.crates-io]
+extism = { git = "https://github.com/extism/extism", rev = "7038ad1c427fa3b25bf0f5d9439490cbb218e262" }

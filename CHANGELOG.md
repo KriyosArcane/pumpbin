@@ -1,5 +1,44 @@
 # CHANGELOG
 
+## v1.4.6
+
+**Real wasmtime CVE fix.** v1.4.5 cleared four RUSTSEC advisories but
+exposed 14 sandbox-escape / panic / data-leakage CVEs in `wasmtime`
+that the published `extism 1.21.0` cannot pick up — its dep range
+caps `wasmtime` at `^37` and no patched 37.x line exists upstream.
+
+The options were: ignore the CVEs in deny.toml (silent), fork extism
+(maintenance burden), or pin extism to its current HEAD via
+`[patch.crates-io]` (small surface, reversible the moment extism
+cuts a release > 1.21.0).
+
+### Fixed
+
+- **`extism` pinned to git commit
+  `7038ad1c427fa3b25bf0f5d9439490cbb218e262`** (HEAD as of
+  2026-05-20) via `[patch.crates-io]` in `Cargo.toml`. That commit
+  bumps the extism runtime to `wasmtime` 43; cargo resolves
+  transitively to `wasmtime 41.0.4`, which post-dates every
+  RUSTSEC-2026-008x..0114 advisory.
+- **`deny.toml [sources].allow-git`** now lists
+  `https://github.com/extism/extism` so the patched source passes
+  the `unknown-git = "deny"` gate.
+
+### Verification
+
+```
+cargo update                                # patch resolves; lockfile shows extism git source
+cargo check --all-targets                   # clean
+cargo clippy --all-targets -- -D warnings   # clean
+cargo test --all-targets --no-fail-fast     # 19 test bins pass
+cargo fmt --check                           # clean
+```
+
+`cargo deny check` not runnable locally (binary not installed); CI
+is the verifier. The patch is intentionally temporary — remove the
+`[patch.crates-io]` block and the `allow-git` entry the moment
+extism publishes a release > 1.21.0 carrying the same wasmtime bump.
+
 ## v1.4.5
 
 **CI advisory hotfix.** v1.4.4 cleared the `cargo deny` license gate

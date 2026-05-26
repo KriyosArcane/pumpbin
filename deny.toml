@@ -61,3 +61,7 @@ deny = []
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# Temporary git pin for extism (see [patch.crates-io] in Cargo.toml).
+# Drop the moment extism cuts a release > 1.21.0 that ships
+# wasmtime >= 43.
+allow-git = ["https://github.com/extism/extism"]
