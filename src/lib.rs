@@ -19,6 +19,10 @@ pub use plugin_system::{
 };
 pub use secret::SecretBuf;
 
+/// LRU cap on the recent-files list (both Generator and Maker workspaces).
+/// Bumped from the pre-v1.1.10 value of 10 to match the v2.0 plan target.
+pub const RECENT_FILES_CAP: usize = 20;
+
 use std::{collections::BTreeMap, fmt::Display, fs, path::PathBuf};
 
 use base64::{engine::general_purpose, Engine as _};
@@ -416,14 +420,17 @@ impl Pumpbin {
 
     // Helper methods for new QoL features
     fn add_recent_file(&mut self, path: PathBuf) {
-        // Remove if already exists to avoid duplicates
+        // Remove if already exists to avoid duplicates (LRU dedup).
         self.recent_files.retain(|p| p != &path);
 
-        // Add to front
+        // Add to front (most-recently-used).
         self.recent_files.insert(0, path);
 
-        // Keep only last 10 files
-        self.recent_files.truncate(10);
+        // Cap at RECENT_FILES_CAP. Pre-v1.1.10 the cap was 10; the
+        // plan's target is 20 (still small enough that the dropdown
+        // stays scannable, large enough that recent-but-stale entries
+        // survive a couple of intervening file picks).
+        self.recent_files.truncate(RECENT_FILES_CAP);
     }
 
     fn set_loading(&mut self, loading: bool, message: String) {

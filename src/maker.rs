@@ -444,12 +444,12 @@ impl Maker {
     }
 
     fn add_recent_file(&mut self, path: String) {
-        // Remove if already exists
+        // LRU dedup: drop any existing entry for this path before
+        // re-inserting at the front. Bumped from cap 10 to
+        // crate::RECENT_FILES_CAP (20) in v1.1.10.
         self.recent_files.retain(|p| p != &path);
-        // Add to front
         self.recent_files.insert(0, path);
-        // Keep only last 10
-        self.recent_files.truncate(10);
+        self.recent_files.truncate(crate::RECENT_FILES_CAP);
         self.save_state();
     }
 

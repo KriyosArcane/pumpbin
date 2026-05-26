@@ -1,5 +1,54 @@
 # CHANGELOG
 
+## v1.1.10
+
+Sixth chip of v2.0 Phase 0: recent-files LRU cap centralized + the
+broken `release.yml` workflow rewritten for the v1.1.x integrated
+binary layout. Two unrelated fixes shipped together because they're
+both small and unblock CI.
+
+### Fixed
+- **`.github/workflows/release.yml` was broken on every tag push since
+  v1.1.5.** It referenced a `maker.exe` binary that no longer exists
+  (the Maker was integrated into the main `pumpbin` GUI as a workspace
+  toggle in pre-1.1.x commit `44271e1`), and an aarch64 Linux cross-
+  compile that pulled an apt `sources.list` from a third-party GitHub
+  gist — an unacceptable supply-chain surface. Rewritten to ship the
+  current `pumpbin` (GUI) and `pumpbin-cli` binaries on Linux x86_64,
+  macOS x86_64, and Windows x86_64. aarch64 builds deferred to a
+  future chip with a clean cross-compile setup.
+
+### Added
+- **`pumpbin::RECENT_FILES_CAP`** — `pub const usize = 20`. Single
+  source of truth for the recent-files cap in both `Pumpbin`
+  (Generator) and `Maker` workspaces. Pre-v1.1.10 each had a private
+  `truncate(10)` call hardcoded at the use site; v1.1.10 bumps the
+  cap to 20 (matching the v2.0 plan) and centralizes the constant.
+- **`tests/recent_files_lru.rs`** (3 tests):
+  - the constant is locked at 20 for the 1.x line
+  - dedup-on-reinsert moves the entry to the front instead of
+    creating a duplicate
+  - inserting more than `RECENT_FILES_CAP` entries evicts the
+    oldest, list length stays exactly at the cap
+
+### Verification
+```
+cargo test --all-targets    -> 51/51 pass + 1 wine-gated ignored (was 48)
+cargo fmt --check           -> clean
+cargo clippy --all-targets -- -D warnings -> clean
+```
+
+### Roadmap
+
+Remaining v2.0 Phase 0 items deferred to a later chip:
+- Maker `fs::read` off the UI thread
+- Collapse legacy single-WASM dispatch path
+- `OnError::Skip` runtime semantics in the dispatch chain
+- Signature migration to `PumpBinResult<T>`
+- Iced feature-flag refactor (would let CI run `--all-targets` on
+  macOS/Windows)
+- aarch64 release builds (deferred from v1.1.10 release.yml cleanup)
+
 ## v1.1.9
 
 Fifth chip of v2.0 Phase 0: real CI. The previous workflow ran
