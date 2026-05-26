@@ -1,4 +1,105 @@
-# PumpBin v1.1.2 QA/QC Report — CLI ↔ UI Parity
+# PumpBin QA/QC Report — CLI ↔ UI Parity
+
+> This file accumulates QA results across hotfix releases. Newest section on top.
+> Original v1.1.2 report retained verbatim at the bottom for historical context.
+
+---
+
+## v1.1.4 QA pass (2026-05-26)
+
+**Branch tested**: `hotfix/v1.1.3` (commit `c9f3b20`) → fixes landed on `hotfix/v1.1.4` (commit `ec0cf34`).
+**Method**: full CLI matrix execution + WASM-encryption end-to-end + sandboxed GUI launch + code-trace pairing.
+**Fixtures**: `/tmp/pumpbin-qa-v113/` — synthetic templates, repo `.b1n` files (`hello.b1n`, `signer.b1n`), msfvenom benign payloads (`windows/x64/exec CMD=calc.exe`, `linux/x64/exec CMD=/usr/bin/id`), AES-GCM WASM plugin built from `plugin-examples/aes-gcm-encrypt/`.
+
+### Status of the 10 original findings
+
+| # | Severity | Finding (short) | Status as of v1.1.4 |
+|---|---|---|---|
+| 1 | S1 | Maker `"None"` substitution for empty author/version/desc | **DEFERRED** → v2.0 Phase 0 BuildJob normalizes both surfaces |
+| 2 | S1 | Maker enforces template preflight; CLI didn't | **FIXED in v1.1.3** via `PluginReplace::preflight_template`; covered by `tests/preflight.rs` (6 tests) and `tests/cli_exit_codes.rs::create_b1n_with_bad_template_exits_nonzero` |
+| 3 | S2 | Batch filename `HHMMSS` collision risk | **DEFERRED** → v2.0 Phase 0 (shared `default_output_filename`) |
+| 4 | S2 | GUI random suffix not in CLI | **DEFERRED** → same |
+| 5 | S2 | Bin descriptor / extension drift between GUI and CLI | **DEFERRED** → same |
+| 6 | S2 | Default output dir: GUI→Desktop, CLI→cwd | **DEFERRED** → same |
+| 7 | S3 | `verify` returned exit 0 on Authenticode failure | **FIXED in v1.1.3** via `AuthCheckStatus::Failed` accounting; covered by `tests/cli_exit_codes.rs::verify_on_non_pe_exits_nonzero` and verified manually against `/opt/ligolo-ng/agent.exe` (a real PE) |
+| 8 | S3 | `verify` is CLI-only, no GUI equivalent | **DEFERRED** → v2.0 Phase 1 (`pumpbin/src/inspect.rs` module exposed from crate root, new GUI button) |
+| 9 | S3 | Encrypt-Shellcode preview is GUI-only | **DEFERRED** → v2.0 Phase 0 (`pumpbin-cli encrypt-shellcode` subcommand) |
+| 10 | S3 | CLI lacks `plugin {list,add,remove}`; no shared plugin registry access | **DEFERRED** → v2.0 Phase 0 |
+| 11 | S4 | Post-module chain shape divergence (`post_chain.*` config vs `modules` Vec) | **DEFERRED** → v2.0 Phase 2 |
+| 12 | S2 | Batch outputs 0600, single outputs 0644 (claimed in v1.1.2) | **WITHDRAWN** — re-tested in v1.1.4: both produce 0600 under `tempfile::NamedTempFile` (correct security default). The earlier listing was a fixture artifact from a pre-`atomic_write` run that lingered in the test dir. |
+
+**Net**: 2 of 10 fixed in hotfix releases (S1-template-preflight, S3-verify-exit-code). 1 withdrawn as false-positive (file perms). 7 deferred to v2.0 per the plan.
+
+### New findings from v1.1.4 QA
+
+| # | Severity | Finding | Status |
+|---|---|---|---|
+| N1 | S3 | `pumpbin-cli batch` returned exit 0 with `Success: 0, Failed: 0` when the input directory was empty or contained no `.bin` files | **FIXED in v1.1.4** — `success == 0` now bails with exit 1; `success > 0 && failed > 0` exits non-zero. Covered by 3 `tests/cli_exit_codes.rs` cases. |
+| N2 | S2 | GUI keyboard shortcuts (Ctrl+Shift+A, Ctrl+O, Ctrl+G, Ctrl+K) spawned a new file dialog per key-repeat tick while a previous dialog was open. Each one set `is_loading=true` and called `AsyncFileDialog` independently. Surfaced during sandboxed GUI launch via ydotool key-repeat. | **FIXED in v1.1.4** — `Message::KeyboardShortcut` + click handlers early-return `Task::none()` when `self.is_loading` is true |
+| N3 | S3 | Templates with multiple occurrences of `src_prefix` accept silently; `memmem::find` picks the first match without warning. A template author could ship a buggy template that injects shellcode into a non-functional slot. | **DEFERRED** — add a `Plugin::preflight_template_strict` variant in v2.0 Phase 0 that counts occurrences and warns on > 1 |
+| N4 | S2 | The repo's own `hello.b1n` is a broken plugin — it lacks `$$99999$$` even though it's Local-mode. Generate fails with `Holder '$$99999$$' not found in binary`. | **DEFERRED** — rebuild `hello.b1n` correctly in v1.2.0 or remove it. Not a code bug; a fixture rot bug. |
+| N5 | S2 | Iced GUI widget coordinates are not introspectable — there is no a11y tree, no DOM, no widget-id-to-pixel-rect mapping. This makes click-driven GUI testing on Wayland fundamentally fragile (must pixel-hunt). Hyprland + ydotool injection works for keyboard but click coords require manual screen-coord guesswork. | **INFORMATIONAL** — accepted limitation. v2.0 BuildJob abstraction will let parity tests run without driving the GUI directly. |
+
+### Confirmed-working capabilities (v1.1.4)
+
+End-to-end pipeline tests ran successfully:
+
+- **CLI matrix** (22 cases): all expected exit codes; output filenames, sizes, and shellcode-byte injection all correct.
+- **AES-GCM encryption roundtrip**: built a template with `$$KKK…KKK$$` (32 bytes, 28 K's between sentinels) + `$$NNN…NNN$$` (12 bytes, 8 N's), embedded `aes_gcm_encrypt.wasm`, generated. Output:
+  - 4233 → 4277 bytes (44 byte AES-GCM overhead, expected)
+  - Shellcode NOT present verbatim (encryption confirmed)
+  - KEY/NONCE holders NOT present (pass substitution confirmed)
+- **Remote-mode generate**: URL bytes embedded verbatim at correct offset, NUL-terminated.
+- **Real-PE verify**: `/opt/ligolo-ng/agent.exe` (real PE32+, unsigned, zero checksum) → exit 1 with both `PE checksum mismatch` and `Authenticode verify failed` reported.
+- **GUI sandbox launch**: pre-seeded `$XDG_DATA_HOME/PumpBin/plugins` via new `examples/seed_xdg.rs` helper. PumpBin reads the registry correctly; `qa-local` plugin appears in list panel.
+- **GUI keyboard shortcut**: `Ctrl+Shift+A` opens the Add Plugin dialog (verified via grim screenshot under Hyprland).
+
+### Code-trace GUI ↔ CLI pairing table
+
+For every GUI workflow that does real work, this is the matching CLI subcommand and the shared library call path. Where the trace diverges, it's noted in the rightmost column.
+
+| GUI workflow | CLI equivalent | Shared library calls | Divergence |
+|---|---|---|---|
+| `Message::GenerateClicked` (lib.rs:544) | `pumpbin-cli generate` (bin/pumpbin-cli.rs:202) | `Plugin::validate_for_generation` → `Plugin::validate_shellcode_source` → `Plugin::replace_binary` → `utils::atomic_write` | GUI builds filename with `bin_descriptor` (`win_exe`/`linux_bin`/...) + 4-char random suffix; CLI uses `platform_str` + no random suffix. See S2 (deferred). |
+| `Message::EncryptShellcode` (lib.rs:471) | **none** | `PluginPlugins::run_encrypt_shellcode` → `PluginPlugins::run_format_encrypted_shellcode` → optional `run_upload_final_shellcode_remote` → `utils::atomic_write` if local | GUI-only. S3 finding 9 (deferred). |
+| `Message::AddPluginClicked` (lib.rs:673) | **none** | `Plugin::decode_from_slice` (validation) → `Plugins::insert` → `Plugins::update_plugins` (atomic write) | GUI-only. S3 finding 10 (deferred). |
+| `Message::RemovePlugin` (lib.rs:749) | **none** | `Plugins::remove_value_by_key` → `Plugins::update_plugins` | GUI-only. |
+| `Message::FilesDropped` (lib.rs:931) | **n/a** | Routes by extension: `.b1n` → AddPluginClicked path; other → EncryptShellcode path | GUI-only by design. |
+| `Message::OpenRecentFile` (lib.rs:899) | **none** | Same as FilesDropped → AddPluginClicked | GUI-only. |
+| `MakerMessage::GenerateClicked` (maker.rs:742) | `pumpbin-cli create-b1n` (bin/pumpbin-cli.rs:435) | Construct `Plugin{}` → `PluginReplace::preflight_template` (shared since v1.1.3) → `Plugin::encode_to_vec` → `utils::atomic_write` | GUI substitutes empty author/version/desc with `"None"`; CLI keeps clap defaults. See S1 finding 1 (deferred). |
+| `MakerMessage::OpenB1nClicked` (maker.rs:938) | **none** | `Plugin::decode_from_slice` → populate Maker state from `Plugin::info()`, `Plugin::replace()`, `Plugin::bins()` | GUI-only. |
+| `MakerMessage::ChooseFileClicked` (maker.rs:1028) | **n/a** | File dialog → on `.wasm` file, calls `get_plugin_config_schema` to load schema | GUI-only by design. |
+| `MakerMessage::FilesDropped` (maker.rs:1126) | **n/a** | Categorize by extension, route to ChooseFileClicked targets | GUI-only by design. |
+| Background: `Plugins::read_plugins` on startup | implicit on `pumpbin-cli`'s plugin-arg loads | bincode decode of `$XDG_DATA_HOME/PumpBin/plugins` | GUI reads registry; CLI takes explicit `--plugin <path>`. |
+
+**Key parity check**: every GUI workflow that mutates the implant or the plugin pack converges on `Plugin::replace_binary` / `Plugin::encode_to_vec` / `utils::atomic_write` in the library. The drift is entirely at the *call-site assembly* (defaults, naming, validation order, error surfacing) — not in the core engine.
+
+### v1.1.4 verification
+
+```
+cargo test --all-targets  -> 19/19 pass  (was 14/14 in v1.1.3)
+  - golden          : 2
+  - pass_merge      : 1
+  - preflight       : 6
+  - parity_harness  : 5
+  - cli_exit_codes  : 5  (new in v1.1.4)
+cargo fmt --check         -> clean
+cargo clippy --all-targets -> clean (only pre-existing maker.rs:930 should_persist)
+```
+
+### Carry-forward to next milestone
+
+For **v1.2.0** (signer plugins, task #15):
+- Rebuild `hello.b1n` correctly so it's a working demo (N4).
+
+For **v2.0 Phase 0** (BuildJob + profile file):
+- Closes findings 1, 3, 4, 5, 6 (S1/S2 drift) by construction — both surfaces serialize the same `BuildJob` and execute one shared `Profile::execute()`.
+- Closes findings 8, 9, 10 (S3 GUI/CLI asymmetry) by exposing the inspect/encrypt/plugin-registry modules from the crate root.
+- Closes N3 (multi-prefix warning) via strict preflight variant.
+
+---
+
+## v1.1.2 QA Report (original, retained for context)
 
 **Branch**: `hotfix/v1.1.2` (commit `65c4271`)
 **Method**: source trace at file:line granularity + functional run of both binaries against fixtures in `/tmp/pumpbin-qa/`.
