@@ -13,7 +13,13 @@ all-features = false
 [advisories]
 version = 2
 yanked = "warn"
-ignore = []
+ignore = [
+    # rustls-pemfile unmaintained — pulled in transitively via reqwest /
+    # ureq stack used by extism. No CVE, no security impact, no
+    # drop-in replacement yet. Re-check when the rustls ecosystem
+    # migrates to rustls-pki-types-only loading.
+    { id = "RUSTSEC-2025-0134", reason = "unmaintained, no replacement upstream yet" },
+]
 
 [licenses]
 version = 2

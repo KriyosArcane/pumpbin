@@ -1,5 +1,48 @@
 # CHANGELOG
 
+## v1.4.5
+
+**CI advisory hotfix.** v1.4.4 cleared the `cargo deny` license gate
+but exposed the advisory gate, which had been masked by the license
+failure for weeks. The job flagged 24 errors — 20 in `wasmtime`
+(transitive via `extism`), 4 in `rustls` (transitive via `ureq`),
+plus two yanked crates and one unmaintained advisory. v1.4.5 fixes
+them all via lockfile bumps; no Cargo.toml caret changes were needed.
+
+### Fixed
+
+- **`extism` 1.12.0 → 1.21.0** (lockfile only; Cargo.toml still
+  says `"1.4"`). Transitively bumps `wasmtime` 30.0.2 → 37.0.3,
+  clearing 20 RUSTSEC advisories including the high-severity
+  sandbox-escape ones (Cranelift aarch64 miscompile, Winch sandbox
+  escapes, several panic-on-host paths, data leakage between
+  pooling-allocator instances).
+- **`rustls` 0.23.30 → 0.23.40** (lockfile only). Clears the CRL
+  matching, URI name-constraint, wildcard-name-constraint, and
+  panic-on-CRL-parse advisories. Also un-yanks.
+- **`slab` 0.4.10 → 0.4.12** (lockfile only). Un-yanks; transitive
+  via `ashpd` → `rfd`.
+- **`rustls-pemfile` 2.2.0 RUSTSEC-2025-0134 (unmaintained)** added
+  to `deny.toml` `[advisories].ignore` with an explicit reason. Pure
+  metadata; no CVE, no security impact. The rustls ecosystem is
+  consolidating loaders onto `rustls-pki-types`; once that lands we
+  drop the ignore.
+
+### Verification
+
+```
+cargo update -p extism -p rustls -p slab    # lockfile-only bumps
+cargo check --all-targets                    # clean
+cargo clippy --all-targets -- -D warnings    # clean
+cargo test --all-targets --no-fail-fast      # 19 test bins pass
+cargo fmt --check                            # clean
+```
+
+`cargo deny check` not runnable locally; CI is the verifier. The
+fixes are scoped (lockfile bumps + one `ignore` entry), so the
+regression risk is the extism/wasmtime ABI surface, which the test
+suite exercises.
+
 ## v1.4.4
 
 **CI hotfix.** v1.4.2 turned the `clippy` and `cargo deny` jobs back on
