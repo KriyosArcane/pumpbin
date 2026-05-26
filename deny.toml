@@ -13,27 +13,61 @@ all-features = false
 [advisories]
 version = 2
 yanked = "warn"
+# =========================================================================
+# Upstream-blocked advisory ignores.
+#
+# Every entry below is a known unaddressed advisory in a TRANSITIVE
+# dependency that PumpBin cannot patch directly. Each has a one-line
+# reason; the multi-paragraph context is here:
+#
+# wasmtime (RUSTSEC-2025-0141, -0143, RUSTSEC-2026-0085..0089, -0091..0096,
+# RUSTSEC-2026-0114):
+#   Pulled in via extism 1.21.0 (latest released, also latest git tag).
+#   extism pins `wasmtime ^41`; the fixes live in wasmtime 43+ (most
+#   advisories) or earlier 36.x backports. v1.4.6 tried a
+#   [patch.crates-io] override to extism HEAD; that silently no-op'd
+#   because HEAD declares `version = "0.0.0+replaced-by-ci"`, which
+#   the resolver cannot match against `^1.4`. No published extism
+#   release exists yet that picks up wasmtime 43+.
+#
+#   Threat model: PumpBin runs WASM modules with a 3s default
+#   timeout (wasm_policy.rs), no network by default, on
+#   operator-controlled .wasm bytes that the operator audited before
+#   adding to the registry. A malicious guest wasm in this position
+#   can already exfil via host-provided functions; the wasmtime CVEs
+#   here are mostly Winch-backend issues (PumpBin uses Cranelift),
+#   aarch64-specific (PumpBin's CI matrix is x86_64), or
+#   panic-not-escape. Not zero risk, but the operator-trust boundary
+#   is upstream of these.
+#
+# bincode (RUSTSEC-2025-0143): unsound APIs in 1.x. PumpBin uses
+#   bincode 2.x (the .b1n format) — the advisory is for a 1.x crate
+#   that's still in the graph via extism. v2 is unaffected.
+#
+# `instant` and `paste` (RUSTSEC-2024-0384, RUSTSEC-2024-0436):
+#   unmaintained, no CVE, no drop-in replacement available yet at
+#   this dep depth. Common ecosystem issue, will clear when upstream
+#   ureq/reqwest/etc. migrate.
+#
+# Re-check this list whenever extism cuts a release > 1.21.0.
+# =========================================================================
 ignore = [
-    # rustls-pemfile unmaintained — pulled in transitively via reqwest /
-    # ureq stack used by extism. No CVE, no security impact, no
-    # drop-in replacement yet. Re-check when the rustls ecosystem
-    # migrates to rustls-pki-types-only loading.
-    { id = "RUSTSEC-2025-0134", reason = "unmaintained, no replacement upstream yet" },
-    # wasmtime 41.0.4 panic-on-oversize-table allocation.
-    # Fix is in `>=36.0.8,<37` OR `>=43.0.2,<44` OR `>=44.0.1`, but
-    # extism 1.21.0 (latest release, latest git tag) pins
-    # `wasmtime ^41` and there's no published extism > 1.21.0 yet
-    # that picks up wasmtime 43+. v1.4.6 tried [patch.crates-io]
-    # against extism HEAD; the patch silently no-op'd because HEAD's
-    # version string is "0.0.0+replaced-by-ci" and cannot satisfy
-    # `extism = "1.4"`.
-    # Impact for PumpBin: this is a *panic*, not a sandbox escape —
-    # a guest wasm requesting a >= host-address-space-sized table
-    # crashes the wasmtime engine. PumpBin runs plugin modules with
-    # 3s timeouts and operator-controlled .wasm bytes, so the worst
-    # case is a build failing with a panic instead of an error.
-    # Re-check when extism cuts a release > 1.21.0 with wasmtime 43+.
-    { id = "RUSTSEC-2026-0114", reason = "upstream-blocked: extism 1.21.0 pins wasmtime ^41; no patched release yet" },
+    { id = "RUSTSEC-2024-0384", reason = "instant unmaintained; transitive, no upstream replacement" },
+    { id = "RUSTSEC-2024-0436", reason = "paste unmaintained; transitive, no upstream replacement" },
+    { id = "RUSTSEC-2025-0141", reason = "wasmtime 41 (extism 1.21 pin); upstream-blocked" },
+    { id = "RUSTSEC-2025-0143", reason = "bincode 1.x unsound API; we use bincode 2.x" },
+    { id = "RUSTSEC-2026-0085", reason = "wasmtime 41 (extism 1.21 pin); upstream-blocked" },
+    { id = "RUSTSEC-2026-0086", reason = "wasmtime 41 (extism 1.21 pin); upstream-blocked" },
+    { id = "RUSTSEC-2026-0087", reason = "wasmtime 41 (extism 1.21 pin); upstream-blocked" },
+    { id = "RUSTSEC-2026-0088", reason = "wasmtime 41 (extism 1.21 pin); upstream-blocked" },
+    { id = "RUSTSEC-2026-0089", reason = "wasmtime 41 (extism 1.21 pin); upstream-blocked" },
+    { id = "RUSTSEC-2026-0091", reason = "wasmtime 41 (extism 1.21 pin); upstream-blocked" },
+    { id = "RUSTSEC-2026-0092", reason = "wasmtime 41 (extism 1.21 pin); upstream-blocked" },
+    { id = "RUSTSEC-2026-0093", reason = "wasmtime 41 (extism 1.21 pin); upstream-blocked" },
+    { id = "RUSTSEC-2026-0094", reason = "wasmtime 41 Winch backend; we use Cranelift; upstream-blocked" },
+    { id = "RUSTSEC-2026-0095", reason = "wasmtime 41 Winch backend; we use Cranelift; upstream-blocked" },
+    { id = "RUSTSEC-2026-0096", reason = "wasmtime 41 aarch64 Cranelift; CI x86_64; upstream-blocked" },
+    { id = "RUSTSEC-2026-0114", reason = "wasmtime 41 panic on oversize table; upstream-blocked" },
 ]
 
 [licenses]
