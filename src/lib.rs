@@ -1,4 +1,5 @@
 pub mod config_utils;
+pub mod error;
 pub mod maker;
 pub mod plugin;
 pub mod plugin_system;
@@ -9,6 +10,7 @@ pub mod plugin_capnp {
 }
 
 use anyhow::anyhow;
+pub use error::{PumpBinError, PumpBinResult};
 pub use plugin_system::{get_plugin_config_schema, Pass, PluginConfigField};
 
 use std::{collections::BTreeMap, fmt::Display, fs, path::PathBuf};

@@ -381,10 +381,14 @@ impl Maker {
         }
 
         if !failures.is_empty() {
-            bail!(
-                "{}\n\nPlease rebuild the failing templates with the configured src prefix/size holder before generating.",
-                lines.join("\n")
-            );
+            return Err(crate::error::PumpBinError::MakerPreflightFailed {
+                report: format!(
+                    "{}\n\nPlease rebuild the failing templates with the configured \
+                     src prefix/size holder before generating.",
+                    lines.join("\n")
+                ),
+            }
+            .into());
         }
 
         Ok(lines.join("\n"))
@@ -469,34 +473,51 @@ impl Maker {
     }
 
     fn check_generate(&self) -> anyhow::Result<()> {
+        use crate::error::PumpBinError;
+
         if self.plugin_name.is_empty() {
-            bail!("Plugin Name is empty.");
+            return Err(PumpBinError::MakerFieldEmpty {
+                field: "plugin_name",
+            }
+            .into());
         }
 
         if self.src_prefix.is_empty() {
-            bail!("Prefix is empty.");
+            return Err(PumpBinError::MakerFieldEmpty {
+                field: "src_prefix",
+            }
+            .into());
         }
 
         let max_len = self.max_len();
         if max_len.is_empty() {
-            bail!("Max Len is empty.");
+            return Err(PumpBinError::MakerMaxLenInvalid { reason: "empty" }.into());
         }
 
         let Ok(max_len_num) = max_len.parse::<usize>() else {
-            bail!("Max Len numeric only.");
+            return Err(PumpBinError::MakerMaxLenInvalid {
+                reason: "not a non-negative integer",
+            }
+            .into());
         };
 
         if max_len_num == 0 {
-            bail!("Max Len must be greater than zero.");
+            return Err(PumpBinError::MakerMaxLenInvalid {
+                reason: "must be greater than zero",
+            }
+            .into());
         }
 
         if let ShellcodeSaveType::Local = self.shellcode_save_type() {
             if self.size_holder().trim().is_empty() {
-                bail!("Size Holder is empty.");
+                return Err(PumpBinError::MakerFieldEmpty {
+                    field: "size_holder",
+                }
+                .into());
             }
 
             if self.size_holder().trim() == self.src_prefix().trim() {
-                bail!("Size Holder cannot be the same value as Prefix.");
+                return Err(PumpBinError::MakerSourcePrefixCollision.into());
             }
         };
 

@@ -7,9 +7,37 @@
 //! helper closes that drift.
 
 use pumpbin::plugin::PluginReplace;
+use pumpbin::PumpBinError;
 
 const PREFIX: &[u8] = b"$$SHELLCODE$$";
 const SIZE_HOLDER: &[u8] = b"$$99999$$";
+
+/// Helper: downcast the anyhow::Error to PumpBinError and assert both
+/// the error code and the holder bytes carried in the variant.
+fn assert_placeholder_error(err: anyhow::Error, expected_holder: &[u8]) {
+    let pb = err
+        .downcast_ref::<PumpBinError>()
+        .unwrap_or_else(|| panic!("error did not downcast to PumpBinError: {err}"));
+    assert_eq!(
+        pb.code(),
+        "PB-E0001",
+        "expected PB-E0001, got {}",
+        pb.code()
+    );
+    match pb {
+        PumpBinError::PlaceholderNotFound { holder } => {
+            let expected = String::from_utf8_lossy(expected_holder);
+            assert_eq!(holder, &expected.as_ref(), "wrong holder in error");
+        }
+        other => panic!("expected PlaceholderNotFound, got {other:?}"),
+    }
+    // Display output must include the stable code.
+    let display = format!("{err}");
+    assert!(
+        display.contains("PB-E0001"),
+        "Display lacks code: {display}"
+    );
+}
 
 fn local_replace() -> PluginReplace {
     PluginReplace {
@@ -47,30 +75,26 @@ fn local_template_with_both_placeholders_passes() {
 fn local_template_missing_size_holder_fails() {
     let bin = template_with(&[PREFIX]);
     let err = local_replace().preflight_template(&bin).unwrap_err();
-    let msg = err.to_string();
-    assert!(
-        msg.contains("size_holder"),
-        "error should name size_holder, got: {msg}"
-    );
+    // Updated for v1.1.5: errors now carry the concrete missing holder
+    // bytes instead of the abstract category name. PB-E0001 covers both
+    // missing-prefix and missing-size_holder; the variant payload
+    // distinguishes them.
+    assert_placeholder_error(err, SIZE_HOLDER);
 }
 
 #[test]
 fn local_template_missing_prefix_fails() {
     let bin = template_with(&[SIZE_HOLDER]);
     let err = local_replace().preflight_template(&bin).unwrap_err();
-    let msg = err.to_string();
-    assert!(
-        msg.contains("src_prefix"),
-        "error should name src_prefix, got: {msg}"
-    );
+    assert_placeholder_error(err, PREFIX);
 }
 
 #[test]
 fn local_template_with_neither_fails_naming_prefix_first() {
     let bin = template_with(&[b"nothing relevant here"]);
     let err = local_replace().preflight_template(&bin).unwrap_err();
-    // src_prefix is checked first; that's the message we surface.
-    assert!(err.to_string().contains("src_prefix"));
+    // src_prefix is checked first; the error must name that holder.
+    assert_placeholder_error(err, PREFIX);
 }
 
 #[test]
@@ -84,5 +108,5 @@ fn remote_template_does_not_need_size_holder() {
 fn remote_template_still_needs_prefix() {
     let bin = template_with(&[b"no placeholder anywhere"]);
     let err = remote_replace().preflight_template(&bin).unwrap_err();
-    assert!(err.to_string().contains("src_prefix"));
+    assert_placeholder_error(err, PREFIX);
 }

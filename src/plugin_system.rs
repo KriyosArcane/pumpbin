@@ -74,7 +74,11 @@ pub fn run_module<T: Serialize>(
             if is_missing_export(&e.to_string()) {
                 Ok(None)
             } else {
-                Err(anyhow::anyhow!("module call '{}' failed: {}", func, e))
+                Err(crate::error::PumpBinError::WasmCallFailed {
+                    hook: func.to_string(),
+                    detail: e.to_string(),
+                }
+                .into())
             }
         }
     }

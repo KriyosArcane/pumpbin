@@ -1,5 +1,81 @@
 # CHANGELOG
 
+## v1.1.5
+
+First chip of v2.0 Phase 0: structured error codes. Public API signatures
+unchanged (still `anyhow::Result<T>`), but every existing `bail!()` and
+`anyhow!()` site in the core now returns a `PumpBinError` variant wrapped
+in `anyhow::Error`. Downstream consumers can do
+`err.downcast_ref::<PumpBinError>()` to match on stable `PB-Exxxx` codes
+without parsing error strings.
+
+### Added
+- **`pumpbin::error` module** with `PumpBinError` enum (20 variants) and
+  `PumpBinResult<T>` type alias. Each variant has a stable `code()`
+  method returning a `PB-Exxxx` string. Codes are flat-namespaced and
+  allocated chronologically — never reused. `error_code()` is also
+  embedded in the `Display` output so human consumers see the same
+  identifier as machine consumers.
+- **`PumpBinError` re-exported at crate root**: `pumpbin::PumpBinError`
+  and `pumpbin::PumpBinResult`.
+- **`tests/error_codes.rs`** — 12 tests asserting that every error
+  condition produces the expected code and that all codes are unique +
+  well-formed (`PB-E` + 4 digits).
+
+### Code allocation table
+
+| Code | Variant | Source |
+|---|---|---|
+| PB-E0001 | `PlaceholderNotFound` | `utils::replace`, `PluginReplace::preflight_template` |
+| PB-E0002 | `ReplacementTooLong` | `utils::replace` |
+| PB-E0003 | `ShellcodeSourceEmpty` | `Plugin::validate_shellcode_source` |
+| PB-E0004 | `ShellcodeFileNotFound` | same |
+| PB-E0005 | `ShellcodeReadFailed` | same |
+| PB-E0006 | `ShellcodeFileEmpty` | same |
+| PB-E0007 | `ShellcodeContainsPlaceholder` | same |
+| PB-E0008 | `RemoteUrlInvalidScheme` | same |
+| PB-E0009 | `BinaryNotInPlugin` | `Plugin::validate_for_generation` |
+| PB-E0010 | `LocalRequiresSizeHolder` | same |
+| PB-E0011 | `MaxLenZero` | same |
+| PB-E0012 | `ShellcodeTooLong` | `Plugin::replace_binary` |
+| PB-E0013 | `SizeStringTooLong` | same |
+| PB-E0014 | `ConfigPathUnavailable` | `Plugins::{read,update}_plugins` |
+| PB-E0015 | `PluginNotFound` | `Plugins::get` |
+| PB-E0016 | `WasmCallFailed` | `plugin_system::run_module` |
+| PB-E0017 | `MakerFieldEmpty` | `Maker::check_generate` |
+| PB-E0018 | `MakerSourcePrefixCollision` | same |
+| PB-E0019 | `MakerPreflightFailed` | `Maker::preflight_readiness_report` |
+| PB-E0020 | `MakerMaxLenInvalid` | `Maker::check_generate` |
+
+### Bridge
+- `utils::ReplaceError` (the existing pre-v1.1.5 typed error in
+  `utils.rs`) now has a `From` impl converting it to the equivalent
+  `PumpBinError::PlaceholderNotFound` / `ReplacementTooLong` variant.
+  Keeps old callers working unchanged.
+
+### Deferred to v2.0 Phase 0
+- Full signature migration from `anyhow::Result<T>` to `PumpBinResult<T>`
+  on all library functions. v1.1.5 keeps the boundary anyhow so existing
+  callers (GUI Message handlers, CLI main) don't need any change.
+- `tracing` JSON logs, zeroize on shellcode/Pass, CI matrix (clippy/fmt/
+  deny on Linux/macOS/Windows), and per-module WASM policy. These are
+  Phase 0's other pieces.
+
+### Verification
+```
+cargo test --all-targets   -> 31/31 pass + 1 wine-gated ignored (was 19)
+  - golden          : 2
+  - pass_merge      : 1
+  - preflight       : 6  (updated to assert PB-E0001 + holder bytes)
+  - parity_harness  : 5
+  - cli_exit_codes  : 5
+  - error_codes     : 12 (new)
+cargo fmt --check          -> clean
+cargo clippy --all-targets -> clean of new warnings
+                              (only pre-existing maker.rs:942
+                               should_persist warning remains)
+```
+
 ## v1.1.4
 
 Follow-up to v1.1.3 closing two more drift items surfaced by a second QA

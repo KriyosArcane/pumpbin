@@ -6,7 +6,7 @@ use std::{
     sync::OnceLock,
 };
 
-use anyhow::{anyhow, bail};
+use anyhow;
 use bincode::{decode_from_slice, encode_to_vec, Decode, Encode};
 use capnp::{
     io::Write,
@@ -78,22 +78,20 @@ impl PluginReplace {
     /// substituted into the same slot at runtime).
     pub fn preflight_template(&self, template: &[u8]) -> anyhow::Result<()> {
         if memchr::memmem::find(template, &self.src_prefix).is_none() {
-            bail!(
-                "Template does not contain the configured src_prefix ('{}'). \
-                 Recompile the template with the placeholder embedded.",
-                String::from_utf8_lossy(&self.src_prefix)
-            );
+            return Err(crate::error::PumpBinError::PlaceholderNotFound {
+                holder: String::from_utf8_lossy(&self.src_prefix).into_owned(),
+            }
+            .into());
         }
 
         // Local mode also needs the size_holder. Remote mode skips it (the
         // URL byte count is unbounded in the placeholder slot).
         if let Some(holder) = &self.size_holder {
             if memchr::memmem::find(template, holder).is_none() {
-                bail!(
-                    "Template does not contain the configured size_holder ('{}'). \
-                     This is required for Local-mode plugins.",
-                    String::from_utf8_lossy(holder)
-                );
+                return Err(crate::error::PumpBinError::PlaceholderNotFound {
+                    holder: String::from_utf8_lossy(holder).into_owned(),
+                }
+                .into());
             }
         }
         Ok(())
@@ -610,37 +608,52 @@ impl Plugin {
     }
 
     pub fn validate_shellcode_source(&self, shellcode_src: &str) -> anyhow::Result<()> {
+        use crate::error::PumpBinError;
+
         if shellcode_src.trim().is_empty() {
-            bail!("Shellcode source cannot be empty.");
+            return Err(PumpBinError::ShellcodeSourceEmpty.into());
         }
 
         match self.save_type() {
             ShellcodeSaveType::Local => {
                 let path = Path::new(shellcode_src);
                 if path.exists().not() {
-                    bail!("Shellcode file not found: {}", shellcode_src);
+                    return Err(PumpBinError::ShellcodeFileNotFound {
+                        path: shellcode_src.to_string(),
+                    }
+                    .into());
                 }
 
-                let data = fs::read(path).map_err(|e| {
-                    anyhow!("Failed to read shellcode file: {}: {}", shellcode_src, e)
+                let data = fs::read(path).map_err(|source| PumpBinError::ShellcodeReadFailed {
+                    path: shellcode_src.to_string(),
+                    source,
                 })?;
 
                 if data.is_empty() {
-                    bail!("Shellcode file is empty: {}", shellcode_src);
+                    return Err(PumpBinError::ShellcodeFileEmpty {
+                        path: shellcode_src.to_string(),
+                    }
+                    .into());
                 }
 
                 if data
                     .windows(b"$$SHELLCODE$$".len())
                     .any(|w| w == b"$$SHELLCODE$$")
                 {
-                    bail!("Shellcode file contains placeholder: {}", shellcode_src);
+                    return Err(PumpBinError::ShellcodeContainsPlaceholder {
+                        path: shellcode_src.to_string(),
+                    }
+                    .into());
                 }
             }
             ShellcodeSaveType::Remote => {
                 if shellcode_src.starts_with("http://").not()
                     && shellcode_src.starts_with("https://").not()
                 {
-                    bail!("Remote shellcode source must start with http:// or https://");
+                    return Err(PumpBinError::RemoteUrlInvalidScheme {
+                        url: shellcode_src.to_string(),
+                    }
+                    .into());
                 }
             }
         }
@@ -653,6 +666,8 @@ impl Plugin {
         platform: Platform,
         bin_type: BinaryType,
     ) -> anyhow::Result<()> {
+        use crate::error::PumpBinError;
+
         let save_type = self.save_type();
 
         let platform_bins = match platform {
@@ -667,19 +682,19 @@ impl Plugin {
         };
 
         if !binary_exists {
-            bail!(
-                "Binary for {} ({}) is not included in this plugin.",
-                platform,
-                bin_type
-            );
+            return Err(PumpBinError::BinaryNotInPlugin {
+                platform: platform.to_string(),
+                bin_type: bin_type.to_string(),
+            }
+            .into());
         }
 
         if save_type == ShellcodeSaveType::Local && self.replace().size_holder().is_none() {
-            bail!("Local save type requires a size holder, but none is defined.");
+            return Err(PumpBinError::LocalRequiresSizeHolder.into());
         }
 
         if self.replace().max_len() == 0 {
-            bail!("Maximum shellcode length cannot be zero.");
+            return Err(PumpBinError::MaxLenZero.into());
         }
 
         Ok(())
@@ -739,13 +754,15 @@ impl Plugin {
         };
 
         if shellcode_bytes.len() > self.replace().max_len() {
-            bail!(
-                "{} too long.",
-                match save_type {
+            return Err(crate::error::PumpBinError::ShellcodeTooLong {
+                kind: match save_type {
                     ShellcodeSaveType::Local => "Shellcode",
                     ShellcodeSaveType::Remote => "Shellcode URL",
-                }
-            );
+                },
+                got: shellcode_bytes.len(),
+                max: self.replace().max_len(),
+            }
+            .into());
         }
 
         utils::replace(
@@ -767,7 +784,11 @@ impl Plugin {
             let len_bytes = len_str.as_bytes();
 
             if len_bytes.len() > size_holder.len() {
-                bail!("Shellcode size bytes too long.");
+                return Err(crate::error::PumpBinError::SizeStringTooLong {
+                    got: len_bytes.len(),
+                    holder_len: size_holder.len(),
+                }
+                .into());
             }
 
             let mut size_bytes: Vec<u8> =
@@ -816,9 +837,12 @@ pub struct Plugins(HashMap<String, Vec<u8>>);
 
 impl Plugins {
     pub fn read_plugins() -> anyhow::Result<Plugins> {
-        let plugins_path = CONFIG_FILE_PATH
-            .get()
-            .ok_or(anyhow!("Get config file path failed."))?;
+        let plugins_path =
+            CONFIG_FILE_PATH
+                .get()
+                .ok_or(crate::error::PumpBinError::ConfigPathUnavailable {
+                    what: "CONFIG_FILE_PATH was never initialized",
+                })?;
 
         let buf = fs::read(plugins_path)?;
         let (plugins, _) = decode_from_slice(buf.as_slice(), BINCODE_PLUGINS_CONFIG)?;
@@ -827,9 +851,12 @@ impl Plugins {
 
     pub fn update_plugins(&self) -> anyhow::Result<()> {
         let buf = encode_to_vec(self, BINCODE_PLUGINS_CONFIG)?;
-        let plugins_path = CONFIG_FILE_PATH
-            .get()
-            .ok_or(anyhow!("Get config file path failed."))?;
+        let plugins_path =
+            CONFIG_FILE_PATH
+                .get()
+                .ok_or(crate::error::PumpBinError::ConfigPathUnavailable {
+                    what: "CONFIG_FILE_PATH was never initialized",
+                })?;
 
         if plugins_path.is_dir() {
             fs::remove_dir(plugins_path)?;
@@ -844,7 +871,9 @@ impl Plugins {
         let buf = self
             .0
             .get(name)
-            .ok_or(anyhow!("Get plugin by name failed."))?;
+            .ok_or_else(|| crate::error::PumpBinError::PluginNotFound {
+                name: name.to_string(),
+            })?;
 
         Plugin::decode_from_slice(buf)
     }
