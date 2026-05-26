@@ -1,5 +1,6 @@
 pub mod config_utils;
 pub mod error;
+pub mod inspect;
 pub mod logging;
 pub mod maker;
 pub mod plugin;

@@ -193,6 +193,20 @@ enum Commands {
         binary: PathBuf,
     },
 
+    /// Inspect a .b1n plugin pack: dump plugin info, replace config,
+    /// supported platforms, embedded modules (with sha256 + declared
+    /// runtime policy), and the config schema each module exports.
+    ///
+    /// With `--diff <other.b1n>`, prints a human-readable diff of what
+    /// changed between two packs.
+    Inspect {
+        /// Path to the .b1n plugin pack to inspect.
+        binary: PathBuf,
+        /// Optional second .b1n to diff against the first.
+        #[arg(long, value_hint = clap::ValueHint::FilePath)]
+        diff: Option<PathBuf>,
+    },
+
     /// Build an implant from a pumpbin.toml profile file.
     ///
     /// The profile captures plugin source, target platform/binary type,
@@ -595,6 +609,16 @@ fn main() -> Result<()> {
             Ok(())
         }
         Commands::Verify { binary } => verify_binary(binary),
+        Commands::Inspect { binary, diff } => {
+            let left = pumpbin::inspect::inspect(binary)?;
+            if let Some(other_path) = diff {
+                let right = pumpbin::inspect::inspect(other_path)?;
+                print!("{}", pumpbin::inspect::render_diff(&left, &right));
+            } else {
+                print!("{}", pumpbin::inspect::render_text(&left));
+            }
+            Ok(())
+        }
         Commands::Build { profile } => {
             tracing::info!(profile = ?profile, "Loading build profile");
             let profile = pumpbin::Profile::from_toml(profile)?;

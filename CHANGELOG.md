@@ -1,5 +1,85 @@
 # CHANGELOG
 
+## v1.3.1
+
+Second chip of v2.0 Phase 1: `pumpbin-cli inspect`. `.b1n` plugin
+packs are opaque-by-default (capnp + zlib); operators couldn't see
+what they were about to load. v1.3.1 fixes that.
+
+### Added
+- **`pumpbin::inspect` module** with `inspect(path) -> InspectReport`,
+  `render_text(report) -> String`, `render_diff(a, b) -> String`.
+  Report carries plugin info, replace config, supported platforms,
+  embedded WASM modules (with sha256, declared `RuntimeConfig`,
+  exported config schema fields), and a flag for legacy single-WASM
+  fallback fields.
+- **`pumpbin-cli inspect <file.b1n>`** — dumps the plain-text report.
+  Layout:
+
+  ```
+  Path:        /path/to/plugin.b1n
+  Plugin:      cert-steal-v2
+  Author:      pumpbin-cli
+  Version:     0.1.0
+  Save type:   Local
+  src_prefix:  "$$SHELLCODE$$"
+  size_holder: "$$99999$$"
+  max_len:     4096 bytes
+  ...
+
+  Platforms (1):
+    Windows -> exe
+
+  Modules (1):
+    [0] 257796 bytes  sha256=6a173529...
+        runtime: timeout_ms=5000 allowed_hosts=[] on_error=Abort sdk_version=Some(1)
+        config fields:
+          - "donor_pe_b64" : file_base64 (required)
+  ```
+- **`pumpbin-cli inspect <a.b1n> --diff <b.b1n>`** — human-readable
+  diff: name/version/replace-config drift, added/removed module
+  sha256s. Identical packs print `no differences`.
+- **`tests/inspect_b1n.rs`** (4 tests):
+  - end-to-end inspect of a fixture pack (every reported field
+    matches input)
+  - render_text contains all key fields
+  - render_diff shows only the fields that changed
+  - render_diff on identical reports says "no differences"
+
+### Dependencies
+- `sha2 = "0.10"` promoted from dev-dep to runtime dep (needed by
+  inspect for module sha256s).
+
+### Operator workflow
+
+```
+$ pumpbin-cli inspect /opt/implants/stealth-aes.b1n
+Path: ... | Plugin: ... | Modules with sha256 + runtime + config schema
+
+$ pumpbin-cli inspect old.b1n --diff new.b1n
+--- old.b1n
++++ new.b1n
+version: "0.2.0" -> "0.3.0"
+modules:
+  - <old sha>
+  + <new sha>
+```
+
+### Verification
+```
+cargo test --all-targets    -> 62/62 pass + 1 wine-gated ignored (was 58)
+cargo fmt --check           -> clean
+cargo clippy --all-targets -- -D warnings -> clean
+```
+
+### Roadmap
+
+Next chips on the v1.3.x train:
+- `--json` versioned output (`--json` flag on every subcommand)
+- SBOM emission (`output.sbom = true` in profile → `<output>.pbom.json`)
+- Phase 2: plugin presets, OPSEC profile, `pumpbin-cli convert`
+- Phase 3: marketplace + signature verification
+
 ## v1.3.0
 
 **Minor release** — first chip of v2.0 Phase 1 (profile + headless
