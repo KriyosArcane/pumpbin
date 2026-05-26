@@ -747,6 +747,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "clap_complete"
+version = "4.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "19c9f1dde76b736e3681f28cec9d5a61299cbaae0fce80a68e43724ad56031eb"
+dependencies = [
+ "clap",
+]
+
+[[package]]
 name = "clap_derive"
 version = "4.5.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3709,14 +3718,16 @@ dependencies = [
 
 [[package]]
 name = "pumpbin"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "bincode",
  "capnp",
  "capnpc",
  "chrono",
  "clap",
+ "clap_complete",
  "dirs 5.0.1",
  "extism",
  "flate2",
@@ -3725,10 +3736,12 @@ dependencies = [
  "memchr",
  "open",
  "rand",
+ "rand_chacha",
  "regex",
  "rfd",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror 1.0.69",
  "winresource",

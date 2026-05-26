@@ -1,0 +1,11 @@
+[package]
+name = "signer"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+pumpbin-plugin-sdk = { path = "../../plugin-sdk" }
+base64 = "0.22"

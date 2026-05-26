@@ -1,0 +1,17 @@
+[package]
+name = "pe-version-info"
+version = "0.1.0"
+edition = "2021"
+description = "PumpBin module: patch VS_VERSION_INFO strings in Windows PE binaries"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+pumpbin-plugin-sdk = { path = "../../plugin-sdk" }
+pelite = { version = "0.10", default-features = false, features = ["resources_nostd"] }
+
+[profile.release]
+opt-level = "z"
+strip = true
+lto = true

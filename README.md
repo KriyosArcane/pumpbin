@@ -24,10 +24,10 @@
 **PumpBin** is an Implant Generation Platform.
 
 To use PumpBin, you need to have a b1n file or [Create One](https://pumpbin.b1n.io/dev/start.html).\
-A b1n file contains one or more binary implant templates, along with some Extism Plug-in and some additional descriptive information.\
-We usually refer to b1n file as Plugin and wasm file as Extism Plug-in.
+A b1n file contains one or more binary implant templates, along with some Extism WASM modules and additional descriptive information.\
+Naming convention: `.b1n` = **Plugin Pack** and `.wasm` = **Module**.
 
-The [plug-in](https://github.com/pumpbin/plug-in) repository collects reusable PumpBin Extism Plug-in.
+The [plug-in](https://github.com/pumpbin/plug-in) repository collects reusable PumpBin Extism modules.
 
 ![](https://github.com/pumpbin/pumpbin/assets/120295547/7f4a662e-3a78-4b16-a7bc-7f55d3369ec2)
 
@@ -35,19 +35,65 @@ The [plug-in](https://github.com/pumpbin/plug-in) repository collects reusable P
 
 - Powerful, simple, and comfortable UI
 - Following the minimal principle to ensure maximum flexibility in usage
-- Support two Plugin types: `Local` and `Remote`
-- Support Extism Plug-in System, offering powerful extensibility
+- Support two Plugin Pack types: `Local` and `Remote`
+- Support Extism Module system, offering powerful extensibility
 - Each generated implant has a different random encryption key
 - Populated with randomized data, each generated implant is unique
 - We have user manual, you no longer need to educate your users
 - No dependencies, just PumpBin
-- Support description, you can write anything about this Plugin
-- No network connection(excluding Extism Plug-in)
+- Support description, you can write anything about this Plugin Pack
+- No network connection(excluding Extism modules)
 - ... And I'm PumpBin, I have magic🪄
 
 ## 🚀 Getting Started
 
 Check the [PumpBin Documentation](https://pumpbin.b1n.io) for more information.
+
+## 🔌 Module + Module Config
+
+PumpBin supports a unified module workflow where one WASM can implement one or more stage functions.
+
+### Maker (GUI)
+
+In the Maker workspace:
+
+1. Select your template binaries as before.
+2. In `WASM Pipeline`, choose a single `Module (.wasm)` file.
+3. Add optional `Module Config (Key / Value)` entries.
+4. Generate the `.b1n` plugin pack.
+
+The config entries are persisted in the generated `.b1n` and passed to module calls through Extism config.
+
+### Generator (GUI)
+
+When a module includes default config entries, they are shown in the plugin description panel as:
+
+- `key = value`
+
+### CLI
+
+Use repeatable `--module-config KEY=VALUE` arguments with generation commands.
+Backward compatibility: `--plugin-config` is still accepted as an alias.
+
+Example:
+
+```bash
+pumpbin-cli generate \
+  --plugin my_plugin.b1n \
+  --shellcode payload.bin \
+  --platform windows \
+  --type exe \
+  --module-config padding_mb=8 \
+  --module-config campaign=alpha
+```
+
+The same option is available for `batch`.
+
+### Compatibility Notes
+
+- Unified WASM modules can export all stage functions, or only a subset.
+- If a function is not exported by the loaded WASM, PumpBin keeps stage defaults for that stage.
+- Existing per-stage module slots remain supported for compatibility.
 
 ## ❔ Why
 

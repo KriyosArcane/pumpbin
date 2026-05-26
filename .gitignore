@@ -1,5 +1,9 @@
 /target
+**/target/
 /VERSION
 /.DS_Store
 .claude/
 .vscode
+# Build artifact emitted by examples/create_thread/build.rs
+examples/create_thread/shellcode
+examples/create_thread_encrypt/shellcode
