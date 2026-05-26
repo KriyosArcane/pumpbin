@@ -1,5 +1,61 @@
 # CHANGELOG
 
+## v1.1.13
+
+Eighth chip of v2.0 Phase 0: Maker preflight off the UI thread (Phase
+0.8). The sync `preflight_readiness_report` call in
+`MakerMessage::GenerateClicked` was reading every platform binary
+synchronously on the Iced runtime thread — freezing the UI for the
+duration on multi-MB templates. v1.1.13 removes the redundant sync
+call entirely; preflight is now ONLY performed inside the existing
+async `Task::perform` block, which already reads each file for the
+actual encode step.
+
+### Fixed
+- **GUI freeze on Maker Generate for large templates.** Pre-v1.1.13:
+  click Generate → `preflight_readiness_report()` runs sync,
+  `fs::read`-ing each of up to 7 platform binaries before any async
+  hand-off → save dialog launches → async block re-reads the same
+  files. v1.1.13: click Generate → `check_generate` (cheap field
+  validation) → async block runs preflight + encode in one pass over
+  the binaries.
+- **Removed double-read inefficiency.** Pre-v1.1.13 every Generate
+  read each binary twice (once for preflight, once for encode).
+
+### Removed
+- **`Maker::preflight_binary` + `Maker::preflight_readiness_report`**
+  were the sync helpers. Replaced by an inline preflight in the
+  async block (calls the same `PluginReplace::preflight_template`
+  helper, identical semantics on the success path).
+- **`PB-E0019 MakerPreflightFailed`** is no longer produced. Per-file
+  preflight failures now bubble through `anyhow` with the template
+  path attached. The variant stays in `error.rs` for backward
+  compatibility with downstream consumers that match on it; mark for
+  removal at the v2.0 boundary cut.
+
+### Behavior
+
+The `GeneratedPluginResult.preflight_report` field now contains a
+brief per-file `READY` summary built inside the async block instead
+of the longer pre-v1.1.13 multi-line report. Format change is
+intentional — the report is informational text shown in the success
+dialog, not parsed by anything.
+
+### Verification
+```
+cargo test --all-targets    -> 54/54 pass + 1 wine-gated ignored (unchanged)
+cargo fmt --check           -> clean
+cargo clippy --all-targets -- -D warnings -> clean
+```
+
+### Roadmap
+
+Remaining v2.0 Phase 0 items deferred to a later chip:
+- Signature migration to `PumpBinResult<T>` (whole-codebase refactor;
+  saved for the v2.0 boundary cut)
+- Collapse legacy single-WASM dispatch (capnp schema break; v2.0 per
+  prior plan-file update)
+
 ## v1.1.12
 
 Seventh chip of v2.0 Phase 0: `OnError::Skip` dispatcher semantics.

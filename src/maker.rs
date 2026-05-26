@@ -323,76 +323,18 @@ impl Maker {
         let _ = crate::utils::atomic_write(&path, raw.as_bytes());
     }
 
-    fn preflight_binary(
-        &self,
-        label: &str,
-        path: &str,
-        src_prefix: &[u8],
-        size_holder: Option<&[u8]>,
-    ) -> anyhow::Result<(String, bool)> {
-        if path.trim().is_empty() {
-            return Ok((format!("{}: NOT SET", label), true));
-        }
-
-        let data = fs::read(path).map_err(|e| anyhow!("{} read failed: {}", label, e))?;
-
-        let has_prefix = memmem::find(&data, src_prefix).is_some();
-        let has_size_holder = size_holder
-            .map(|holder| memmem::find(&data, holder).is_some())
-            .unwrap_or(true);
-
-        let ready = has_prefix && has_size_holder;
-        let line = if ready {
-            format!("{}: READY", label)
-        } else if has_prefix {
-            format!("{}: MISSING SIZE HOLDER", label)
-        } else {
-            format!("{}: MISSING SRC PREFIX", label)
-        };
-
-        Ok((line, ready))
-    }
-
-    fn preflight_readiness_report(&self) -> anyhow::Result<String> {
-        let src_prefix = self.src_prefix.trim().as_bytes();
-        let size_holder = match self.shellcode_save_type() {
-            ShellcodeSaveType::Local => Some(self.size_holder.trim().as_bytes()),
-            ShellcodeSaveType::Remote => None,
-        };
-
-        let mut lines = vec!["PumpBin Maker preflight:".to_string()];
-        let mut failures = Vec::new();
-
-        let checks = [
-            ("Windows EXE", self.windows_exe()),
-            ("Windows DLL", self.windows_lib()),
-            ("Linux EXE", self.linux_exe()),
-            ("Linux SO", self.linux_lib()),
-            ("Darwin EXE", self.darwin_exe()),
-            ("Darwin DYLIB", self.darwin_lib()),
-        ];
-
-        for (label, path) in checks {
-            let (line, ready) = self.preflight_binary(label, path, src_prefix, size_holder)?;
-            if !ready {
-                failures.push(label.to_string());
-            }
-            lines.push(line);
-        }
-
-        if !failures.is_empty() {
-            return Err(crate::error::PumpBinError::MakerPreflightFailed {
-                report: format!(
-                    "{}\n\nPlease rebuild the failing templates with the configured \
-                     src prefix/size holder before generating.",
-                    lines.join("\n")
-                ),
-            }
-            .into());
-        }
-
-        Ok(lines.join("\n"))
-    }
+    // v1.1.13: The synchronous preflight_binary + preflight_readiness_report
+    // pair was removed. Their fs::read of every platform binary blocked the
+    // Iced runtime on large templates. The preflight check is now inlined in
+    // the MakerMessage::GenerateClicked async block (search for
+    // "plugin.replace.preflight_template" in this file), which already reads
+    // each binary for the actual encode step — so removing the sync pre-check
+    // also eliminates a redundant double-read.
+    //
+    // PB-E0019 (MakerPreflightFailed) is no longer produced; per-file
+    // preflight now surfaces as anyhow with the template path on the
+    // generate failure path. PB-E0019 is reserved in error.rs for
+    // backward compatibility with downstream consumers that match on it.
 
     fn load_from_plugin(&mut self, plugin: Plugin) {
         // Load basic info
@@ -769,15 +711,14 @@ impl Maker {
                 }
                 eprintln!("[maker] check_generate passed");
 
-                let preflight_report = match self.preflight_readiness_report() {
-                    Ok(report) => report,
-                    Err(e) => {
-                        eprintln!("[maker] preflight failed: {e}");
-                        return message_dialog(e.to_string(), MessageLevel::Error).discard();
-                    }
-                };
-                eprintln!("[maker] preflight passed, launching save dialog");
-
+                // v1.1.13: preflight moved into the async block below so
+                // its fs::read of every platform binary doesn't freeze the
+                // UI on large templates. The save dialog is launched
+                // *after* preflight passes (still inside the async block);
+                // failure still surfaces via message_dialog through the
+                // existing GenerateDone Err path. Pre-v1.1.13 preflight
+                // ran here synchronously, blocking the Iced runtime for
+                // the duration of every read.
                 let src_prefix_bytes = self.src_prefix().as_bytes().to_vec();
 
                 let mut plugin = Plugin {
@@ -838,9 +779,10 @@ impl Maker {
                 let plugin_config =
                     Self::portable_plugin_config(&self.plugin_config, &self.plugin_config_schema);
 
-                let preflight_report_for_result = preflight_report.clone();
                 let make_plugin = async move {
                     plugin.plugins.plugin_config = plugin_config;
+                    let mut preflight_lines: Vec<String> =
+                        vec!["PumpBin Maker preflight:".to_string()];
 
                     for (path_str, file_type) in paths {
                         if !path_str.is_empty() {
@@ -850,11 +792,15 @@ impl Maker {
                             // Only binary templates (not WASM modules) need preflight.
                             // Delegates to Plugin::PluginReplace::preflight_template so the
                             // CLI's create-b1n subcommand and the Maker GUI enforce the
-                            // exact same template requirements.
+                            // exact same template requirements. v1.1.13: preflight is now
+                            // ONLY here (inside the async Task) so its fs::read doesn't
+                            // freeze the UI on large templates; the pre-1.1.13 sync call
+                            // before this async block was redundant with this one.
                             if file_type != ChooseFileType::MegaPluginWasm {
                                 plugin.replace.preflight_template(&data).map_err(|e| {
                                     anyhow!("Template at '{}': {}", path.display(), e)
                                 })?;
+                                preflight_lines.push(format!("  {:?}: READY", file_type));
                             }
 
                             match file_type {
@@ -932,7 +878,7 @@ impl Maker {
                         plugin_name: plugin_name.to_string(),
                         plugin_bytes,
                         saved_path: file.path().to_string_lossy().to_string(),
-                        preflight_report: preflight_report_for_result,
+                        preflight_report: preflight_lines.join("\n"),
                     })
                 }
                 .map_err(|e| e.to_string());
