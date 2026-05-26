@@ -137,6 +137,20 @@ impl Profile {
     /// shellcode_src. Base64 / Hex decode to a tempfile and pass the
     /// tempfile path (Local mode).
     pub fn execute(&self) -> anyhow::Result<BuildArtifact> {
+        // v1.4.0: load the operator-wide OPSEC profile and enforce its
+        // gates *before* any build work. Today's only enforced gate is
+        // builds.require_sbom; the network policy fields ship in v1.4.0
+        // for parsing but enforcement lands in a follow-up Phase 2 chip.
+        if let Some(opsec) = crate::opsec::load_opsec()? {
+            if opsec.builds.require_sbom && !self.output.sbom {
+                anyhow::bail!(
+                    "OPSEC profile (`require_sbom = true`) refuses builds without \
+                     `output.sbom = true` in the profile. Set it or relax the OPSEC \
+                     policy at ~/.config/pumpbin/opsec.toml."
+                );
+            }
+        }
+
         let platform = parse_platform(&self.target.platform)?;
         let binary_type = parse_binary_type(&self.target.binary_type)?;
 

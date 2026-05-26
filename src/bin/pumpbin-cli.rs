@@ -263,6 +263,23 @@ enum Commands {
         diff: Option<PathBuf>,
     },
 
+    /// Convert a raw shellcode file to a different representation
+    /// (hex string, C array, C# byte array, Python bytes literal,
+    /// base64). Pure formatting; no donut wrapping, no msfvenom
+    /// shimming. Useful for embedding shellcode in source code that
+    /// gets compiled outside the PumpBin implant flow.
+    Convert {
+        /// Path to the input shellcode file.
+        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
+        input: PathBuf,
+        /// Output format: raw | hex | c | csharp | python | base64.
+        #[arg(short, long)]
+        format: String,
+        /// Output file path. If omitted, writes to stdout.
+        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
+        output: Option<PathBuf>,
+    },
+
     /// Build an implant from a pumpbin.toml profile file.
     ///
     /// The profile captures plugin source, target platform/binary type,
@@ -705,6 +722,46 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 print!("{}", pumpbin::inspect::render_diff(&left, &right));
             } else {
                 print!("{}", pumpbin::inspect::render_text(&left));
+            }
+            Ok(())
+        }
+        Commands::Convert {
+            input,
+            format,
+            output,
+        } => {
+            let fmt = pumpbin::OutputFormat::from_str_ci(format).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Unknown format {format:?}. Expected one of: raw, hex, c, csharp, python, base64."
+                )
+            })?;
+            let bytes = std::fs::read(input)?;
+            let out = pumpbin::convert::convert(&bytes, fmt);
+            if let Some(out_path) = output {
+                pumpbin::utils::atomic_write(out_path, &out)?;
+                if cli.json {
+                    #[derive(serde::Serialize)]
+                    struct ConvertResult<'a> {
+                        input: &'a std::path::Path,
+                        output: &'a std::path::Path,
+                        input_bytes: usize,
+                        output_bytes: usize,
+                        format: String,
+                    }
+                    emit_json_ok(ConvertResult {
+                        input,
+                        output: out_path,
+                        input_bytes: bytes.len(),
+                        output_bytes: out.len(),
+                        format: format.clone(),
+                    });
+                } else {
+                    tracing::info!(output = %out_path.display(), bytes = out.len(), "Converted");
+                }
+            } else {
+                // stdout. Raw format writes bytes; everything else is ASCII.
+                use std::io::Write;
+                std::io::stdout().write_all(&out)?;
             }
             Ok(())
         }

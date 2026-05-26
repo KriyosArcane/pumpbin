@@ -1,8 +1,10 @@
 pub mod config_utils;
+pub mod convert;
 pub mod error;
 pub mod inspect;
 pub mod logging;
 pub mod maker;
+pub mod opsec;
 pub mod plugin;
 pub mod plugin_system;
 pub mod profile;
@@ -15,7 +17,9 @@ pub mod plugin_capnp {
 }
 
 use anyhow::anyhow;
+pub use convert::OutputFormat;
 pub use error::{PumpBinError, PumpBinResult};
+pub use opsec::{OpsecProfile, OPSEC_SCHEMA};
 pub use plugin_system::{
     get_plugin_config_schema, OnError, Pass, PluginConfigField, PluginConfigSchema, RuntimeConfig,
     PUMPBIN_SDK_VERSION,

@@ -1,5 +1,99 @@
 # CHANGELOG
 
+## v1.4.0
+
+**Minor release** — Phase 2 of v2.0 plan (first chip): operator OPSEC
+profile + shellcode format converter.
+
+### Plan deviation
+
+Phase 2 originally bundled three items: (1) `pumpbin-cli convert`,
+(2) OPSEC profile at `~/.config/pumpbin/opsec.toml`, (3) plugin
+presets inside `.b1n`. v1.4.0 ships (1) and (2). Plugin presets in
+`.b1n` were deferred because they require a capnp schema change
+(breaking `.b1n` format) and the plan explicitly cuts breaking
+changes to v2.0 only. A follow-up v1.4.x chip will add **profile-
+level presets** (presets stored in `pumpbin.toml`, not the `.b1n`)
+which gives operators the named-config-bundle benefit without the
+plugin-format break.
+
+### Added
+- **`pumpbin::convert` module** with `OutputFormat` enum
+  (`Raw|Hex|C|Csharp|Python|Base64`), `convert(bytes, fmt) -> Vec<u8>`,
+  `parse_hex(&str) -> Vec<u8>`. Re-exported at crate root:
+  `pumpbin::OutputFormat`, `pumpbin::convert`.
+- **`pumpbin-cli convert --input <file> --format <fmt> [--output <path>]`**
+  subcommand. Pure formatting — no donut wrapping, no msfvenom
+  shimming. Output to file (atomic_write) or stdout if `--output`
+  omitted. Supports `--json` envelope on file-output path.
+- **`pumpbin::opsec` module** with `OpsecProfile`, `NetworkPolicy`,
+  `BuildsPolicy`, `OPSEC_SCHEMA`, `opsec_path()`, `load_opsec()`.
+  Re-exported at crate root.
+- **`~/.config/pumpbin/opsec.toml`** (or `$XDG_CONFIG_HOME/pumpbin/opsec.toml`)
+  — operator-wide policy loaded by `Profile::execute` before any build
+  work. Schema:
+  ```toml
+  schema = "pumpbin.opsec/v1"
+
+  [network]
+  domain_allowlist = ["*.attacker.com", "*.cdn.example"]
+  refuse_unrestricted = true
+
+  [builds]
+  require_sbom = true
+  ```
+- **`builds.require_sbom`** gate is enforced in v1.4.0: a profile that
+  doesn't set `output.sbom = true` is refused with a clear error if
+  the operator's OPSEC policy demands SBOMs. Network policy fields
+  parse correctly but enforcement (refusing per-module
+  `allowed_hosts = ["*"]`) lands in a follow-up Phase 2 chip when the
+  WASM load path consults the OPSEC profile.
+
+### Tests
+- **`tests/convert_formats.rs`** (9 tests):
+  - Raw returns bytes unchanged
+  - Hex format produces lowercase 2-chars-per-byte
+  - Hex round-trips through parse_hex (with separators)
+  - C/CSharp/Python output contain expected header + escape patterns
+  - Base64 round-trips through the same engine
+  - Format alias parsing is case-insensitive
+
+### Operator workflow
+
+```
+# 1. One-off shellcode format conversion:
+$ pumpbin-cli convert --input payload.bin --format c --output payload.h
+$ pumpbin-cli convert --input payload.bin --format python | tee shellcode.py
+
+# 2. Set up team OPSEC policy:
+$ cat ~/.config/pumpbin/opsec.toml
+schema = "pumpbin.opsec/v1"
+[builds]
+require_sbom = true
+
+# 3. Every subsequent `pumpbin-cli build` enforces SBOM emission:
+$ pumpbin-cli build -f pumpbin.toml  # fails if output.sbom != true
+Error: OPSEC profile (`require_sbom = true`) refuses builds without
+       `output.sbom = true` in the profile. ...
+```
+
+### Verification
+```
+cargo test --all-targets    -> 71/71 pass + 1 wine-gated ignored (was 62)
+cargo fmt --check           -> clean
+cargo clippy --all-targets -- -D warnings -> clean
+```
+
+### Roadmap
+
+Next chips on the v1.4.x / v2.0 train:
+- Phase 2 finish: profile-level presets, GUI validation status indicator,
+  WASM `allowed_hosts` enforcement against OPSEC `domain_allowlist`
+- Phase 3: marketplace + `plugin {install,list,search,uninstall}` +
+  signature verification + rust-shellcode template conversion +
+  SDK PE/codec helpers
+- Phase 4: mdBook docs (CLI ref, SDK ref, OPSEC guide, positioning)
+
 ## v1.3.2
 
 Third chip of v2.0 Phase 1: `--json` versioned CLI output + SBOM
