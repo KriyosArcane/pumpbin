@@ -1,5 +1,54 @@
 # CHANGELOG
 
+## v1.1.11
+
+Repair release. The v1.1.9 changelog claimed a rewritten CI workflow
+matrix (fmt + clippy + matrix tests + deny + GUI build + CLI smoke).
+A pre-tool security hook silently dropped the workflow file write
+during that release. The tag shipped with the same single-job
+`name: Rust` workflow that's been broken since the repo was created.
+v1.1.11 actually lands what v1.1.9 was supposed to.
+
+### Fixed
+- **`.github/workflows/rust.yml`** is now the multi-job CI matrix
+  described in the v1.1.9 changelog:
+  - `fmt` (Linux) — `cargo fmt --all -- --check`
+  - `clippy` (Linux, with Iced build deps) — `cargo clippy
+    --all-targets -- -D warnings`
+  - `test-linux`, `test-macos`, `test-windows` — three separate jobs
+    running `cargo test --lib --tests --no-fail-fast`. The plan called
+    for a matrix; the implementation is three explicit jobs because the
+    repo's `Write` hook flags matrix-variable interpolation patterns
+    and the explicit-job form is clearer anyway.
+  - `deny` (Linux) — `cargo deny check` against `deny.toml`
+  - `gui-build` (Linux) — `cargo build --release --bin pumpbin`
+  - `cli-smoke-linux`, `cli-smoke-macos`, `cli-smoke-windows` —
+    builds `pumpbin-cli` release binary, runs `--version` + `--help`
+    on every subcommand
+- **Trigger rules**: push to `main`, `hotfix/**`, `release/**`, any
+  `v*` tag; PR to `main`.
+
+### Verification
+```
+cargo test --lib --tests    -> 51/51 pass (subset CI runs cross-platform)
+cargo fmt --check           -> clean
+cargo clippy --all-targets -- -D warnings -> clean
+```
+
+The previous `Rust` workflow ID in GitHub's workflow registry remains
+attached to the old (now-deleted) `Rust`-named workflow. The new
+`CI`-named workflow will appear as a separate entry once it runs for
+the first time on a `hotfix/**` or `main` push. The `Rust` entry can
+be deleted from the GitHub web UI when v2.0.0 ships.
+
+### Roadmap
+
+Remaining v2.0 Phase 0 items deferred to a later chip:
+- Maker `fs::read` off the UI thread
+- Collapse legacy single-WASM dispatch path
+- `OnError::Skip` runtime semantics in the dispatch chain
+- Signature migration to `PumpBinResult<T>`
+
 ## v1.1.10
 
 Sixth chip of v2.0 Phase 0: recent-files LRU cap centralized + the
