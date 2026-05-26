@@ -1,5 +1,45 @@
 # CHANGELOG
 
+## v1.1.3
+
+Follow-up to v1.1.2 addressing the highest-severity CLI/UI parity drift
+surfaced by the QA pass documented in `QA_REPORT.md`.
+
+### Fixed
+- **`pumpbin-cli verify` returned exit 0 on Authenticode/PE failure** —
+  `verify_binary` printed `PE format: no` and `Authenticode invalid` and
+  still returned `Ok(())`, breaking CI/CD pipelines that relied on exit
+  status. Now tracks failures (non-PE input, checksum mismatch, Authenticode
+  verify failure when a signature blob exists) and exits 1 with a summary
+  of every check that failed. `AuthCheckStatus::NotApplicable` (no
+  osslsigncode, no blob) still passes — those are genuinely informational.
+- **`pumpbin-cli create-b1n` produced silently-broken `.b1n` files** when the
+  template binary lacked the configured `src_prefix` or `size_holder`. The
+  Maker GUI enforced this preflight inline; the CLI did not, so plugins
+  built via CLI failed only at generate-time with `"Holder '...' not found
+  in binary"`. The check is now lifted into the shared
+  `PluginReplace::preflight_template` helper and called by both surfaces.
+
+### Added
+- **`PluginReplace::preflight_template`** (`src/plugin.rs`) — shared template
+  validation. Confirms `src_prefix` is present always; confirms `size_holder`
+  is present in Local mode; skips `size_holder` in Remote mode.
+- **`tests/preflight.rs`** — 6 tests covering both modes × prefix/holder
+  presence/absence permutations.
+- **`tests/parity_harness.rs`** — 5 tests asserting the structural
+  invariants of `Plugin::replace_binary` that don't depend on random
+  padding (output length, shellcode bytes injected verbatim, placeholders
+  consumed, decimal size-string written, two runs agree on offsets). This
+  is the foundation for v2.0 byte-equivalence parity tests once the
+  `BuildJob` abstraction lands.
+- **`AuthCheckStatus`** enum (`src/bin/pumpbin-cli.rs`) discriminating
+  `Valid`/`Failed`/`NotApplicable` for the exit-code policy above.
+
+### Reference
+- Full QA findings, capability matrix, and parity drift inventory:
+  `QA_REPORT.md` (added in this release).
+- Roadmap context: `/home/kr1yos/.claude/plans/staged-watching-shannon.md`.
+
 ## v1.1.2
 
 ### Fixed

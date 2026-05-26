@@ -477,6 +477,15 @@ fn main() -> Result<()> {
                 ..Default::default()
             };
 
+            // Preflight the template using the same check the Maker GUI runs.
+            // Without this, pumpbin-cli create-b1n silently produced .b1n
+            // files that failed at generate-time with "Holder '...' not
+            // found in binary" (the repo's own hello.b1n was an example).
+            plugin
+                .replace
+                .preflight_template(&template_bytes)
+                .with_context(|| format!("Template at '{}'", template.display()))?;
+
             match (parsed_platform, parsed_binary_type) {
                 (Platform::Windows, BinaryType::Executable) => {
                     *plugin.bins.windows.executable_mut() = Some(template_bytes);
@@ -869,14 +878,29 @@ fn verify_binary(binary: &PathBuf) -> Result<()> {
     let pe = analyze_pe(&bytes)?;
     let auth = verify_authenticode(binary, pe.security_dir_size.unwrap_or(0));
 
+    // Collect human-readable failure reasons. Each push here makes the final
+    // exit code non-zero, so automation can `pumpbin-cli verify --binary X`
+    // and trust the exit status. Pre-1.1.3 verify always returned Ok(())
+    // even with `PE format: no` and `Authenticode invalid`, causing false
+    // passes in CI pipelines.
+    let mut failures: Vec<String> = Vec::new();
+
     println!("Binary: {}", binary.display());
     println!("PE format: {}", if pe.is_pe { "yes" } else { "no" });
+    if !pe.is_pe {
+        failures.push("input is not a valid PE binary".to_string());
+    }
 
     if let (Some(current), Some(calculated)) = (pe.checksum_current, pe.checksum_calculated) {
         println!(
             "PE checksum: current=0x{current:08X}, calculated=0x{calculated:08X}, valid={}",
             pe.checksum_valid
         );
+        if !pe.checksum_valid {
+            failures.push(format!(
+                "PE checksum mismatch (current=0x{current:08X}, calculated=0x{calculated:08X})"
+            ));
+        }
     } else {
         println!("PE checksum: unavailable");
     }
@@ -895,6 +919,9 @@ fn verify_binary(binary: &PathBuf) -> Result<()> {
     if let Some(detail) = auth.detail {
         println!("Authenticode detail: {}", detail);
     }
+    if matches!(auth.status, AuthCheckStatus::Failed) {
+        failures.push(format!("Authenticode verify failed: {}", auth.summary));
+    }
 
     if pe.markers.is_empty() {
         println!("Module markers: none");
@@ -905,13 +932,34 @@ fn verify_binary(binary: &PathBuf) -> Result<()> {
         }
     }
 
-    Ok(())
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        bail!(
+            "verify reported {} failure(s):\n  - {}",
+            failures.len(),
+            failures.join("\n  - ")
+        );
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuthCheckStatus {
+    /// osslsigncode verify returned success.
+    Valid,
+    /// osslsigncode verify returned non-zero exit.
+    Failed,
+    /// We could not run a verification (no osslsigncode on PATH, or no
+    /// signature blob present). Reported neutrally — does NOT count as
+    /// failure for exit-code purposes.
+    NotApplicable,
 }
 
 #[derive(Debug)]
 struct AuthVerifyStatus {
     summary: String,
     detail: Option<String>,
+    status: AuthCheckStatus,
 }
 
 fn verify_authenticode(path: &Path, security_dir_size: u32) -> AuthVerifyStatus {
@@ -939,11 +987,13 @@ fn verify_authenticode(path: &Path, security_dir_size: u32) -> AuthVerifyStatus 
                 AuthVerifyStatus {
                     summary: "valid (osslsigncode verify succeeded)".to_string(),
                     detail: Some(first_line),
+                    status: AuthCheckStatus::Valid,
                 }
             } else {
                 AuthVerifyStatus {
                     summary: "invalid (osslsigncode verify failed)".to_string(),
                     detail: Some(first_line),
+                    status: AuthCheckStatus::Failed,
                 }
             }
         }
@@ -954,11 +1004,13 @@ fn verify_authenticode(path: &Path, security_dir_size: u32) -> AuthVerifyStatus 
                         "signature blob present, but osslsigncode is unavailable for cryptographic verification"
                             .to_string(),
                     detail: None,
+                    status: AuthCheckStatus::NotApplicable,
                 }
             } else {
                 AuthVerifyStatus {
                     summary: "no signature blob detected".to_string(),
                     detail: None,
+                    status: AuthCheckStatus::NotApplicable,
                 }
             }
         }

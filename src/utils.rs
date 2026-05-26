@@ -135,7 +135,8 @@ pub fn atomic_write(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> 
     let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
     tmp.write_all(data)?;
     tmp.as_file_mut().sync_all()?;
-    tmp.persist(path).map_err(|e| std::io::Error::other(e.error))?;
+    tmp.persist(path)
+        .map_err(|e| std::io::Error::other(e.error))?;
     Ok(())
 }
 

@@ -826,15 +826,14 @@ impl Maker {
                             let path = PathBuf::from(path_str);
                             let data = fs::read(&path)?;
 
-                            // Only binary templates (not WASM modules) need the shellcode prefix
-                            if file_type != ChooseFileType::MegaPluginWasm
-                                && memmem::find(&data, &src_prefix_bytes).is_none()
-                            {
-                                bail!(
-                                    "The binary at '{}' does not contain the specified shellcode prefix ('{}'). Please recompile it with the correct placeholder.",
-                                    path.display(),
-                                    String::from_utf8_lossy(&src_prefix_bytes)
-                                );
+                            // Only binary templates (not WASM modules) need preflight.
+                            // Delegates to Plugin::PluginReplace::preflight_template so the
+                            // CLI's create-b1n subcommand and the Maker GUI enforce the
+                            // exact same template requirements.
+                            if file_type != ChooseFileType::MegaPluginWasm {
+                                plugin.replace.preflight_template(&data).map_err(|e| {
+                                    anyhow!("Template at '{}': {}", path.display(), e)
+                                })?;
                             }
 
                             match file_type {
@@ -871,10 +870,19 @@ impl Maker {
                     let binary_types = [
                         (plugin.bins.windows.executable().is_some(), "Windows .exe"),
                         (plugin.bins.linux.executable().is_some(), "Linux executable"),
-                        (plugin.bins.darwin.executable().is_some(), "macOS executable"),
-                        (plugin.bins.windows.dynamic_library().is_some(), "Windows .dll"),
+                        (
+                            plugin.bins.darwin.executable().is_some(),
+                            "macOS executable",
+                        ),
+                        (
+                            plugin.bins.windows.dynamic_library().is_some(),
+                            "Windows .dll",
+                        ),
                         (plugin.bins.linux.dynamic_library().is_some(), "Linux .so"),
-                        (plugin.bins.darwin.dynamic_library().is_some(), "macOS .dylib"),
+                        (
+                            plugin.bins.darwin.dynamic_library().is_some(),
+                            "macOS .dylib",
+                        ),
                     ]
                     .iter()
                     .filter_map(|(present, name)| if *present { Some(*name) } else { None })

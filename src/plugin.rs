@@ -65,6 +65,39 @@ impl PluginReplace {
     pub fn max_len(&self) -> usize {
         self.max_len as usize
     }
+
+    /// Confirm that a candidate template binary contains every placeholder
+    /// this replace-config will look for at generate-time. Used by both the
+    /// Maker GUI (preflight before saving a .b1n) and the CLI `create-b1n`
+    /// subcommand (preflight before encoding). Pre-1.1.3 the Maker enforced
+    /// this and the CLI did not, producing silently-broken .b1n files that
+    /// failed only later at `generate` time.
+    ///
+    /// Local mode requires both `src_prefix` and `size_holder` to be present
+    /// in the template. Remote mode only requires `src_prefix` (the URL is
+    /// substituted into the same slot at runtime).
+    pub fn preflight_template(&self, template: &[u8]) -> anyhow::Result<()> {
+        if memchr::memmem::find(template, &self.src_prefix).is_none() {
+            bail!(
+                "Template does not contain the configured src_prefix ('{}'). \
+                 Recompile the template with the placeholder embedded.",
+                String::from_utf8_lossy(&self.src_prefix)
+            );
+        }
+
+        // Local mode also needs the size_holder. Remote mode skips it (the
+        // URL byte count is unbounded in the placeholder slot).
+        if let Some(holder) = &self.size_holder {
+            if memchr::memmem::find(template, holder).is_none() {
+                bail!(
+                    "Template does not contain the configured size_holder ('{}'). \
+                     This is required for Local-mode plugins.",
+                    String::from_utf8_lossy(holder)
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Default, Clone)]
