@@ -430,7 +430,28 @@ fn main() -> Result<()> {
                 "Batch generation complete! Success: {}, Failed: {}",
                 success_count, fail_count
             );
-            Ok(())
+
+            // Exit non-zero if nothing was generated, or if any individual case
+            // failed. Pre-1.1.4 batch always exited 0, so a CI pipeline that
+            // pointed at the wrong dir / a dir of non-.bin files would think
+            // it succeeded and ship zero implants. Exit code policy:
+            //   success > 0 && fail == 0  -> 0 (all good)
+            //   success > 0 && fail > 0   -> 2 (partial)
+            //   success == 0              -> 1 (nothing produced)
+            match (success_count, fail_count) {
+                (0, _) => bail!(
+                    "Batch produced zero implants (checked directory: {}). \
+                     Confirm the directory contains .bin shellcode files.",
+                    directory.display()
+                ),
+                (_, 0) => Ok(()),
+                (_, _) => bail!(
+                    "Batch completed with {} failure(s) out of {} total. \
+                     See [!] lines above for per-file errors.",
+                    fail_count,
+                    success_count + fail_count
+                ),
+            }
         }
         Commands::CreateB1n {
             output,

@@ -1,5 +1,50 @@
 # CHANGELOG
 
+## v1.1.4
+
+Follow-up to v1.1.3 closing two more drift items surfaced by a second QA
+pass that exercised both CLI and GUI workflows (see `QA_REPORT.md` ->
+"v1.1.3 QA findings").
+
+### Fixed
+- **`pumpbin-cli batch` returned exit 0 even when zero implants were
+  generated.** A CI pipeline pointed at the wrong directory, or at a
+  directory containing only non-`.bin` files, would print
+  `Success: 0, Failed: 0` and pass without warning. Exit-code policy is
+  now documented and enforced:
+    - `success > 0 && failed == 0`  → 0
+    - `success == 0`                → 1 (bails with directory hint)
+    - `success > 0 && failed > 0`   → non-zero (partial; lists per-file
+                                       errors in the existing `[!]` lines)
+- **GUI keyboard shortcuts spawned multiple file dialogs on key-repeat.**
+  Holding `Ctrl+Shift+A` while the existing file dialog was still open
+  triggered `AddPluginClicked` once per repeat tick, each one setting
+  `is_loading=true` and opening its own `AsyncFileDialog`. The user had
+  to dismiss N dialogs before the GUI was usable. Now `Message::Keyboard
+  Shortcut` and the click handlers (`AddPluginClicked`,
+  `ChooseShellcodeClicked`) early-return `Task::none()` when
+  `self.is_loading` is true.
+
+### Added
+- **`tests/cli_exit_codes.rs`** — 5 end-to-end tests that invoke the
+  built `pumpbin-cli` binary as a subprocess and assert exit codes:
+    - `batch_empty_dir_exits_nonzero`
+    - `batch_dir_of_non_bin_files_exits_nonzero`
+    - `batch_with_valid_shellcode_succeeds`
+    - `verify_on_non_pe_exits_nonzero`
+    - `create_b1n_with_bad_template_exits_nonzero`
+  Skip cleanly (with an eprintln) if the binary hasn't been built, so
+  `cargo test` in a fresh checkout still works.
+- **`examples/seed_xdg.rs`** — QA helper to pre-seed a sandboxed
+  `$XDG_DATA_HOME/PumpBin/plugins` registry with a `.b1n` so the GUI
+  starts with a plugin already loaded. Used during QA to test GUI
+  launches without touching the operator's real plugin list.
+
+### Reference
+- `QA_REPORT.md` updated in v1.1.3; this release closes 2 of the
+  remaining items it flagged.
+- Test count: 14 → 19. All pass.
+
 ## v1.1.3
 
 Follow-up to v1.1.2 addressing the highest-severity CLI/UI parity drift

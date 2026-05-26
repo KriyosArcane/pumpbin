@@ -434,6 +434,9 @@ impl Pumpbin {
         match message {
             Message::ShellcodeSrcChanged(x) => self.shellcode_src = x,
             Message::ChooseShellcodeClicked => {
+                if self.is_loading {
+                    return Task::none();
+                }
                 let choose_shellcode = async {
                     AsyncFileDialog::new()
                         .set_directory(home_dir().unwrap_or(".".into()))
@@ -671,6 +674,9 @@ impl Pumpbin {
             }
             Message::BinaryTypeChanged(x) => self.selected_binary_type = Some(x),
             Message::AddPluginClicked => {
+                if self.is_loading {
+                    return Task::none();
+                }
                 self.set_loading(true, "Adding plugins...".to_string());
                 let mut plugins = self.plugins().clone();
 
@@ -909,25 +915,35 @@ impl Pumpbin {
                 );
                 let _ = message_dialog(about_text, MessageLevel::Info);
             }
-            Message::KeyboardShortcut(shortcut) => match shortcut {
-                KeyboardShortcut::AddPlugin => {
-                    return self.update(Message::AddPluginClicked);
+            Message::KeyboardShortcut(shortcut) => {
+                // Drop every shortcut while a long-running operation is in
+                // flight. Pre-1.1.4 holding Ctrl+Shift+A spawned one file
+                // dialog per key-repeat tick — each set is_loading=true and
+                // opened its own AsyncFileDialog, leaving N dialogs the
+                // user had to dismiss before the GUI was usable again.
+                if self.is_loading {
+                    return Task::none();
                 }
-                KeyboardShortcut::Generate => {
-                    if self.selected_binary_type().is_some()
-                        && !self.shellcode_src().is_empty()
-                        && self.runtime_config_errors().is_empty()
-                    {
-                        return self.update(Message::GenerateClicked);
+                match shortcut {
+                    KeyboardShortcut::AddPlugin => {
+                        return self.update(Message::AddPluginClicked);
+                    }
+                    KeyboardShortcut::Generate => {
+                        if self.selected_binary_type().is_some()
+                            && !self.shellcode_src().is_empty()
+                            && self.runtime_config_errors().is_empty()
+                        {
+                            return self.update(Message::GenerateClicked);
+                        }
+                    }
+                    KeyboardShortcut::ChooseShellcode => {
+                        return self.update(Message::ChooseShellcodeClicked);
+                    }
+                    KeyboardShortcut::ClearSource => {
+                        return self.update(Message::ClearShellcodeSource);
                     }
                 }
-                KeyboardShortcut::ChooseShellcode => {
-                    return self.update(Message::ChooseShellcodeClicked);
-                }
-                KeyboardShortcut::ClearSource => {
-                    return self.update(Message::ClearShellcodeSource);
-                }
-            },
+            }
             Message::FilesDropped(paths) => {
                 // Handle drag & drop files
                 let mut shellcode_files = Vec::new();
