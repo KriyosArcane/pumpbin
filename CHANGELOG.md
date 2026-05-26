@@ -1,5 +1,43 @@
 # CHANGELOG
 
+## v1.4.1
+
+Documentation chip. README rewritten end-to-end to reflect the v1.4.x
+capability set and honestly position PumpBin against neighboring
+tools.
+
+### Added
+- **README.md rewrite** covering:
+  - Positioning: PumpBin is a *carrier-binary build pipeline*, not a
+    C2, not a shellcode generator. Sits downstream of CS / Adaptix /
+    Sliver / Donut / msfvenom, upstream of NetExec.
+  - 10-line `pumpbin.toml` quick-start showing the headless CLI flow
+    (build + inspect + convert + verify).
+  - "What ships in the box" inventory of the four crates and the
+    bundled plugin examples.
+  - "Operational features" matrix listing every v1.x feature visible
+    to operators: profile-driven builds, PB-Exxxx error codes, JSON
+    logs, SBOMs, WASM sandbox policy, OPSEC profile, memory hygiene,
+    atomic writes, plugin signing.
+  - CI matrix table showing what runs on Linux / macOS / Windows.
+  - Build-from-source instructions split into CLI-only path (no
+    Iced/wgpu deps) and GUI path.
+
+### Verification
+```
+cargo test --all-targets    -> 71/71 pass + 1 wine-gated ignored (unchanged)
+cargo fmt --check           -> clean
+cargo clippy --all-targets -- -D warnings -> clean
+```
+
+### Roadmap
+
+mdBook (the full Phase 4 chip with CLI ref + SDK ref + OPSEC guide +
+positioning page + troubleshooting + every PB-Exxxx code documented)
+ships in a follow-up release. v1.4.1 is the README-only quick win;
+the full docs site is a larger chip that needs `clap_mangen` setup +
+`mdbook-linkcheck` CI gate.
+
 ## v1.4.0
 
 **Minor release** — Phase 2 of v2.0 plan (first chip): operator OPSEC
