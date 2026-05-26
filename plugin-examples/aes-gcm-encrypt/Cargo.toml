@@ -1,0 +1,18 @@
+[package]
+name = "aes-gcm-encrypt"
+version = "0.1.0"
+edition = "2021"
+description = "AES-256-GCM encryption plugin for PumpBin"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+pumpbin-plugin-sdk = { path = "../../plugin-sdk" }
+aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
+getrandom = { version = "0.2", features = ["js"] }
+
+[profile.release]
+opt-level = "z"
+strip = true
+lto = true

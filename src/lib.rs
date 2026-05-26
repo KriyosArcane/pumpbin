@@ -1,35 +1,58 @@
+pub mod config_utils;
+pub mod convert;
+pub mod error;
+pub mod inspect;
+pub mod logging;
+pub mod maker;
+pub mod opsec;
 pub mod plugin;
-mod plugin_system;
+pub mod plugin_system;
+pub mod profile;
+pub mod sbom;
+pub mod secret;
 pub mod style;
 pub mod utils;
-pub mod maker;
 pub mod plugin_capnp {
     include!("../capnp/plugin_capnp.rs");
 }
 
-use std::{fmt::Display, fs, ops::Not, path::PathBuf};
-
 use anyhow::anyhow;
-use dirs::{desktop_dir, home_dir};
-use open;
+pub use convert::OutputFormat;
+pub use error::{PumpBinError, PumpBinResult};
+pub use opsec::{OpsecProfile, OPSEC_SCHEMA};
+pub use plugin_system::{
+    get_plugin_config_schema, OnError, Pass, PluginConfigField, PluginConfigSchema, RuntimeConfig,
+    PUMPBIN_SDK_VERSION,
+};
+pub use profile::{BuildArtifact, Profile, PROFILE_SCHEMA};
+pub use sbom::{Sbom, SBOM_SCHEMA};
+pub use secret::SecretBuf;
+
+/// LRU cap on the recent-files list (both Generator and Maker workspaces).
+/// Bumped from the pre-v1.1.10 value of 10 to match the v2.0 plan target.
+pub const RECENT_FILES_CAP: usize = 20;
+
+use std::{collections::BTreeMap, fmt::Display, fs, path::PathBuf};
+
+use base64::{engine::general_purpose, Engine as _};
 use chrono::Local;
-use serde::{Deserialize, Serialize};
+use dirs::{desktop_dir, home_dir};
 use iced::{
     alignment::{Horizontal, Vertical},
+    event,
     futures::TryFutureExt,
     keyboard,
-    event,
     widget::{
-        button, column, container, horizontal_rule, pick_list, row,
+        button, checkbox, column, container, horizontal_rule, pick_list, row,
         svg::{self, Handle},
         text, text_editor, text_input, vertical_rule, Column, Scrollable, Svg,
     },
-    Background, Length, Task, Theme, Subscription, Event, Border, Element,
+    Background, Border, Element, Event, Length, Subscription, Task, Theme,
 };
 use plugin::{Plugin, Plugins};
-use plugin_system::Pass;
-use rfd::{AsyncFileDialog, MessageLevel, MessageDialogResult};
-use utils::{message_dialog, confirm_dialog, JETBRAINS_MONO_FONT};
+use rfd::{AsyncFileDialog, MessageDialogResult, MessageLevel};
+use serde::{Deserialize, Serialize};
+use utils::{confirm_dialog, message_dialog, JETBRAINS_MONO_FONT};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Workspace {
@@ -55,6 +78,13 @@ pub enum Message {
     RemovePlugin(String),
     RemovePluginDone(Result<Plugins, String>),
     PluginItemClicked(String),
+    RuntimeConfigKeyChanged(usize, String),
+    RuntimeConfigValueChanged(usize, String),
+    RuntimeConfigBrowseClicked(usize),
+    RuntimeConfigBrowseDone(usize, Option<PathBuf>),
+    ApplyRuntimeSchemaDefaultsOnOpenChanged(bool),
+    AddRuntimeConfigRow,
+    RemoveRuntimeConfigRow(usize),
     EditorAction(text_editor::Action),
     B1nClicked,
     GithubClicked,
@@ -136,6 +166,9 @@ pub struct Pumpbin {
     plugins: Plugins,
     selected_plugin: Option<Plugin>,
     plugin_desc: text_editor::Content,
+    runtime_plugin_config: Vec<(String, String)>,
+    runtime_plugin_schema: Vec<PluginConfigField>,
+    apply_runtime_schema_defaults_on_open: bool,
     pass: Vec<Pass>,
     selected_theme: Theme,
     recent_files: Vec<PathBuf>,
@@ -155,9 +188,12 @@ impl Default for Pumpbin {
             selected_binary_type: Default::default(),
             supported_platforms: Default::default(),
             selected_platform: Default::default(),
-            plugins: Plugins::reade_plugins().unwrap_or_default(),
+            plugins: Plugins::read_plugins().unwrap_or_default(),
             selected_plugin: Default::default(),
             plugin_desc: Default::default(),
+            runtime_plugin_config: Default::default(),
+            runtime_plugin_schema: Default::default(),
+            apply_runtime_schema_defaults_on_open: true,
             pass: Default::default(),
             selected_theme: Theme::CatppuccinMacchiato,
             recent_files: Vec::new(),
@@ -171,8 +207,148 @@ impl Default for Pumpbin {
 }
 
 impl Pumpbin {
+    fn field_mode(field: Option<&PluginConfigField>, key: &str) -> &'static str {
+        if let Some(field) = field {
+            let ty = field.field_type.to_ascii_lowercase();
+            if ty == "file_path" {
+                return "file_path";
+            }
+            if ty == "file" || ty == "file_base64" {
+                return "file_base64";
+            }
+        }
+
+        if Self::config_key_is_file_like(key) {
+            "file_base64"
+        } else {
+            "plain"
+        }
+    }
+
+    fn plugin_schema_fields(plugin: &Plugin) -> Vec<PluginConfigField> {
+        for wasm in plugin.plugins().modules() {
+            if let Ok(Some(schema)) = get_plugin_config_schema(wasm) {
+                return schema.fields;
+            }
+        }
+
+        let wasm = plugin
+            .plugins()
+            .encrypt_shellcode()
+            .or(plugin.plugins().format_encrypted_shellcode())
+            .or(plugin.plugins().format_url_remote())
+            .or(plugin.plugins().upload_final_shellcode_remote());
+
+        if let Some(wasm) = wasm {
+            if let Ok(Some(schema)) = get_plugin_config_schema(wasm) {
+                return schema.fields;
+            }
+        }
+
+        Vec::new()
+    }
+
+    fn merge_runtime_config(
+        plugin_config: &[(String, String)],
+        schema: &[PluginConfigField],
+        apply_defaults_on_open: bool,
+    ) -> Vec<(String, String)> {
+        config_utils::merge_config_with_schema(plugin_config, schema, apply_defaults_on_open)
+    }
+
+    fn schema_field_for_key<'a>(
+        schema: &'a [PluginConfigField],
+        key: &str,
+    ) -> Option<&'a PluginConfigField> {
+        config_utils::schema_field_for_key(schema, key)
+    }
+
+    fn schema_field(&self, key: &str) -> Option<&PluginConfigField> {
+        Self::schema_field_for_key(&self.runtime_plugin_schema, key)
+    }
+
+    fn config_key_is_file_like(key: &str) -> bool {
+        config_utils::config_key_is_file_like(key)
+    }
+
+    fn sanitize_runtime_config(
+        entries: &[(String, String)],
+        schema: &[PluginConfigField],
+    ) -> Vec<(String, String)> {
+        config_utils::sanitize_config(entries, schema)
+    }
+
+    fn runtime_config_value_error(
+        field: Option<&PluginConfigField>,
+        key: &str,
+        value: &str,
+    ) -> Option<String> {
+        config_utils::config_value_error(field, key, value)
+    }
+
+    fn runtime_config_errors(&self) -> Vec<String> {
+        self.runtime_plugin_config
+            .iter()
+            .filter_map(|(key, value)| {
+                Self::runtime_config_value_error(self.schema_field(key), key, value)
+                    .map(|e| format!("{}: {}", key, e))
+            })
+            .collect()
+    }
+
+    fn config_value_to_runtime_payload(&self, key: &str, value: &str) -> Result<String, String> {
+        let mode = Self::field_mode(self.schema_field(key), key);
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return Ok(String::new());
+        }
+
+        match mode {
+            "file_path" => Ok(config_utils::maybe_expand_home_path(trimmed)
+                .to_string_lossy()
+                .to_string()),
+            "file_base64" => {
+                let file_path = config_utils::maybe_expand_home_path(trimmed);
+                if file_path.is_file() {
+                    let bytes = fs::read(&file_path).map_err(|e| {
+                        format!("{}: failed to read file '{}': {}", key, trimmed, e)
+                    })?;
+                    Ok(general_purpose::STANDARD.encode(bytes))
+                } else if config_utils::looks_like_path(trimmed) {
+                    Err(format!("{}: file '{}' not found", key, trimmed))
+                } else {
+                    Ok(value.to_string())
+                }
+            }
+            _ => Ok(value.to_string()),
+        }
+    }
+
+    fn runtime_plugin_config_map(&self) -> Result<BTreeMap<String, String>, String> {
+        let mut map = BTreeMap::new();
+
+        for (key, value) in &self.runtime_plugin_config {
+            if key.trim().is_empty() {
+                continue;
+            }
+
+            if let Some(err) = Self::runtime_config_value_error(self.schema_field(key), key, value)
+            {
+                return Err(format!("{}: {}", key, err));
+            }
+
+            let runtime_value = self.config_value_to_runtime_payload(key, value)?;
+            map.insert(key.clone(), runtime_value);
+        }
+
+        Ok(map)
+    }
+
     fn update_supported_binary_types(&mut self, platform: Platform) {
-        let bins = self.selected_plugin().unwrap().bins();
+        let Some(plugin) = self.selected_plugin() else {
+            return;
+        };
+        let bins = plugin.bins();
         let bin_types = match platform {
             Platform::Windows => bins.windows(),
             Platform::Linux => bins.linux(),
@@ -185,7 +361,7 @@ impl Pumpbin {
     }
 
     fn update_supported_platforms(&mut self, plugin: &Plugin) {
-        let platforms = plugin.bins().supported_plaforms();
+        let platforms = plugin.bins().supported_platforms();
 
         self.supported_binary_types = Default::default();
         self.selected_binary_type = Default::default();
@@ -253,14 +429,17 @@ impl Pumpbin {
 
     // Helper methods for new QoL features
     fn add_recent_file(&mut self, path: PathBuf) {
-        // Remove if already exists to avoid duplicates
+        // Remove if already exists to avoid duplicates (LRU dedup).
         self.recent_files.retain(|p| p != &path);
-        
-        // Add to front
+
+        // Add to front (most-recently-used).
         self.recent_files.insert(0, path);
-        
-        // Keep only last 5 files
-        self.recent_files.truncate(5);
+
+        // Cap at RECENT_FILES_CAP. Pre-v1.1.10 the cap was 10; the
+        // plan's target is 20 (still small enough that the dropdown
+        // stays scannable, large enough that recent-but-stale entries
+        // survive a couple of intervening file picks).
+        self.recent_files.truncate(RECENT_FILES_CAP);
     }
 
     fn set_loading(&mut self, loading: bool, message: String) {
@@ -279,6 +458,9 @@ impl Pumpbin {
         match message {
             Message::ShellcodeSrcChanged(x) => self.shellcode_src = x,
             Message::ChooseShellcodeClicked => {
+                if self.is_loading {
+                    return Task::none();
+                }
                 let choose_shellcode = async {
                     AsyncFileDialog::new()
                         .set_directory(home_dir().unwrap_or(".".into()))
@@ -318,15 +500,40 @@ impl Pumpbin {
                     return Task::none();
                 };
 
-                let plugin = self.selected_plugin().unwrap().to_owned();
+                let Some(plugin) = self.selected_plugin() else {
+                    return Task::none();
+                };
+                let plugin = plugin.to_owned();
+
+                let runtime_config = match self.runtime_plugin_config_map() {
+                    Ok(cfg) => cfg,
+                    Err(e) => {
+                        let _ = message_dialog(
+                            format!("Invalid runtime module config: {}", e),
+                            MessageLevel::Error,
+                        );
+                        return Task::none();
+                    }
+                };
+                let runtime_config = if runtime_config.is_empty() {
+                    None
+                } else {
+                    Some(runtime_config)
+                };
                 let write_encrypted = async move {
-                    let output = plugin.plugins().run_encrypt_shellcode(&path)?;
-                    let final_shellcode = plugin
+                    let output = plugin
                         .plugins()
-                        .run_format_encrypted_shellcode(output.encrypted())?;
+                        .run_encrypt_shellcode(&path, runtime_config.as_ref())?;
+                    let final_shellcode = plugin.plugins().run_format_encrypted_shellcode(
+                        output.encrypted(),
+                        runtime_config.as_ref(),
+                    )?;
                     let url = plugin
                         .plugins()
-                        .run_upload_final_shellcode_remote(final_shellcode.formated_shellcode())?
+                        .run_upload_final_shellcode_remote(
+                            final_shellcode.formatted_shellcode(),
+                            runtime_config.as_ref(),
+                        )?
                         .url()
                         .to_string();
 
@@ -339,7 +546,7 @@ impl Pumpbin {
                             .await
                             .ok_or(anyhow!("Canceled the saving of encrypted shellcode."))?;
 
-                        fs::write(file.path(), final_shellcode.formated_shellcode())
+                        utils::atomic_write(file.path(), final_shellcode.formatted_shellcode())
                             .map_err(anyhow::Error::from)?;
                     }
 
@@ -350,10 +557,10 @@ impl Pumpbin {
                 return Task::perform(write_encrypted, Message::EncryptShellcodeDone);
             }
             Message::EncryptShellcodeDone(x) => {
-                match x {
+                let _ = match x {
                     Ok((pass, url)) => {
                         self.pass = pass;
-                        if url.is_empty().not() {
+                        if !url.is_empty() {
                             self.shellcode_src = url;
                         }
                         message_dialog("Encrypted shellcode done.".into(), MessageLevel::Info)
@@ -362,76 +569,115 @@ impl Pumpbin {
                 };
             }
             Message::GenerateClicked => {
-                self.set_loading(true, "Generating implant...".to_string());
-                // unwrap is safe.
-                // UI implemented strict restrictions.
-                let plugin = self.selected_plugin().unwrap().to_owned();
+                let (plugin, platform, binary_type) = match (
+                    self.selected_plugin(),
+                    self.selected_platform(),
+                    self.selected_binary_type(),
+                ) {
+                    (Some(plugin), Some(platform), Some(binary_type)) => {
+                        (plugin.to_owned(), platform, binary_type)
+                    }
+                    _ => return Task::none(),
+                };
+
                 let shellcode_src = self.shellcode_src().to_owned();
                 let pass = self.pass().to_vec();
-                let platform = self.selected_platform().unwrap();
-                let binary_type = self.selected_binary_type().unwrap();
-
-                if let Err(e) = plugin.validate_for_generation(platform, binary_type) {
-                    self.set_loading(false, String::new());
-                    let _ = message_dialog(e.to_string(), MessageLevel::Error);
-                    return Task::none();
-                }
-
-                if let Err(e) = plugin.validate_shellcode_source(&shellcode_src) {
-                    self.set_loading(false, String::new());
-                    let _ = message_dialog(e.to_string(), MessageLevel::Error);
-                    return Task::none();
-                }
+                let runtime_config_map = match self.runtime_plugin_config_map() {
+                    Ok(cfg) => cfg,
+                    Err(e) => {
+                        let _ = message_dialog(
+                            format!("Invalid runtime module config: {}", e),
+                            MessageLevel::Error,
+                        );
+                        return Task::none();
+                    }
+                };
+                let runtime_config = if runtime_config_map.is_empty() {
+                    None
+                } else {
+                    Some(runtime_config_map)
+                };
 
                 // get that binary
-                let mut bin = plugin.bins().get_that_binary(
-                    platform,
-                    binary_type,
-                );
+                let Some(bin) = plugin.bins().get_that_binary(platform, binary_type) else {
+                    let _ = message_dialog(
+                        "Failed to retrieve binary from plugin.".into(),
+                        MessageLevel::Error,
+                    );
+                    return Task::none();
+                };
 
+                self.set_loading(true, "Generating implant...".to_string());
                 let generate = async move {
                     plugin.validate_for_generation(platform, binary_type)?;
                     plugin.validate_shellcode_source(&shellcode_src)?;
-                    plugin.replace_binary(&mut bin, shellcode_src, pass)?;
+                    let bin =
+                        plugin.replace_binary(bin, shellcode_src, pass, runtime_config.as_ref())?;
 
                     // Determine the appropriate file extension based on platform and binary type
-                    let (filename, file_description) = match (platform, binary_type) {
-                        (Platform::Windows, BinaryType::Executable) => ("binary.exe", "Windows executable"),
-                        (Platform::Windows, BinaryType::DynamicLibrary) => ("binary.dll", "Windows library"),
+                    let (_filename, file_description) = match (platform, binary_type) {
+                        (Platform::Windows, BinaryType::Executable) => {
+                            ("binary.exe", "Windows executable")
+                        }
+                        (Platform::Windows, BinaryType::DynamicLibrary) => {
+                            ("binary.dll", "Windows library")
+                        }
                         (Platform::Linux, BinaryType::Executable) => ("binary", "Linux executable"),
-                        (Platform::Linux, BinaryType::DynamicLibrary) => ("binary.so", "Linux library"),
-                        (Platform::Darwin, BinaryType::Executable) => ("binary", "macOS executable"),
-                        (Platform::Darwin, BinaryType::DynamicLibrary) => ("binary.dylib", "macOS library"),
+                        (Platform::Linux, BinaryType::DynamicLibrary) => {
+                            ("binary.so", "Linux library")
+                        }
+                        (Platform::Darwin, BinaryType::Executable) => {
+                            ("binary", "macOS executable")
+                        }
+                        (Platform::Darwin, BinaryType::DynamicLibrary) => {
+                            ("binary.dylib", "macOS library")
+                        }
                     };
 
                     // write generated binary
-                    let now = Local::now();
-                    let timestamp = now.format("%Y%m%d_%H%M%S").to_string();
-                    let plugin_name_sanitized = plugin.info().plugin_name().to_lowercase().replace(' ', "_");
-                    let platform_str = platform.to_string().to_lowercase();
-                    let bin_type_str = match binary_type {
-                        BinaryType::Executable => "exe",
-                        BinaryType::DynamicLibrary => "dll"
+                    // Determine appropriate filename based on platform type
+                    let bin_descriptor = match (platform, binary_type) {
+                        (Platform::Windows, BinaryType::Executable) => "win_exe",
+                        (Platform::Windows, BinaryType::DynamicLibrary) => "win_dll",
+                        (Platform::Linux, BinaryType::Executable) => "linux_bin",
+                        (Platform::Linux, BinaryType::DynamicLibrary) => "linux_so",
+                        (Platform::Darwin, BinaryType::Executable) => "macos_bin",
+                        (Platform::Darwin, BinaryType::DynamicLibrary) => "macos_dylib",
                     };
-                                        let default_name = format!("{}_{}_{}_{}.{}", plugin_name_sanitized, platform_str, bin_type_str, timestamp, match (platform, binary_type) {
+
+                    let extension = match (platform, binary_type) {
                         (Platform::Windows, BinaryType::Executable) => "exe",
                         (Platform::Windows, BinaryType::DynamicLibrary) => "dll",
                         (Platform::Linux, BinaryType::Executable) => "elf",
                         (Platform::Linux, BinaryType::DynamicLibrary) => "so",
-                        (Platform::Darwin, BinaryType::Executable) => "macho",
+                        (Platform::Darwin, BinaryType::Executable) => "bin",
                         (Platform::Darwin, BinaryType::DynamicLibrary) => "dylib",
-                    });
+                    };
+
+                    let now = Local::now();
+                    let timestamp = now.format("%Y%m%d_%H%M%S").to_string();
+                    let plugin_name_sanitized =
+                        plugin.info().plugin_name().to_lowercase().replace(' ', "_");
+
+                    let default_name = format!(
+                        "{}_{}_{}_{}.{}",
+                        plugin_name_sanitized,
+                        bin_descriptor,
+                        timestamp,
+                        utils::random_id_lowercase(4),
+                        extension
+                    );
 
                     let file = AsyncFileDialog::new()
-                        .set_directory(desktop_dir().unwrap_or(".".into()))
+                        .set_directory(desktop_dir().unwrap_or_else(|| ".".into()))
                         .set_file_name(&default_name)
                         .set_can_create_directories(true)
-                        .set_title(&format!("Save generated {}", file_description))
+                        .set_title(format!("Save generated {file_description}"))
                         .save_file()
                         .await
                         .ok_or(anyhow!("Canceled the saving of the generated binary."))?;
 
-                    fs::write(file.path(), bin).map_err(anyhow::Error::from)?;
+                    utils::atomic_write(file.path(), &bin).map_err(anyhow::Error::from)?;
 
                     Ok(())
                 }
@@ -443,15 +689,18 @@ impl Pumpbin {
                 self.set_loading(false, String::new());
                 match x {
                     Ok(_) => {
-                        message_dialog("Generate done.".into(), MessageLevel::Info);
-                    },
+                        let _ = message_dialog("Generate done.".into(), MessageLevel::Info);
+                    }
                     Err(e) => {
-                        message_dialog(e, MessageLevel::Error);
-                    },
+                        let _ = message_dialog(e, MessageLevel::Error);
+                    }
                 };
             }
             Message::BinaryTypeChanged(x) => self.selected_binary_type = Some(x),
             Message::AddPluginClicked => {
+                if self.is_loading {
+                    return Task::none();
+                }
                 self.set_loading(true, "Adding plugins...".to_string());
                 let mut plugins = self.plugins().clone();
 
@@ -482,7 +731,7 @@ impl Pumpbin {
                         }
                     }
 
-                    plugins.uptade_plugins()?;
+                    plugins.update_plugins()?;
                     anyhow::Ok((success, failed, plugins))
                 }
                 .map_err(|e| e.to_string());
@@ -499,35 +748,31 @@ impl Pumpbin {
 
                             // bypass check
                             self.selected_plugin = None;
-                            self.update(Message::PluginItemClicked(plugin_name));
+                            let _ = self.update(Message::PluginItemClicked(plugin_name));
                         }
                         self.plugins = plugins;
-                        message_dialog(
-                            format!("Added {} plugins, {} failed.", success, failed),
+                        let _ = message_dialog(
+                            format!("Added {success} plugins, {failed} failed."),
                             MessageLevel::Info,
                         );
                     }
                     Err(e) => {
-                        message_dialog(e, MessageLevel::Error);
+                        let _ = message_dialog(e, MessageLevel::Error);
                     }
                 }
             }
             Message::ConfirmRemovePlugin(x) => {
                 self.pending_remove_plugin = Some(x.clone());
-                let confirm_message = format!("Are you sure you want to remove the plugin '{}'?\n\nThis action cannot be undone.", x);
-                let confirm_task = confirm_dialog(confirm_message, "Confirm Plugin Removal".to_string());
-                
+                let confirm_message = format!("Are you sure you want to remove the plugin '{x}'?\n\nThis action cannot be undone.");
+                let confirm_task =
+                    confirm_dialog(confirm_message, "Confirm Plugin Removal".to_string());
+
                 return confirm_task.map(Message::ConfirmRemovePluginResult);
             }
             Message::ConfirmRemovePluginResult(result) => {
                 if let Some(plugin_name) = self.pending_remove_plugin.take() {
-                    match result {
-                        MessageDialogResult::Yes => {
-                            return self.update(Message::RemovePlugin(plugin_name));
-                        }
-                        _ => {
-                            // User cancelled, do nothing
-                        }
+                    if result == MessageDialogResult::Yes {
+                        return self.update(Message::RemovePlugin(plugin_name));
                     }
                 }
             }
@@ -535,13 +780,13 @@ impl Pumpbin {
                 if x.is_empty() {
                     return Task::none(); // Handle no-op case
                 }
-                
+
                 self.set_loading(true, "Removing plugin...".to_string());
                 let mut plugins = self.plugins().clone();
 
                 let remove_plugin = async move {
                     plugins.remove(&x);
-                    plugins.uptade_plugins()?;
+                    plugins.update_plugins()?;
 
                     anyhow::Ok(plugins)
                 }
@@ -556,7 +801,7 @@ impl Pumpbin {
                         self.plugins = plugins;
 
                         if let Some(name) = self.plugins().get_sorted_names().first() {
-                            _ = self.update(Message::PluginItemClicked(name.to_owned()));
+                            let _ = self.update(Message::PluginItemClicked(name.to_owned()));
                         } else {
                             // Reset all state when no plugins remain
                             self.supported_binary_types = Default::default();
@@ -567,20 +812,29 @@ impl Pumpbin {
                             self.shellcode_save_type = ShellcodeSaveType::Local;
                             self.shellcode_src = String::new();
                             self.plugin_desc = text_editor::Content::new();
+                            self.runtime_plugin_config = Vec::new();
+                            self.runtime_plugin_schema = Vec::new();
                             self.pass = Vec::new();
                         }
-                        
-                        message_dialog("Plugin removed successfully.".to_string(), MessageLevel::Info);
+
+                        let _ = message_dialog(
+                            "Plugin removed successfully.".to_string(),
+                            MessageLevel::Info,
+                        );
                     }
                     Err(e) => {
-                        message_dialog(format!("Failed to remove plugin: {}", e), MessageLevel::Error);
+                        let _ = message_dialog(
+                            format!("Failed to remove plugin: {e}"),
+                            MessageLevel::Error,
+                        );
                     }
                 };
             }
             Message::PluginItemClicked(x) => {
-                // unwrap is safe.
-                // UI implemented strict restrictions.
-                let plugin = self.plugins().get(&x).unwrap();
+                let plugin = match self.plugins.get(&x) {
+                    Ok(plugin) => plugin,
+                    Err(_) => return Task::none(),
+                };
 
                 if let Some(selected_plugin) = self.selected_plugin() {
                     if plugin.info().plugin_name() == selected_plugin.info().plugin_name() {
@@ -589,6 +843,15 @@ impl Pumpbin {
                 }
 
                 self.selected_plugin = Some(plugin.clone());
+                self.runtime_plugin_schema = Self::plugin_schema_fields(&plugin);
+                self.runtime_plugin_config = Self::sanitize_runtime_config(
+                    &Self::merge_runtime_config(
+                        plugin.plugins().plugin_config(),
+                        &self.runtime_plugin_schema,
+                        self.apply_runtime_schema_defaults_on_open,
+                    ),
+                    &self.runtime_plugin_schema,
+                );
                 self.plugin_desc = text_editor::Content::with_text(plugin.info().desc());
 
                 if plugin.replace().size_holder().is_some() {
@@ -599,24 +862,69 @@ impl Pumpbin {
 
                 self.update_supported_platforms(&plugin);
             }
+            Message::RuntimeConfigKeyChanged(idx, x) => {
+                if let Some((key, _)) = self.runtime_plugin_config.get_mut(idx) {
+                    *key = x;
+                }
+            }
+            Message::RuntimeConfigValueChanged(idx, x) => {
+                if let Some((_, value)) = self.runtime_plugin_config.get_mut(idx) {
+                    *value = x;
+                }
+            }
+            Message::RuntimeConfigBrowseClicked(idx) => {
+                let pick_file = async move {
+                    let selected = AsyncFileDialog::new()
+                        .set_directory(home_dir().unwrap_or(".".into()))
+                        .set_title("Select config file")
+                        .pick_file()
+                        .await
+                        .map(|f| f.path().to_path_buf());
+
+                    (idx, selected)
+                };
+
+                return Task::perform(pick_file, |(idx, path)| {
+                    Message::RuntimeConfigBrowseDone(idx, path)
+                });
+            }
+            Message::RuntimeConfigBrowseDone(idx, path) => {
+                if let (Some((_, value)), Some(path)) =
+                    (self.runtime_plugin_config.get_mut(idx), path)
+                {
+                    *value = path.to_string_lossy().to_string();
+                }
+            }
+            Message::ApplyRuntimeSchemaDefaultsOnOpenChanged(value) => {
+                self.apply_runtime_schema_defaults_on_open = value;
+            }
+            Message::AddRuntimeConfigRow => {
+                self.runtime_plugin_config
+                    .push((String::new(), String::new()));
+            }
+            Message::RemoveRuntimeConfigRow(idx) => {
+                if idx < self.runtime_plugin_config.len() {
+                    self.runtime_plugin_config.remove(idx);
+                }
+            }
             Message::EditorAction(x) => match x {
                 text_editor::Action::Edit(_) => (),
                 _ => self.plugin_desc.perform(x),
             },
             Message::B1nClicked => {
                 if open::that(env!("CARGO_PKG_HOMEPAGE")).is_err() {
-                    message_dialog("Open home failed.".into(), MessageLevel::Error);
+                    let _ = message_dialog("Open home failed.".into(), MessageLevel::Error);
                 }
             }
             Message::GithubClicked => {
                 if open::that(env!("CARGO_PKG_REPOSITORY")).is_err() {
-                    message_dialog("Open repo failed.".into(), MessageLevel::Error);
+                    let _ = message_dialog("Open repo failed.".into(), MessageLevel::Error);
                 }
             }
             Message::ThemeChanged(x) => self.selected_theme = x,
             Message::ClearShellcodeSource => {
                 self.clear_source();
-                message_dialog("Shellcode source cleared.".to_string(), MessageLevel::Info);
+                let _ = message_dialog("Shellcode source cleared.".to_string(), MessageLevel::Info);
             }
             Message::OpenRecentFile(path) => {
                 self.shellcode_src = path.to_string_lossy().to_string();
@@ -629,15 +937,26 @@ impl Pumpbin {
                     env!("CARGO_PKG_HOMEPAGE"),
                     env!("CARGO_PKG_REPOSITORY")
                 );
-                message_dialog(about_text, MessageLevel::Info);
+                let _ = message_dialog(about_text, MessageLevel::Info);
             }
             Message::KeyboardShortcut(shortcut) => {
+                // Drop every shortcut while a long-running operation is in
+                // flight. Pre-1.1.4 holding Ctrl+Shift+A spawned one file
+                // dialog per key-repeat tick — each set is_loading=true and
+                // opened its own AsyncFileDialog, leaving N dialogs the
+                // user had to dismiss before the GUI was usable again.
+                if self.is_loading {
+                    return Task::none();
+                }
                 match shortcut {
                     KeyboardShortcut::AddPlugin => {
                         return self.update(Message::AddPluginClicked);
                     }
                     KeyboardShortcut::Generate => {
-                        if self.selected_binary_type().is_some() && !self.shellcode_src().is_empty() {
+                        if self.selected_binary_type().is_some()
+                            && !self.shellcode_src().is_empty()
+                            && self.runtime_config_errors().is_empty()
+                        {
                             return self.update(Message::GenerateClicked);
                         }
                     }
@@ -653,26 +972,26 @@ impl Pumpbin {
                 // Handle drag & drop files
                 let mut shellcode_files = Vec::new();
                 let mut plugin_files = Vec::new();
-                
+
                 // Categorize dropped files
                 for path in paths {
                     let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
-                    
+
                     match extension.to_lowercase().as_str() {
                         "b1n" => plugin_files.push(path),
                         _ => shellcode_files.push(path),
                     }
                 }
-                
+
                 // Handle plugin files first
                 if !plugin_files.is_empty() {
                     self.set_loading(true, "Adding dropped plugins...".to_string());
                     let mut plugins = self.plugins().clone();
-                    
+
                     let add_dropped_plugins = async move {
                         let mut success = 0;
                         let mut failed = 0;
-                        
+
                         for path in plugin_files {
                             match fs::read(&path) {
                                 Ok(buf) => {
@@ -689,22 +1008,25 @@ impl Pumpbin {
                                 }
                             }
                         }
-                        
-                        plugins.uptade_plugins()?;
+
+                        plugins.update_plugins()?;
                         anyhow::Ok((success, failed, plugins))
                     }
                     .map_err(|e| e.to_string());
-                    
+
                     return Task::perform(add_dropped_plugins, Message::AddPluginDone);
                 }
-                
+
                 // Handle shellcode files
                 if let Some(path) = shellcode_files.first() {
                     if self.shellcode_save_type() == ShellcodeSaveType::Local {
                         self.shellcode_src = path.to_string_lossy().to_string();
                         self.add_recent_file(path.clone());
-                        message_dialog(
-                            format!("Shellcode file loaded: {}", path.file_name().unwrap_or_default().to_string_lossy()),
+                        let _ = message_dialog(
+                            format!(
+                                "Shellcode file loaded: {}",
+                                path.file_name().unwrap_or_default().to_string_lossy()
+                            ),
                             MessageLevel::Info,
                         );
                     } else {
@@ -721,9 +1043,9 @@ impl Pumpbin {
                     self.plugins
                         .insert(result.plugin_name.clone(), result.plugin_bytes.clone());
 
-                    if let Err(e) = self.plugins.uptade_plugins() {
+                    if let Err(e) = self.plugins.update_plugins() {
                         let _ = message_dialog(
-                            format!("Generated plugin was saved, but auto-add failed: {}", e),
+                            format!("Generated plugin was saved, but auto-add failed: {e}"),
                             MessageLevel::Error,
                         );
                     } else {
@@ -761,17 +1083,14 @@ impl Pumpbin {
                 // Ctrl+K: Clear source
                 else if modifiers.command() && c.as_ref() == "k" {
                     Some(Message::KeyboardShortcut(KeyboardShortcut::ClearSource))
-                }
-                else {
+                } else {
                     None
                 }
             }
             Event::Keyboard(keyboard::Event::KeyPressed {
                 key: keyboard::Key::Named(keyboard::key::Named::F1),
                 ..
-            }) => {
-                Some(Message::ShowAbout)
-            }
+            }) => Some(Message::ShowAbout),
             Event::Window(iced::window::Event::FileDropped(path)) => {
                 Some(Message::FilesDropped(vec![path]))
             }
@@ -786,16 +1105,13 @@ impl Pumpbin {
         Subscription::batch(vec![main_subscription, maker_subscription])
     }
 
-    pub fn generator_view(&self) -> Column<Message> {
-        let padding = 20;
-        let spacing = 20;
-
-        let shellcode_src = column![
+    fn render_shellcode_section(&self) -> Column<'_, Message> {
+        column![
             row![
                 text_input(
                     match self.shellcode_save_type() {
-                        ShellcodeSaveType::Local => "Shellcode path:",
-                        ShellcodeSaveType::Remote => "Shellcode url:",
+                        ShellcodeSaveType::Local => "Shellcode path",
+                        ShellcodeSaveType::Remote => "Shellcode URL",
                     },
                     &self.shellcode_src
                 )
@@ -808,9 +1124,9 @@ impl Pumpbin {
                     side: text_input::Side::Left,
                 }),
                 button(match self.shellcode_save_type() {
-                    ShellcodeSaveType::Local => row![Svg::new(Handle::from_memory(include_bytes!(
-                        "../assets/svg/three-dots.svg"
-                    )))
+                    ShellcodeSaveType::Local => row![Svg::new(Handle::from_memory(
+                        include_bytes!("../assets/svg/three-dots.svg")
+                    ))
                     .width(20)],
                     ShellcodeSaveType::Remote => row![text("󰒃 Encrypt")],
                 })
@@ -822,26 +1138,48 @@ impl Pumpbin {
             .spacing(3)
             .align_y(Vertical::Center),
             // Recent files section (only show if we have recent files and it's local mode)
-            if !self.recent_files().is_empty() && self.shellcode_save_type() == ShellcodeSaveType::Local {
+            if !self.recent_files().is_empty()
+                && self.shellcode_save_type() == ShellcodeSaveType::Local
+            {
                 container(
                     column(
-                        self.recent_files().iter().take(3).map(|path| {
-                            button(
-                                row![
-                                    text("󰈙"),
-                                    text(path.file_name().unwrap_or_default().to_string_lossy())
-                                        .size(12)
-                                ]
-                                .spacing(5)
-                                .align_y(Vertical::Center)
-                            )
-                            .on_press(Message::OpenRecentFile(path.clone()))
-                            .style(button::text)
-                            .width(Length::Fill)
-                            .into()
-                        }).collect::<Vec<_>>()
+                        self.recent_files()
+                            .iter()
+                            .take(10)
+                            .map(|path| {
+                                let basename = path
+                                    .file_name()
+                                    .unwrap_or_default()
+                                    .to_string_lossy()
+                                    .to_string();
+                                let parent = path
+                                    .parent()
+                                    .and_then(|p| p.file_name())
+                                    .map(|p| p.to_string_lossy().to_string())
+                                    .unwrap_or_default();
+                                let label = if parent.is_empty() {
+                                    basename
+                                } else {
+                                    format!("{} ({})", basename, parent)
+                                };
+                                let display = if label.len() > 50 {
+                                    format!("{}...", &label[..47])
+                                } else {
+                                    label
+                                };
+                                button(
+                                    row![text("󰈙"), text(display).size(12)]
+                                        .spacing(5)
+                                        .align_y(Vertical::Center),
+                                )
+                                .on_press(Message::OpenRecentFile(path.clone()))
+                                .style(button::text)
+                                .width(Length::Fill)
+                                .into()
+                            })
+                            .collect::<Vec<_>>(),
                     )
-                    .spacing(2)
+                    .spacing(2),
                 )
                 .padding(5)
                 .style(|theme: &Theme| {
@@ -858,143 +1196,148 @@ impl Pumpbin {
                 container(text(""))
             }
         ]
-        .spacing(5);
+        .spacing(5)
+    }
 
-        let pick_list_handle = || pick_list::Handle::Dynamic {
-            closed: pick_list::Icon {
-                font: JETBRAINS_MONO_FONT,
-                code_point: '',
-                size: None,
-                line_height: text::LineHeight::Relative(1.0),
-                shaping: text::Shaping::Basic,
-            },
-            open: pick_list::Icon {
-                font: JETBRAINS_MONO_FONT,
-                code_point: '',
-                size: None,
-                line_height: text::LineHeight::Relative(1.0),
-                shaping: text::Shaping::Basic,
-            },
-        };
+    fn render_runtime_config_panel(&self) -> Column<'_, Message> {
+        let runtime_config_rows = column(
+            self.runtime_plugin_config
+                .iter()
+                .enumerate()
+                .map(|(idx, (key, value))| {
+                    let field = self.schema_field(key);
+                    let mut config_row = row![].spacing(8).align_y(Vertical::Center);
 
-        let platform = pick_list(
-            self.supported_platforms(),
-            self.selected_platform(),
-            Message::PlatformChanged,
-        )
-        .placeholder("Platform")
-        .width(100)
-        .handle(pick_list_handle());
+                    if let Some(schema_field) = field {
+                        let tag = if schema_field.required {
+                            "required"
+                        } else {
+                            "optional"
+                        };
+                        let mut label_col = column![text(format!("{} ({})", key, tag))];
+                        if !schema_field.description.is_empty() {
+                            label_col =
+                                label_col.push(text(&schema_field.description).size(11).style(
+                                    |theme: &Theme| {
+                                        let mut c = theme.palette().text;
+                                        c.a = 0.55;
+                                        text::Style { color: Some(c) }
+                                    },
+                                ));
+                        }
+                        config_row = config_row.push(label_col.width(Length::FillPortion(2)));
+                    } else {
+                        config_row = config_row.push(
+                            text_input("key", key)
+                                .on_input(move |x| Message::RuntimeConfigKeyChanged(idx, x))
+                                .width(Length::FillPortion(2)),
+                        );
+                    }
 
-        let binary_type = pick_list(
-            self.supported_binary_types(),
-            self.selected_binary_type(),
-            Message::BinaryTypeChanged,
-        )
-        .placeholder("BinType")
-        .width(100)
-        .handle(pick_list_handle());
-
-        let generate = button(
-            row![
-                Svg::new(Handle::from_memory(include_bytes!(
-                    "../assets/svg/rust-svgrepo-com.svg"
-                )))
-                .width(20),
-                text!("Generate")
-            ]
-            .spacing(3)
-            .align_y(Vertical::Center),
-        )
-        .on_press_maybe(
-            if self.selected_binary_type().is_some() && self.shellcode_src().is_empty().not() {
-                Some(Message::GenerateClicked)
-            } else {
-                None
-            },
-        );
-
-        let setting_panel = row![shellcode_src, platform, binary_type, generate]
-            .spacing(spacing)
-            .align_y(Vertical::Center);
-
-        let mut plugin_items = column![]
-            .align_x(Horizontal::Center)
-            .spacing(10)
-            .width(Length::Fill)
-            .padding(3);
-
-        if self.plugins().is_empty() {
-            plugin_items = plugin_items.push(
-                row![
-                    Svg::new(Handle::from_memory(include_bytes!(
-                        "../assets/svg/magic-star-svgrepo-com.svg"
-                    )))
-                    .width(30)
-                    .height(30)
-                    .style(style::svg::svg_primary_base),
-                    text("Did you see that  sign? 󰁂")
-                        .color(self.theme().extended_palette().primary.base.color)
-                ]
-                .spacing(spacing)
-                .align_y(Vertical::Center),
-            );
-        }
-
-        let plugin_names = self.plugins().get_sorted_names();
-
-        // dynamic push plugin item
-        for plugin_name in plugin_names {
-            let plugin = match self.plugins().get(&plugin_name) {
-                Ok(x) => x,
-                Err(_) => continue,
-            };
-
-            let item = button(
-                column![
-                    text!(" {}", plugin_name).width(Length::Fill),
-                    row![
-                        column![text!(" {}", plugin.info().author())]
-                            .width(Length::Fill)
-                            .align_x(Horizontal::Left),
-                        column![row!(
-                            text(" ").color(self.theme().extended_palette().primary.base.color),
-                            if plugin.bins().windows().is_platform_supported() {
-                                text(" ").color(self.theme().extended_palette().success.base.color)
+                    match field.map(|f| f.field_type.as_str()) {
+                        Some("choice") => {
+                            let options = field.map(|f| f.options.clone()).unwrap_or_default();
+                            let selected = if options.contains(value) {
+                                Some(value.clone())
                             } else {
-                                text(" ").color(self.theme().extended_palette().danger.base.color)
-                            },
-                            text(" ").color(self.theme().extended_palette().primary.base.color),
-                            if plugin.bins().linux().is_platform_supported() {
-                                text(" ").color(self.theme().extended_palette().success.base.color)
+                                None
+                            };
+
+                            config_row = config_row.push(
+                                pick_list(options, selected, move |choice| {
+                                    Message::RuntimeConfigValueChanged(idx, choice)
+                                })
+                                .width(Length::FillPortion(3)),
+                            );
+                        }
+                        Some("boolean") => {
+                            let options = vec!["true".to_string(), "false".to_string()];
+                            let normalized = value.to_ascii_lowercase();
+                            let selected = if normalized == "true" || normalized == "false" {
+                                Some(normalized)
                             } else {
-                                text(" ").color(self.theme().extended_palette().danger.base.color)
-                            },
-                            text(" ").color(self.theme().extended_palette().primary.base.color),
-                            if plugin.bins().darwin().is_platform_supported() {
-                                text(" ").color(self.theme().extended_palette().success.base.color)
-                            } else {
-                                text(" ").color(self.theme().extended_palette().danger.base.color)
-                            }
-                        )
-                        .align_y(Vertical::Center)]
-                        .width(Length::Shrink)
-                        .align_x(Horizontal::Right)
-                    ]
-                    .align_y(Vertical::Center),
-                ]
-                .align_x(Horizontal::Center),
+                                None
+                            };
+
+                            config_row = config_row.push(
+                                pick_list(options, selected, move |choice| {
+                                    Message::RuntimeConfigValueChanged(idx, choice)
+                                })
+                                .width(Length::FillPortion(3)),
+                            );
+                        }
+                        _ => {
+                            config_row = config_row.push(
+                                text_input("value", value)
+                                    .on_input(move |x| Message::RuntimeConfigValueChanged(idx, x))
+                                    .width(Length::FillPortion(3)),
+                            );
+                        }
+                    }
+
+                    if field
+                        .map(|f| {
+                            f.field_type.eq_ignore_ascii_case("file")
+                                || f.field_type.eq_ignore_ascii_case("file_base64")
+                                || f.field_type.eq_ignore_ascii_case("file_path")
+                        })
+                        .unwrap_or_else(|| Self::config_key_is_file_like(key))
+                    {
+                        config_row = config_row.push(
+                            button("Browse").on_press(Message::RuntimeConfigBrowseClicked(idx)),
+                        );
+                    }
+
+                    config_row =
+                        config_row.push(button("X").on_press(Message::RemoveRuntimeConfigRow(idx)));
+
+                    let mut entry = column![config_row].spacing(2);
+                    if let Some(err) = Self::runtime_config_value_error(field, key, value) {
+                        entry = entry.push(text(err).size(11).style(|theme: &Theme| text::Style {
+                            color: Some(theme.extended_palette().danger.base.color),
+                        }));
+                    }
+
+                    entry.into()
+                })
+                .collect::<Vec<_>>(),
+        )
+        .spacing(6);
+
+        column![
+            text("Module Config (required/optional)"),
+            checkbox(
+                "Use defaults on open",
+                self.apply_runtime_schema_defaults_on_open,
             )
-            .width(Length::Fill)
-            .style(match self.selected_plugin() {
-                Some(x) if x.info().plugin_name() == plugin_name => style::button::selected,
-                _ => style::button::unselected,
-            })
-            .on_press(Message::PluginItemClicked(plugin_name));
+            .on_toggle(Message::ApplyRuntimeSchemaDefaultsOnOpenChanged),
+            runtime_config_rows,
+            if !self.runtime_config_errors().is_empty() {
+                text(format!(
+                    "{} invalid config entr{}",
+                    self.runtime_config_errors().len(),
+                    if self.runtime_config_errors().len() == 1 {
+                        "y"
+                    } else {
+                        "ies"
+                    }
+                ))
+                .size(11)
+                .style(|theme: &Theme| text::Style {
+                    color: Some(theme.extended_palette().danger.base.color),
+                })
+            } else {
+                text("").size(1)
+            },
+            button("Add Row")
+                .on_press(Message::AddRuntimeConfigRow)
+                .style(button::secondary)
+        ]
+        .spacing(8)
+        .width(Length::Fill)
+    }
 
-            plugin_items = plugin_items.push(item);
-        }
-
+    fn render_plugin_info_panel(&self, spacing: u16) -> Column<'_, Message> {
         let pumpkin = Svg::new(Handle::from_memory(include_bytes!(
             "../assets/svg/pumpkin-svgrepo-com.svg"
         )))
@@ -1026,7 +1369,7 @@ impl Pumpbin {
                 .size(16)
         };
 
-        let plugin_info_panel = column![match self.selected_plugin() {
+        column![match self.selected_plugin() {
             Some(plugin) => {
                 row![
                     column![
@@ -1136,7 +1479,195 @@ impl Pumpbin {
             }
             None => row![pumpkin],
         }]
-        .align_x(Horizontal::Left);
+        .align_x(Horizontal::Left)
+    }
+
+    pub fn generator_view(&self) -> Column<'_, Message> {
+        let padding = 20;
+        let spacing = 20;
+
+        let shellcode_src = self.render_shellcode_section();
+
+        let pick_list_handle = || pick_list::Handle::Dynamic {
+            closed: pick_list::Icon {
+                font: JETBRAINS_MONO_FONT,
+                code_point: '',
+                size: None,
+                line_height: text::LineHeight::Relative(1.0),
+                shaping: text::Shaping::Basic,
+            },
+            open: pick_list::Icon {
+                font: JETBRAINS_MONO_FONT,
+                code_point: '',
+                size: None,
+                line_height: text::LineHeight::Relative(1.0),
+                shaping: text::Shaping::Basic,
+            },
+        };
+
+        let platform = pick_list(
+            self.supported_platforms(),
+            self.selected_platform(),
+            Message::PlatformChanged,
+        )
+        .placeholder("Platform")
+        .width(100)
+        .handle(pick_list_handle());
+
+        let binary_type = pick_list(
+            self.supported_binary_types(),
+            self.selected_binary_type(),
+            Message::BinaryTypeChanged,
+        )
+        .placeholder("BinType")
+        .width(100)
+        .handle(pick_list_handle());
+
+        let generate = button(
+            row![
+                Svg::new(Handle::from_memory(include_bytes!(
+                    "../assets/svg/rust-svgrepo-com.svg"
+                )))
+                .width(20),
+                text!("Generate")
+            ]
+            .spacing(3)
+            .align_y(Vertical::Center),
+        )
+        .on_press_maybe(
+            if self.selected_binary_type().is_some()
+                && !self.shellcode_src().is_empty()
+                && self.runtime_config_errors().is_empty()
+            {
+                Some(Message::GenerateClicked)
+            } else {
+                None
+            },
+        );
+
+        let runtime_config_panel = self.render_runtime_config_panel();
+
+        // Compute inline hints for what's still needed before generating
+        let mut missing: Vec<&str> = Vec::new();
+        if self.selected_plugin().is_none() {
+            missing.push("select a plugin");
+        }
+        if self.selected_platform().is_none() {
+            missing.push("select a platform");
+        }
+        if self.selected_binary_type().is_none() {
+            missing.push("select a binary type");
+        }
+        if self.shellcode_src().is_empty() {
+            missing.push("provide shellcode source");
+        }
+        if !self.runtime_config_errors().is_empty() {
+            missing.push("fix config errors");
+        }
+
+        let hint_row: Element<'_, Message> = if missing.is_empty() {
+            text("Ready to generate")
+                .size(12)
+                .style(|theme: &Theme| text::Style {
+                    color: Some(theme.extended_palette().success.base.color),
+                })
+                .into()
+        } else {
+            text(format!("Needs: {}", missing.join(", ")))
+                .size(12)
+                .style(|theme: &Theme| text::Style {
+                    color: Some(theme.extended_palette().danger.base.color),
+                })
+                .into()
+        };
+
+        let setting_panel = column![
+            row![shellcode_src, platform, binary_type, generate]
+                .spacing(spacing)
+                .align_y(Vertical::Center),
+            hint_row,
+            runtime_config_panel
+        ]
+        .spacing(10);
+
+        let mut plugin_items = column![]
+            .align_x(Horizontal::Center)
+            .spacing(10)
+            .width(Length::Fill)
+            .padding(3);
+
+        if self.plugins().is_empty() {
+            plugin_items = plugin_items.push(
+                row![
+                    Svg::new(Handle::from_memory(include_bytes!(
+                        "../assets/svg/magic-star-svgrepo-com.svg"
+                    )))
+                    .width(30)
+                    .height(30)
+                    .style(style::svg::svg_primary_base),
+                    text("Did you see that  sign? 󰁂")
+                        .color(self.theme().extended_palette().primary.base.color)
+                ]
+                .spacing(spacing)
+                .align_y(Vertical::Center),
+            );
+        }
+
+        let plugin_names = self.plugins().get_sorted_names();
+
+        // dynamic push plugin item
+        for plugin_name in plugin_names {
+            let plugin = match self.plugins().get(&plugin_name) {
+                Ok(x) => x,
+                Err(_) => continue,
+            };
+
+            let item = button(
+                column![
+                    text!(" {}", plugin_name).width(Length::Fill),
+                    row![
+                        column![text!(" {}", plugin.info().author())]
+                            .width(Length::Fill)
+                            .align_x(Horizontal::Left),
+                        column![row!(
+                            text(" ").color(self.theme().extended_palette().primary.base.color),
+                            if plugin.bins().windows().is_platform_supported() {
+                                text(" ").color(self.theme().extended_palette().success.base.color)
+                            } else {
+                                text(" ").color(self.theme().extended_palette().danger.base.color)
+                            },
+                            text(" ").color(self.theme().extended_palette().primary.base.color),
+                            if plugin.bins().linux().is_platform_supported() {
+                                text(" ").color(self.theme().extended_palette().success.base.color)
+                            } else {
+                                text(" ").color(self.theme().extended_palette().danger.base.color)
+                            },
+                            text(" ").color(self.theme().extended_palette().primary.base.color),
+                            if plugin.bins().darwin().is_platform_supported() {
+                                text(" ").color(self.theme().extended_palette().success.base.color)
+                            } else {
+                                text(" ").color(self.theme().extended_palette().danger.base.color)
+                            }
+                        )
+                        .align_y(Vertical::Center)]
+                        .width(Length::Shrink)
+                        .align_x(Horizontal::Right)
+                    ]
+                    .align_y(Vertical::Center),
+                ]
+                .align_x(Horizontal::Center),
+            )
+            .width(Length::Fill)
+            .style(match self.selected_plugin() {
+                Some(x) if x.info().plugin_name() == plugin_name => style::button::selected,
+                _ => style::button::unselected,
+            })
+            .on_press(Message::PluginItemClicked(plugin_name));
+
+            plugin_items = plugin_items.push(item);
+        }
+
+        let plugin_info_panel = self.render_plugin_info_panel(spacing);
 
         let plugin_list_view = container(
             column![
@@ -1165,10 +1696,9 @@ impl Pumpbin {
                             .height(Length::Fill)
                             .style(style::svg::svg_primary_base)
                         )
-                        .on_press_maybe(
-                            self.selected_plugin()
-                                .map(|x| Message::ConfirmRemovePlugin(x.info().plugin_name().to_string()))
-                        )
+                        .on_press_maybe(self.selected_plugin().map(|x| {
+                            Message::ConfirmRemovePlugin(x.info().plugin_name().to_string())
+                        }))
                         .style(|theme: &Theme, status| {
                             let palette = theme.extended_palette();
                             let mut style = button::text(theme, status);
@@ -1245,14 +1775,9 @@ impl Pumpbin {
         let footer = column![
             horizontal_rule(0),
             row![
-                column![
-                    version,
-                    text("F1: About • Ctrl+O: Open • Ctrl+N: New (Maker) • Ctrl+G: Generate • Ctrl+Shift+A: Add Plugin • Ctrl+K: Clear • Drag & Drop: Files")
-                        .size(10)
-                        .color(self.theme().extended_palette().background.base.text)
-                ]
-                .width(Length::Fill)
-                .align_x(Horizontal::Left),
+                column![version]
+                    .width(Length::Fill)
+                    .align_x(Horizontal::Left),
                 column![row![b1n, github].align_y(Vertical::Center)]
                     .width(Length::Shrink)
                     .align_x(Horizontal::Center),
@@ -1278,12 +1803,9 @@ impl Pumpbin {
         if self.is_loading() {
             home = home.push(
                 container(
-                    column![
-                        text("󰔟").size(30),
-                        text(&self.loading_message).size(14)
-                    ]
-                    .spacing(10)
-                    .align_x(Horizontal::Center)
+                    column![text("󰔟").size(30), text(&self.loading_message).size(14)]
+                        .spacing(10)
+                        .align_x(Horizontal::Center),
                 )
                 .width(Length::Fill)
                 .height(Length::Fill)
@@ -1292,7 +1814,7 @@ impl Pumpbin {
                 .style(|_theme: &Theme| {
                     container::Style::default()
                         .background(iced::Color::from_rgba(0.0, 0.0, 0.0, 0.7))
-                })
+                }),
             );
         }
 

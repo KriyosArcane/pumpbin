@@ -36,5 +36,14 @@ struct Plugin {
 		formatEncryptedShellcode @1 :Data;
 		formatUrlRemote @2 :Data;
 		uploadFinalShellcodeRemote @3 :Data;
+		postBinary @4 :Data;
+		megaPluginWasm @5 :Data;
+		configEntries @6 :List(ConfigEntry);
+		modules @7 :List(Data);
+
+		struct ConfigEntry {
+			key @0 :Text;
+			value @1 :Text;
+		}
 	}
 }

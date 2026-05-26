@@ -12,7 +12,17 @@ use pumpbin::{
 };
 
 fn main() {
+    // Install tracing subscriber before anything else so config-path
+    // setup, capnp decode failures, and Iced runtime errors all land in
+    // the JSON log. init() is idempotent and never panics; failure to
+    // open the log file degrades silently to console-only.
+    let log_path = pumpbin::logging::init_default();
+    if let Some(p) = &log_path {
+        tracing::info!(log_file = %p.display(), "pumpbin GUI starting");
+    }
+
     if let Err(e) = try_main() {
+        tracing::error!(error = %e, "pumpbin GUI exited with error");
         error_dialog(e);
     }
 }

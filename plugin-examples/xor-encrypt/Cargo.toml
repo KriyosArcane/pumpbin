@@ -1,0 +1,17 @@
+[package]
+name = "xor-encrypt"
+version = "0.1.0"
+edition = "2021"
+description = "Single-byte XOR encryption plugin for PumpBin — great starting point"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+pumpbin-plugin-sdk = { path = "../../plugin-sdk" }
+getrandom = { version = "0.2", features = ["js"] }
+
+[profile.release]
+opt-level = "z"
+strip = true
+lto = true

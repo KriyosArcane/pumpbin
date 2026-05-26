@@ -1,6 +1,6 @@
 [package]
 name = "pumpbin"
-version = "1.1.1"
+version = "1.4.6"
 authors = ["b1n <b1n@b1n.io>"]
 edition = "2021"
 description = "PumpBin is an Implant Generation Platform."
@@ -25,12 +25,24 @@ capnp = "0.19"
 extism = "1.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+base64 = "0.22"
 flate2 = "1.0"
 iced_aw = { version = "0.11", default-features = false, features = ["menu"] }
 
 iced = { version = "0.13", default-features = false, features = ["wgpu", "tiny-skia", "advanced", "svg", "tokio", "image"] }
 regex = "1.10"
 clap = { version = "4.5", features = ["derive"] }
+clap_complete = "4.5"
+tempfile = "3.10"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt", "json", "ansi", "std"] }
+zeroize = { version = "1.8.2", features = ["derive"] }
+toml = { version = "1.1.2", features = ["parse"] }
+sha2 = "0.10"
+
+[[bin]]
+name = "pumpbin-cli"
+path = "src/bin/pumpbin-cli.rs"
 
 [package.metadata.winresource]
 LegalCopyright = "Copyright (c) 2024 b1n <b1n@b1n.io>"
@@ -39,7 +51,9 @@ LegalCopyright = "Copyright (c) 2024 b1n <b1n@b1n.io>"
 winresource = "0.1.17"
 
 [dev-dependencies]
-tempfile = "3.10.1"
+rand_chacha = "0.3"
+sha2 = "0.10"
+tempfile = "3.10"
 
 [build-dependencies]
 capnpc = "0.19"
@@ -49,3 +63,12 @@ strip = true
 opt-level = 3
 lto = true
 codegen-units = 1
+
+# NOTE: v1.4.6 attempted to pin extism to git HEAD to pull wasmtime
+# 43 here, but the patch silently no-op'd — upstream extism's HEAD
+# Cargo.toml declares `version = "0.0.0+replaced-by-ci"` (a CI
+# placeholder), which the resolver cannot match against pumpbin's
+# `^1.4` requirement. The graph kept resolving to the registry
+# `extism 1.21.0` -> `wasmtime 41.0.4`, leaving the advisory chain
+# unaddressed. See deny.toml's RUSTSEC-2026-0114 ignore for the
+# real status.

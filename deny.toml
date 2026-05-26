@@ -1,0 +1,112 @@
+# cargo-deny configuration for PumpBin.
+#
+# Gates the CI build on:
+# - No known security advisories in any transitive dep.
+# - No banned licenses (e.g. AGPL surprises).
+# - No duplicate crate versions (besides documented exceptions).
+#
+# Run locally with:  cargo deny check
+
+[graph]
+all-features = false
+
+[advisories]
+version = 2
+yanked = "warn"
+# =========================================================================
+# Upstream-blocked advisory ignores.
+#
+# Every entry below is a known unaddressed advisory in a TRANSITIVE
+# dependency that PumpBin cannot patch directly. Each has a one-line
+# reason; the multi-paragraph context is here:
+#
+# wasmtime (RUSTSEC-2025-0141, -0143, RUSTSEC-2026-0085..0089, -0091..0096,
+# RUSTSEC-2026-0114):
+#   Pulled in via extism 1.21.0 (latest released, also latest git tag).
+#   extism pins `wasmtime ^41`; the fixes live in wasmtime 43+ (most
+#   advisories) or earlier 36.x backports. v1.4.6 tried a
+#   [patch.crates-io] override to extism HEAD; that silently no-op'd
+#   because HEAD declares `version = "0.0.0+replaced-by-ci"`, which
+#   the resolver cannot match against `^1.4`. No published extism
+#   release exists yet that picks up wasmtime 43+.
+#
+#   Threat model: PumpBin runs WASM modules with a 3s default
+#   timeout (wasm_policy.rs), no network by default, on
+#   operator-controlled .wasm bytes that the operator audited before
+#   adding to the registry. A malicious guest wasm in this position
+#   can already exfil via host-provided functions; the wasmtime CVEs
+#   here are mostly Winch-backend issues (PumpBin uses Cranelift),
+#   aarch64-specific (PumpBin's CI matrix is x86_64), or
+#   panic-not-escape. Not zero risk, but the operator-trust boundary
+#   is upstream of these.
+#
+# bincode (RUSTSEC-2025-0143): unsound APIs in 1.x. PumpBin uses
+#   bincode 2.x (the .b1n format) — the advisory is for a 1.x crate
+#   that's still in the graph via extism. v2 is unaffected.
+#
+# `instant` and `paste` (RUSTSEC-2024-0384, RUSTSEC-2024-0436):
+#   unmaintained, no CVE, no drop-in replacement available yet at
+#   this dep depth. Common ecosystem issue, will clear when upstream
+#   ureq/reqwest/etc. migrate.
+#
+# Re-check this list whenever extism cuts a release > 1.21.0.
+# =========================================================================
+ignore = [
+    { id = "RUSTSEC-2024-0384", reason = "instant unmaintained; transitive, no upstream replacement" },
+    { id = "RUSTSEC-2024-0436", reason = "paste unmaintained; transitive, no upstream replacement" },
+    { id = "RUSTSEC-2025-0141", reason = "wasmtime 41 (extism 1.21 pin); upstream-blocked" },
+    { id = "RUSTSEC-2025-0143", reason = "bincode 1.x unsound API; we use bincode 2.x" },
+    { id = "RUSTSEC-2026-0085", reason = "wasmtime 41 (extism 1.21 pin); upstream-blocked" },
+    { id = "RUSTSEC-2026-0086", reason = "wasmtime 41 (extism 1.21 pin); upstream-blocked" },
+    { id = "RUSTSEC-2026-0087", reason = "wasmtime 41 (extism 1.21 pin); upstream-blocked" },
+    { id = "RUSTSEC-2026-0088", reason = "wasmtime 41 (extism 1.21 pin); upstream-blocked" },
+    { id = "RUSTSEC-2026-0089", reason = "wasmtime 41 (extism 1.21 pin); upstream-blocked" },
+    { id = "RUSTSEC-2026-0091", reason = "wasmtime 41 (extism 1.21 pin); upstream-blocked" },
+    { id = "RUSTSEC-2026-0092", reason = "wasmtime 41 (extism 1.21 pin); upstream-blocked" },
+    { id = "RUSTSEC-2026-0093", reason = "wasmtime 41 (extism 1.21 pin); upstream-blocked" },
+    { id = "RUSTSEC-2026-0094", reason = "wasmtime 41 Winch backend; we use Cranelift; upstream-blocked" },
+    { id = "RUSTSEC-2026-0095", reason = "wasmtime 41 Winch backend; we use Cranelift; upstream-blocked" },
+    { id = "RUSTSEC-2026-0096", reason = "wasmtime 41 aarch64 Cranelift; CI x86_64; upstream-blocked" },
+    { id = "RUSTSEC-2026-0114", reason = "wasmtime 41 panic on oversize table; upstream-blocked" },
+]
+
+[licenses]
+version = 2
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "Zlib",
+    "CC0-1.0",
+    "MPL-2.0",
+    "BSL-1.0",
+    "OpenSSL",
+]
+confidence-threshold = 0.8
+
+[[licenses.exceptions]]
+allow = ["OpenSSL"]
+name = "ring"
+
+# webpki-roots ships a snapshot of the Mozilla root certificate store under
+# CDLA-Permissive-2.0 (data-only license). Permissive, no source-disclosure
+# obligations, no patent traps. Scoped to this single crate.
+[[licenses.exceptions]]
+allow = ["CDLA-Permissive-2.0"]
+name = "webpki-roots"
+
+[bans]
+multiple-versions = "warn"
+wildcards = "warn"
+deny = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

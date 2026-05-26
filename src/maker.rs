@@ -1,5 +1,13 @@
-use std::{fs, ops::Not, path::PathBuf};
+use std::{fs, path::PathBuf};
 
+use crate::config_utils;
+
+use crate::{
+    plugin::{Plugin, PluginInfo, PluginReplace},
+    plugin_system::{get_plugin_config_schema, PluginConfigField},
+    utils::{message_dialog, JETBRAINS_MONO_FONT},
+};
+use crate::{style, ShellcodeSaveType};
 use anyhow::{anyhow, bail};
 use dirs::{data_dir, desktop_dir, home_dir};
 use iced::{
@@ -8,21 +16,16 @@ use iced::{
     futures::TryFutureExt,
     keyboard::{self, Key},
     widget::{
-        button, column, horizontal_rule, pick_list, radio, row, svg::Handle, text,
-        text_editor, text_input, Column, Svg,
+        button, checkbox, column, horizontal_rule, pick_list, radio, row, scrollable, svg::Handle,
+        text, text_editor, text_input, Column, Svg,
     },
     window, Length, Subscription, Task, Theme,
 };
 use memchr::memmem;
-use serde::{Deserialize, Serialize};
-use crate::{
-    plugin::{Plugin, PluginInfo, PluginReplace},
-    utils::{message_dialog, JETBRAINS_MONO_FONT},
-};
-use crate::{style, ShellcodeSaveType};
 use rfd::{AsyncFileDialog, MessageLevel};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ChooseFileType {
     WindowsExe,
     WindowsLib,
@@ -30,10 +33,7 @@ pub enum ChooseFileType {
     LinuxLib,
     DarwinExe,
     DarwinLib,
-    EncryptShellcodePlugin,
-    FormatEncryptedShellcodePlugin,
-    FormatUrlRemote,
-    UploadFinalShellcodeRemote,
+    MegaPluginWasm,
 }
 
 #[derive(Debug, Clone)]
@@ -59,16 +59,20 @@ struct MakerPersistedState {
     linux_lib: String,
     darwin_exe: String,
     darwin_lib: String,
-    encrypt_shellcode_plugin: String,
-    format_encrypted_shellcode_plugin: String,
-    format_url_remote_plugin: String,
-    upload_final_shellcode_remote_plugin: String,
+    mega_plugin_wasm: String,
+    plugin_config: Vec<(String, String)>,
     desc: String,
     current_file_path: Option<String>,
     recent_files: Vec<String>,
+    #[serde(default = "maker_defaults_on_open")]
+    apply_schema_defaults_on_open: bool,
 }
 
+fn maker_defaults_on_open() -> bool {
+    true
+}
 
+pub type SchemaLoadResult = Result<(String, Vec<(String, String)>, Vec<PluginConfigField>), String>;
 
 #[derive(Debug, Clone)]
 pub enum MakerMessage {
@@ -85,15 +89,20 @@ pub enum MakerMessage {
     LinuxLibChanged(String),
     DarwinExeChanged(String),
     DarwinLibChanged(String),
-    EncryptShllcodePluginChanged(String),
-    FormatEncryptedShellcodePluginChanged(String),
-    FormatUrlRemotePluginChanged(String),
-    UploadFinalShellcodeRemotePluginChanged(String),
+    MegaPluginWasmChanged(String),
+    ConfigKeyChanged(usize, String),
+    ConfigValueChanged(usize, String),
+    ConfigBrowseClicked(usize),
+    ConfigBrowseDone(usize, Option<String>),
+    ApplySchemaDefaultsOnOpenChanged(bool),
+    AddConfigRow,
+    RemoveConfigRow(usize),
     DescAction(text_editor::Action),
     GenerateClicked,
     GenerateDone(Result<GeneratedPluginResult, String>),
     ChooseFileClicked(ChooseFileType),
     ChooseFileDone((Option<String>, ChooseFileType)),
+    MegaPluginSchemaLoaded(SchemaLoadResult),
     OpenB1nClicked,
     OpenB1nDone(Result<String, String>),
     OpenRecentFile(String),
@@ -122,10 +131,10 @@ pub struct Maker {
     linux_lib: String,
     darwin_exe: String,
     darwin_lib: String,
-    encrypt_shellcode_plugin: String,
-    format_encrypted_shellcode_plugin: String,
-    format_url_remote_plugin: String,
-    upload_final_shellcode_remote_plugin: String,
+    mega_plugin_wasm: String,
+    plugin_config: Vec<(String, String)>,
+    plugin_config_schema: Vec<PluginConfigField>,
+    apply_schema_defaults_on_open: bool,
     desc: text_editor::Content,
     pumpbin_version: String,
     selected_theme: Theme,
@@ -135,6 +144,101 @@ pub struct Maker {
 }
 
 impl Maker {
+    fn schema_field_for_key<'a>(
+        schema: &'a [PluginConfigField],
+        key: &str,
+    ) -> Option<&'a PluginConfigField> {
+        schema.iter().find(|f| f.key == key)
+    }
+
+    fn schema_field(&self, key: &str) -> Option<&PluginConfigField> {
+        Self::schema_field_for_key(&self.plugin_config_schema, key)
+    }
+
+    fn plugin_schema_fields(plugin: &Plugin) -> Vec<PluginConfigField> {
+        for wasm in plugin.plugins().modules() {
+            if let Ok(Some(schema)) = get_plugin_config_schema(wasm) {
+                return schema.fields;
+            }
+        }
+
+        let wasm = plugin
+            .plugins()
+            .encrypt_shellcode()
+            .or(plugin.plugins().format_encrypted_shellcode())
+            .or(plugin.plugins().format_url_remote())
+            .or(plugin.plugins().upload_final_shellcode_remote());
+
+        if let Some(wasm) = wasm {
+            if let Ok(Some(schema)) = get_plugin_config_schema(wasm) {
+                return schema.fields;
+            }
+        }
+
+        Vec::new()
+    }
+
+    fn merge_config_with_schema(
+        config: &[(String, String)],
+        schema: &[PluginConfigField],
+        apply_defaults_on_open: bool,
+    ) -> Vec<(String, String)> {
+        config_utils::merge_config_with_schema(config, schema, apply_defaults_on_open)
+    }
+
+    fn load_schema_task(path: String) -> Task<MakerMessage> {
+        let load_schema = async move {
+            let wasm =
+                fs::read(&path).map_err(|e| format!("Failed to read wasm '{}': {}", path, e))?;
+            let schema = get_plugin_config_schema(&wasm)
+                .map_err(|e| format!("Failed to parse plugin_schema: {}", e))?
+                .unwrap_or_default();
+            let defaults = schema
+                .fields
+                .iter()
+                .filter(|f| !f.key.trim().is_empty())
+                .map(|f| (f.key.clone(), f.default.clone().unwrap_or_default()))
+                .collect::<Vec<_>>();
+
+            Ok((path, defaults, schema.fields))
+        };
+
+        Task::perform(load_schema, MakerMessage::MegaPluginSchemaLoaded)
+    }
+
+    fn maybe_expand_home_path(value: &str) -> PathBuf {
+        config_utils::maybe_expand_home_path(value)
+    }
+
+    fn config_key_is_file_like(key: &str) -> bool {
+        config_utils::config_key_is_file_like(key)
+    }
+
+    fn config_errors(&self) -> Vec<String> {
+        self.plugin_config
+            .iter()
+            .filter_map(|(key, value)| {
+                Self::config_value_error(self.schema_field(key), key, value)
+                    .map(|e| format!("{}: {}", key, e))
+            })
+            .collect()
+    }
+
+    fn config_value_error(
+        field: Option<&PluginConfigField>,
+        key: &str,
+        value: &str,
+    ) -> Option<String> {
+        config_utils::config_value_error(field, key, value)
+    }
+
+    fn portable_plugin_config(
+        entries: &[(String, String)],
+        schema: &[PluginConfigField],
+    ) -> Vec<(String, String)> {
+        config_utils::sanitize_config(entries, schema)
+    }
+
     fn state_file_path() -> Option<PathBuf> {
         let mut base = data_dir()?;
         base.push("PumpBin");
@@ -160,13 +264,12 @@ impl Maker {
             linux_lib: self.linux_lib.clone(),
             darwin_exe: self.darwin_exe.clone(),
             darwin_lib: self.darwin_lib.clone(),
-            encrypt_shellcode_plugin: self.encrypt_shellcode_plugin.clone(),
-            format_encrypted_shellcode_plugin: self.format_encrypted_shellcode_plugin.clone(),
-            format_url_remote_plugin: self.format_url_remote_plugin.clone(),
-            upload_final_shellcode_remote_plugin: self.upload_final_shellcode_remote_plugin.clone(),
+            mega_plugin_wasm: self.mega_plugin_wasm.clone(),
+            plugin_config: self.plugin_config.clone(),
             desc: self.desc.text(),
             current_file_path: self.current_file_path.clone(),
             recent_files: self.recent_files.clone(),
+            apply_schema_defaults_on_open: self.apply_schema_defaults_on_open,
         }
     }
 
@@ -184,13 +287,12 @@ impl Maker {
         self.linux_lib = state.linux_lib;
         self.darwin_exe = state.darwin_exe;
         self.darwin_lib = state.darwin_lib;
-        self.encrypt_shellcode_plugin = state.encrypt_shellcode_plugin;
-        self.format_encrypted_shellcode_plugin = state.format_encrypted_shellcode_plugin;
-        self.format_url_remote_plugin = state.format_url_remote_plugin;
-        self.upload_final_shellcode_remote_plugin = state.upload_final_shellcode_remote_plugin;
+        self.mega_plugin_wasm = state.mega_plugin_wasm;
+        self.plugin_config = state.plugin_config;
         self.desc = text_editor::Content::with_text(&state.desc);
         self.current_file_path = state.current_file_path;
         self.recent_files = state.recent_files;
+        self.apply_schema_defaults_on_open = state.apply_schema_defaults_on_open;
     }
 
     fn load_state(&mut self) {
@@ -218,86 +320,32 @@ impl Maker {
             return;
         };
 
-        let _ = fs::write(path, raw);
+        let _ = crate::utils::atomic_write(&path, raw.as_bytes());
     }
 
-    fn preflight_binary(
-        &self,
-        label: &str,
-        path: &str,
-        src_prefix: &[u8],
-        size_holder: Option<&[u8]>,
-    ) -> anyhow::Result<(String, bool)> {
-        if path.trim().is_empty() {
-            return Ok((format!("{}: NOT SET", label), true));
-        }
-
-        let data = fs::read(path).map_err(|e| anyhow!("{} read failed: {}", label, e))?;
-
-        let has_prefix = memmem::find(&data, src_prefix).is_some();
-        let has_size_holder = size_holder
-            .map(|holder| memmem::find(&data, holder).is_some())
-            .unwrap_or(true);
-
-        let ready = has_prefix && has_size_holder;
-        let line = if ready {
-            format!("{}: READY", label)
-        } else if has_prefix {
-            format!("{}: MISSING SIZE HOLDER", label)
-        } else {
-            format!("{}: MISSING SRC PREFIX", label)
-        };
-
-        Ok((line, ready))
-    }
-
-    fn preflight_readiness_report(&self) -> anyhow::Result<String> {
-        let src_prefix = self.src_prefix.trim().as_bytes();
-        let size_holder = match self.shellcode_save_type() {
-            ShellcodeSaveType::Local => Some(self.size_holder.trim().as_bytes()),
-            ShellcodeSaveType::Remote => None,
-        };
-
-        let mut lines = vec!["PumpBin Maker preflight:".to_string()];
-        let mut failures = Vec::new();
-
-        let checks = [
-            ("Windows EXE", self.windows_exe()),
-            ("Windows DLL", self.windows_lib()),
-            ("Linux EXE", self.linux_exe()),
-            ("Linux SO", self.linux_lib()),
-            ("Darwin EXE", self.darwin_exe()),
-            ("Darwin DYLIB", self.darwin_lib()),
-        ];
-
-        for (label, path) in checks {
-            let (line, ready) = self.preflight_binary(label, path, src_prefix, size_holder)?;
-            if ready.not() {
-                failures.push(label.to_string());
-            }
-            lines.push(line);
-        }
-
-        if failures.is_empty().not() {
-            bail!(
-                "{}\n\nPlease rebuild the failing templates with the configured src prefix/size holder before generating.",
-                lines.join("\n")
-            );
-        }
-
-        Ok(lines.join("\n"))
-    }
+    // v1.1.13: The synchronous preflight_binary + preflight_readiness_report
+    // pair was removed. Their fs::read of every platform binary blocked the
+    // Iced runtime on large templates. The preflight check is now inlined in
+    // the MakerMessage::GenerateClicked async block (search for
+    // "plugin.replace.preflight_template" in this file), which already reads
+    // each binary for the actual encode step — so removing the sync pre-check
+    // also eliminates a redundant double-read.
+    //
+    // PB-E0019 (MakerPreflightFailed) is no longer produced; per-file
+    // preflight now surfaces as anyhow with the template path on the
+    // generate failure path. PB-E0019 is reserved in error.rs for
+    // backward compatibility with downstream consumers that match on it.
 
     fn load_from_plugin(&mut self, plugin: Plugin) {
         // Load basic info
         self.plugin_name = plugin.info().plugin_name().to_string();
         self.author = plugin.info().author().to_string();
         self.version = plugin.info().version().to_string();
-        
+
         // Load replacement settings
         self.src_prefix = String::from_utf8_lossy(plugin.replace().src_prefix()).to_string();
         self.max_len = plugin.replace().max_len().to_string();
-        
+
         // Determine shellcode save type and size holder
         if let Some(size_holder) = plugin.replace().size_holder() {
             self.shellcode_save_type = ShellcodeSaveType::Local;
@@ -306,10 +354,10 @@ impl Maker {
             self.shellcode_save_type = ShellcodeSaveType::Remote;
             self.size_holder.clear();
         }
-        
+
         // Load description
         self.desc = text_editor::Content::with_text(plugin.info().desc());
-        
+
         // Note: Binary paths are not loaded as they represent the original source files
         // Users will need to re-select binary paths if they want to regenerate
         self.windows_exe.clear();
@@ -318,13 +366,16 @@ impl Maker {
         self.linux_lib.clear();
         self.darwin_exe.clear();
         self.darwin_lib.clear();
-        self.encrypt_shellcode_plugin.clear();
-        self.format_encrypted_shellcode_plugin.clear();
-        self.format_url_remote_plugin.clear();
-        self.upload_final_shellcode_remote_plugin.clear();
+        self.mega_plugin_wasm.clear();
+        self.plugin_config_schema = Self::plugin_schema_fields(&plugin);
+        self.plugin_config = Self::merge_config_with_schema(
+            plugin.plugins().plugin_config(),
+            &self.plugin_config_schema,
+            self.apply_schema_defaults_on_open,
+        );
         self.save_state();
     }
-    
+
     fn reset_to_new(&mut self) {
         *self = Self {
             current_file_path: None,
@@ -335,46 +386,92 @@ impl Maker {
     }
 
     fn add_recent_file(&mut self, path: String) {
-        // Remove if already exists
+        // LRU dedup: drop any existing entry for this path before
+        // re-inserting at the front. Bumped from cap 10 to
+        // crate::RECENT_FILES_CAP (20) in v1.1.10.
         self.recent_files.retain(|p| p != &path);
-        // Add to front
         self.recent_files.insert(0, path);
-        // Keep only last 10
-        self.recent_files.truncate(10);
+        self.recent_files.truncate(crate::RECENT_FILES_CAP);
         self.save_state();
     }
 
+    /// Returns (has_prefix, has_size_holder) for a binary path.
+    /// Returns None if the path is empty or the file can't be read.
+    fn binary_placeholder_status(&self, path: &str) -> Option<(bool, bool)> {
+        if path.trim().is_empty() {
+            return None;
+        }
+        let data = fs::read(path.trim()).ok()?;
+        let src_prefix = self.src_prefix.trim().as_bytes();
+        let has_prefix = memmem::find(&data, src_prefix).is_some();
+        let has_size_holder = match self.shellcode_save_type() {
+            ShellcodeSaveType::Local => {
+                let holder = self.size_holder.trim().as_bytes();
+                memmem::find(&data, holder).is_some()
+            }
+            ShellcodeSaveType::Remote => true,
+        };
+        Some((has_prefix, has_size_holder))
+    }
+
     fn check_generate(&self) -> anyhow::Result<()> {
+        use crate::error::PumpBinError;
+
         if self.plugin_name.is_empty() {
-            bail!("Plugin Name is empty.");
+            return Err(PumpBinError::MakerFieldEmpty {
+                field: "plugin_name",
+            }
+            .into());
         }
 
         if self.src_prefix.is_empty() {
-            bail!("Prefix is empty.");
+            return Err(PumpBinError::MakerFieldEmpty {
+                field: "src_prefix",
+            }
+            .into());
         }
 
         let max_len = self.max_len();
         if max_len.is_empty() {
-            bail!("Max Len is empty.");
+            return Err(PumpBinError::MakerMaxLenInvalid { reason: "empty" }.into());
         }
 
         let Ok(max_len_num) = max_len.parse::<usize>() else {
-            bail!("Max Len numeric only.");
+            return Err(PumpBinError::MakerMaxLenInvalid {
+                reason: "not a non-negative integer",
+            }
+            .into());
         };
 
         if max_len_num == 0 {
-            bail!("Max Len must be greater than zero.");
+            return Err(PumpBinError::MakerMaxLenInvalid {
+                reason: "must be greater than zero",
+            }
+            .into());
         }
 
         if let ShellcodeSaveType::Local = self.shellcode_save_type() {
             if self.size_holder().trim().is_empty() {
-                bail!("Size Holder is empty.");
+                return Err(PumpBinError::MakerFieldEmpty {
+                    field: "size_holder",
+                }
+                .into());
             }
 
             if self.size_holder().trim() == self.src_prefix().trim() {
-                bail!("Size Holder cannot be the same value as Prefix.");
+                return Err(PumpBinError::MakerSourcePrefixCollision.into());
             }
         };
+
+        let cfg_errors = self.config_errors();
+        if !cfg_errors.is_empty() {
+            bail!(
+                "Module Config has {} invalid entr{}:\n{}",
+                cfg_errors.len(),
+                if cfg_errors.len() == 1 { "y" } else { "ies" },
+                cfg_errors.join("\n")
+            );
+        }
 
         anyhow::Ok(())
     }
@@ -396,10 +493,10 @@ impl Default for Maker {
             linux_lib: Default::default(),
             darwin_exe: Default::default(),
             darwin_lib: Default::default(),
-            encrypt_shellcode_plugin: Default::default(),
-            format_encrypted_shellcode_plugin: Default::default(),
-            format_url_remote_plugin: Default::default(),
-            upload_final_shellcode_remote_plugin: Default::default(),
+            mega_plugin_wasm: Default::default(),
+            plugin_config: Vec::new(),
+            plugin_config_schema: Vec::new(),
+            apply_schema_defaults_on_open: true,
             desc: text_editor::Content::new(),
             pumpbin_version: env!("CARGO_PKG_VERSION").into(),
             selected_theme: Theme::CatppuccinMacchiato,
@@ -465,20 +562,8 @@ impl Maker {
         &self.darwin_lib
     }
 
-    fn encrypt_shellcode_plugin(&self) -> &str {
-        &self.encrypt_shellcode_plugin
-    }
-
-    fn format_encrypted_shellcode_plugin(&self) -> &str {
-        &self.format_encrypted_shellcode_plugin
-    }
-
-    fn format_url_remote_plugin(&self) -> &str {
-        &self.format_url_remote_plugin
-    }
-
-    fn upload_final_shellcode_remote_plugin(&self) -> &str {
-        &self.upload_final_shellcode_remote_plugin
+    fn mega_plugin_wasm(&self) -> &str {
+        &self.mega_plugin_wasm
     }
 
     fn desc(&self) -> &text_editor::Content {
@@ -555,41 +640,85 @@ impl Maker {
                 self.darwin_lib = x;
                 should_persist = true;
             }
-            MakerMessage::EncryptShllcodePluginChanged(x) => {
-                self.encrypt_shellcode_plugin = x;
+            MakerMessage::MegaPluginWasmChanged(x) => {
+                self.mega_plugin_wasm = x.clone();
+                should_persist = true;
+
+                let candidate = Self::maybe_expand_home_path(x.trim());
+                if candidate.is_file() {
+                    self.save_state();
+                    return Self::load_schema_task(candidate.to_string_lossy().to_string());
+                }
+            }
+            MakerMessage::ConfigKeyChanged(idx, x) => {
+                if let Some((key, _)) = self.plugin_config.get_mut(idx) {
+                    *key = x;
+                    should_persist = true;
+                }
+            }
+            MakerMessage::ConfigValueChanged(idx, x) => {
+                if let Some((_, value)) = self.plugin_config.get_mut(idx) {
+                    *value = x;
+                    should_persist = true;
+                }
+            }
+            MakerMessage::ConfigBrowseClicked(idx) => {
+                let choose_file = async move {
+                    let file = AsyncFileDialog::new()
+                        .set_directory(home_dir().unwrap_or(".".into()))
+                        .set_title("Choose config file")
+                        .pick_file()
+                        .await
+                        .map(|x| x.path().to_string_lossy().to_string());
+
+                    (idx, file)
+                };
+
+                return Task::perform(choose_file, |(idx, path)| {
+                    MakerMessage::ConfigBrowseDone(idx, path)
+                });
+            }
+            MakerMessage::ConfigBrowseDone(idx, path) => {
+                if let (Some((_, value)), Some(path)) = (self.plugin_config.get_mut(idx), path) {
+                    *value = path;
+                    should_persist = true;
+                }
+            }
+            MakerMessage::ApplySchemaDefaultsOnOpenChanged(value) => {
+                self.apply_schema_defaults_on_open = value;
                 should_persist = true;
             }
-            MakerMessage::FormatEncryptedShellcodePluginChanged(x) => {
-                self.format_encrypted_shellcode_plugin = x;
+            MakerMessage::AddConfigRow => {
+                self.plugin_config.push((String::new(), String::new()));
                 should_persist = true;
             }
-            MakerMessage::FormatUrlRemotePluginChanged(x) => {
-                self.format_url_remote_plugin = x;
-                should_persist = true;
-            }
-            MakerMessage::UploadFinalShellcodeRemotePluginChanged(x) => {
-                self.upload_final_shellcode_remote_plugin = x;
-                should_persist = true;
+            MakerMessage::RemoveConfigRow(idx) => {
+                if idx < self.plugin_config.len() {
+                    self.plugin_config.remove(idx);
+                    should_persist = true;
+                }
             }
             MakerMessage::DescAction(x) => {
                 self.desc_mut().perform(x);
                 should_persist = true;
             }
             MakerMessage::GenerateClicked => {
+                eprintln!("[maker] GenerateClicked");
                 if let Err(e) = self.check_generate() {
+                    eprintln!("[maker] check_generate failed: {e}");
                     let _ = message_dialog(e.to_string(), MessageLevel::Error);
                     return Task::none();
                 }
+                eprintln!("[maker] check_generate passed");
 
-                let preflight_report = match self.preflight_readiness_report() {
-                    Ok(report) => report,
-                    Err(e) => {
-                        let _ = message_dialog(e.to_string(), MessageLevel::Error);
-                        return Task::none();
-                    }
-                };
-                let _ = message_dialog(preflight_report.clone(), MessageLevel::Info);
-
+                // v1.1.13: preflight moved into the async block below so
+                // its fs::read of every platform binary doesn't freeze the
+                // UI on large templates. The save dialog is launched
+                // *after* preflight passes (still inside the async block);
+                // failure still surfaces via message_dialog through the
+                // existing GenerateDone Err path. Pre-v1.1.13 preflight
+                // ran here synchronously, blocking the Iced runtime for
+                // the duration of every read.
                 let src_prefix_bytes = self.src_prefix().as_bytes().to_vec();
 
                 let mut plugin = Plugin {
@@ -641,68 +770,62 @@ impl Maker {
                     (self.linux_lib(), ChooseFileType::LinuxLib),
                     (self.darwin_exe(), ChooseFileType::DarwinExe),
                     (self.darwin_lib(), ChooseFileType::DarwinLib),
-                    (
-                        self.encrypt_shellcode_plugin(),
-                        ChooseFileType::EncryptShellcodePlugin,
-                    ),
-                    (
-                        self.format_encrypted_shellcode_plugin(),
-                        ChooseFileType::FormatEncryptedShellcodePlugin,
-                    ),
-                    (
-                        self.format_url_remote_plugin(),
-                        ChooseFileType::FormatUrlRemote,
-                    ),
-                    (
-                        self.upload_final_shellcode_remote_plugin(),
-                        ChooseFileType::UploadFinalShellcodeRemote,
-                    ),
+                    (self.mega_plugin_wasm(), ChooseFileType::MegaPluginWasm),
                 ]
                 .into_iter()
                 .map(|(x, y)| (x.to_string(), y))
                 .collect();
 
-                let preflight_report_for_result = preflight_report.clone();
+                let plugin_config =
+                    Self::portable_plugin_config(&self.plugin_config, &self.plugin_config_schema);
+
                 let make_plugin = async move {
+                    plugin.plugins.plugin_config = plugin_config;
+                    let mut preflight_lines: Vec<String> =
+                        vec!["PumpBin Maker preflight:".to_string()];
+
                     for (path_str, file_type) in paths {
-                        if path_str.is_empty().not() {
+                        if !path_str.is_empty() {
                             let path = PathBuf::from(path_str);
                             let data = fs::read(&path)?;
 
-                            // Check if the binary still contains the placeholder
-                            if memmem::find(&data, &src_prefix_bytes).is_none() {
-                                bail!(
-                                    "The binary at '{}' does not contain the specified shellcode prefix ('{}'). Please recompile it with the correct placeholder.",
-                                    path.display(),
-                                    String::from_utf8_lossy(&src_prefix_bytes)
-                                );
+                            // Only binary templates (not WASM modules) need preflight.
+                            // Delegates to Plugin::PluginReplace::preflight_template so the
+                            // CLI's create-b1n subcommand and the Maker GUI enforce the
+                            // exact same template requirements. v1.1.13: preflight is now
+                            // ONLY here (inside the async Task) so its fs::read doesn't
+                            // freeze the UI on large templates; the pre-1.1.13 sync call
+                            // before this async block was redundant with this one.
+                            if file_type != ChooseFileType::MegaPluginWasm {
+                                plugin.replace.preflight_template(&data).map_err(|e| {
+                                    anyhow!("Template at '{}': {}", path.display(), e)
+                                })?;
+                                preflight_lines.push(format!("  {:?}: READY", file_type));
                             }
 
-                            let bin = match file_type {
-                                ChooseFileType::WindowsExe => plugin.bins.windows.executable_mut(),
+                            match file_type {
+                                ChooseFileType::WindowsExe => {
+                                    *plugin.bins.windows.executable_mut() = Some(data)
+                                }
                                 ChooseFileType::WindowsLib => {
-                                    plugin.bins.windows.dynamic_library_mut()
+                                    *plugin.bins.windows.dynamic_library_mut() = Some(data)
                                 }
-                                ChooseFileType::LinuxExe => plugin.bins.linux.executable_mut(),
-                                ChooseFileType::LinuxLib => plugin.bins.linux.dynamic_library_mut(),
-                                ChooseFileType::DarwinExe => plugin.bins.darwin.executable_mut(),
+                                ChooseFileType::LinuxExe => {
+                                    *plugin.bins.linux.executable_mut() = Some(data)
+                                }
+                                ChooseFileType::LinuxLib => {
+                                    *plugin.bins.linux.dynamic_library_mut() = Some(data)
+                                }
+                                ChooseFileType::DarwinExe => {
+                                    *plugin.bins.darwin.executable_mut() = Some(data)
+                                }
                                 ChooseFileType::DarwinLib => {
-                                    plugin.bins.darwin.dynamic_library_mut()
+                                    *plugin.bins.darwin.dynamic_library_mut() = Some(data)
                                 }
-                                ChooseFileType::EncryptShellcodePlugin => {
-                                    plugin.plugins.encrypt_shellcode_mut()
+                                ChooseFileType::MegaPluginWasm => {
+                                    plugin.plugins.modules_mut().push(data);
                                 }
-                                ChooseFileType::FormatEncryptedShellcodePlugin => {
-                                    plugin.plugins.format_encrypted_shellcode_mut()
-                                }
-                                ChooseFileType::FormatUrlRemote => {
-                                    plugin.plugins.format_url_remote_mut()
-                                }
-                                ChooseFileType::UploadFinalShellcodeRemote => {
-                                    plugin.plugins.upload_final_shellcode_remote_mut()
-                                }
-                            };
-                            *bin = Some(data);
+                            }
                         }
                     }
 
@@ -714,10 +837,19 @@ impl Maker {
                     let binary_types = [
                         (plugin.bins.windows.executable().is_some(), "Windows .exe"),
                         (plugin.bins.linux.executable().is_some(), "Linux executable"),
-                        (plugin.bins.darwin.executable().is_some(), "macOS executable"),
-                        (plugin.bins.windows.dynamic_library().is_some(), "Windows .dll"),
+                        (
+                            plugin.bins.darwin.executable().is_some(),
+                            "macOS executable",
+                        ),
+                        (
+                            plugin.bins.windows.dynamic_library().is_some(),
+                            "Windows .dll",
+                        ),
                         (plugin.bins.linux.dynamic_library().is_some(), "Linux .so"),
-                        (plugin.bins.darwin.dynamic_library().is_some(), "macOS .dylib"),
+                        (
+                            plugin.bins.darwin.dynamic_library().is_some(),
+                            "macOS .dylib",
+                        ),
                     ]
                     .iter()
                     .filter_map(|(present, name)| if *present { Some(*name) } else { None })
@@ -740,13 +872,13 @@ impl Maker {
                         .ok_or(anyhow!("Canceled the saving of the plugin."))?;
 
                     let plugin_bytes = plugin.encode_to_vec()?;
-                    fs::write(file.path(), plugin_bytes.as_slice())?;
+                    crate::utils::atomic_write(file.path(), plugin_bytes.as_slice())?;
 
                     anyhow::Ok(GeneratedPluginResult {
                         plugin_name: plugin_name.to_string(),
                         plugin_bytes,
                         saved_path: file.path().to_string_lossy().to_string(),
-                        preflight_report: preflight_report_for_result,
+                        preflight_report: preflight_lines.join("\n"),
                     })
                 }
                 .map_err(|e| e.to_string());
@@ -754,21 +886,32 @@ impl Maker {
                 return Task::perform(make_plugin, MakerMessage::GenerateDone);
             }
             MakerMessage::GenerateDone(x) => {
+                eprintln!(
+                    "[maker] GenerateDone: {:?}",
+                    x.as_ref().map(|r| &r.saved_path)
+                );
                 match x {
                     Ok(result) => {
                         self.current_file_path = Some(result.saved_path.clone());
                         self.add_recent_file(result.saved_path.clone());
-                        should_persist = true;
-                        let _ = message_dialog(
+                        // Note: not setting should_persist=true here because
+                        // we immediately `return` — the persist-on-fall-through
+                        // path at the bottom of update() would never see it.
+                        // add_recent_file + current_file_path mutation is
+                        // already enough for the next Generate to find the
+                        // right state.
+                        return message_dialog(
                             format!(
                                 "Generate done.\nSaved: {}\n\n{}",
                                 result.saved_path, result.preflight_report
                             ),
                             MessageLevel::Info,
-                        );
+                        )
+                        .discard();
                     }
                     Err(e) => {
-                        let _ = message_dialog(e, MessageLevel::Error);
+                        eprintln!("[maker] GenerateDone error: {e}");
+                        return message_dialog(e, MessageLevel::Error).discard();
                     }
                 };
             }
@@ -776,24 +919,20 @@ impl Maker {
                 let open_file = async move {
                     let file = AsyncFileDialog::new()
                         .set_directory(home_dir().unwrap_or(".".into()))
-                        .set_title("Open .b1n plugin file")
+                        .set_title("Open .b1n plugin pack")
                         .add_filter("PumpBin Plugin", &["b1n"])
                         .pick_file()
                         .await
                         .map(|x| x.path().to_string_lossy().to_string());
 
                     match file {
-                        Some(path) => {
-                            match std::fs::read(&path) {
-                                Ok(data) => {
-                                    match Plugin::decode_from_slice(&data) {
-                                        Ok(_plugin) => Ok(path),
-                                        Err(e) => Err(format!("Failed to parse plugin file: {}", e)),
-                                    }
-                                }
-                                Err(e) => Err(format!("Failed to read file: {}", e)),
-                            }
-                        }
+                        Some(path) => match std::fs::read(&path) {
+                            Ok(data) => match Plugin::decode_from_slice(&data) {
+                                Ok(_plugin) => Ok(path),
+                                Err(e) => Err(format!("Failed to parse plugin file: {}", e)),
+                            },
+                            Err(e) => Err(format!("Failed to read file: {}", e)),
+                        },
                         None => Err("No file selected".to_string()),
                     }
                 };
@@ -811,14 +950,20 @@ impl Maker {
                                 self.add_recent_file(path.clone());
                                 should_persist = true;
                                 let _ = message_dialog(
-                                    format!("Plugin loaded successfully from: {}", path),
+                                    format!("Plugin pack loaded successfully from: {}", path),
                                     MessageLevel::Info,
                                 );
                             } else {
-                                let _ = message_dialog("Failed to parse plugin file".to_string(), MessageLevel::Error);
+                                let _ = message_dialog(
+                                    "Failed to parse plugin file".to_string(),
+                                    MessageLevel::Error,
+                                );
                             }
                         } else {
-                            let _ = message_dialog("Failed to read plugin file".to_string(), MessageLevel::Error);
+                            let _ = message_dialog(
+                                "Failed to read plugin file".to_string(),
+                                MessageLevel::Error,
+                            );
                         }
                     }
                     Err(e) => {
@@ -835,21 +980,30 @@ impl Maker {
                         self.add_recent_file(path.clone());
                         should_persist = true;
                         let _ = message_dialog(
-                            format!("Plugin loaded successfully from: {}", path),
+                            format!("Plugin pack loaded successfully from: {}", path),
                             MessageLevel::Info,
                         );
                     } else {
-                        let _ = message_dialog("Failed to parse plugin file".to_string(), MessageLevel::Error);
+                        let _ = message_dialog(
+                            "Failed to parse plugin file".to_string(),
+                            MessageLevel::Error,
+                        );
                     }
                 } else {
-                    let _ = message_dialog("Failed to read plugin file".to_string(), MessageLevel::Error);
+                    let _ = message_dialog(
+                        "Failed to read plugin file".to_string(),
+                        MessageLevel::Error,
+                    );
                 }
             }
             MakerMessage::NewPluginClicked => {
                 // Reset all fields to default
                 self.reset_to_new();
                 should_persist = true;
-                let _ = message_dialog("New plugin created. All fields have been reset.".to_string(), MessageLevel::Info);
+                let _ = message_dialog(
+                    "New plugin created. All fields have been reset.".to_string(),
+                    MessageLevel::Info,
+                );
             }
             MakerMessage::ChooseFileClicked(x) => {
                 let choose_file = async move {
@@ -874,20 +1028,35 @@ impl Maker {
                         ChooseFileType::LinuxLib => self.linux_lib = path,
                         ChooseFileType::DarwinExe => self.darwin_exe = path,
                         ChooseFileType::DarwinLib => self.darwin_lib = path,
-                        ChooseFileType::EncryptShellcodePlugin => {
-                            self.encrypt_shellcode_plugin = path
-                        }
-                        ChooseFileType::FormatEncryptedShellcodePlugin => {
-                            self.format_encrypted_shellcode_plugin = path
-                        }
-                        ChooseFileType::FormatUrlRemote => self.format_url_remote_plugin = path,
-                        ChooseFileType::UploadFinalShellcodeRemote => {
-                            self.upload_final_shellcode_remote_plugin = path
+                        ChooseFileType::MegaPluginWasm => {
+                            self.mega_plugin_wasm = path.clone();
+                            self.save_state();
+                            return Self::load_schema_task(path);
                         }
                     }
                     should_persist = true;
                 }
             }
+            MakerMessage::MegaPluginSchemaLoaded(result) => match result {
+                Ok((wasm_path, defaults, schema_fields)) => {
+                    let normalized_current =
+                        Self::maybe_expand_home_path(self.mega_plugin_wasm.trim())
+                            .to_string_lossy()
+                            .to_string();
+                    if self.mega_plugin_wasm == wasm_path || normalized_current == wasm_path {
+                        self.plugin_config_schema = schema_fields;
+                        self.plugin_config = Self::merge_config_with_schema(
+                            &defaults,
+                            &self.plugin_config_schema,
+                            self.apply_schema_defaults_on_open,
+                        );
+                        should_persist = true;
+                    }
+                }
+                Err(e) => {
+                    let _ = message_dialog(e, MessageLevel::Error);
+                }
+            },
             MakerMessage::B1nClicked => {
                 if open::that(env!("CARGO_PKG_HOMEPAGE")).is_err() {
                     let _ = message_dialog("Open home failed.".into(), MessageLevel::Error);
@@ -903,56 +1072,76 @@ impl Maker {
                 should_persist = true;
             }
             MakerMessage::KeyboardEvent(event) => {
-                if let Event::Keyboard(keyboard::Event::KeyPressed {
-                    key,
-                    modifiers,
-                    ..
-                }) = event
-                {
+                if let Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) = event {
                     match key {
                         Key::Named(keyboard::key::Named::Tab) => {
                             // Tab navigation is handled by the framework automatically
                         }
-                        Key::Character(ch) => {
-                            if modifiers.control() {
-                                match ch.as_str() {
-                                    "o" => {
-                                        return Task::perform(async {}, |_| MakerMessage::OpenB1nClicked);
-                                    }
-                                    "n" => {
-                                        return Task::perform(async {}, |_| MakerMessage::NewPluginClicked);
-                                    }
-                                    "g" => {
-                                        return Task::perform(async {}, |_| MakerMessage::GenerateClicked);
-                                    }
-                                    _ => {}
-                                }
+                        Key::Character(ch) if modifiers.control() => match ch.as_str() {
+                            "o" => {
+                                return Task::perform(async {}, |_| MakerMessage::OpenB1nClicked);
                             }
-                        }
+                            "n" => {
+                                return Task::perform(async {}, |_| MakerMessage::NewPluginClicked);
+                            }
+                            "g" => {
+                                return Task::perform(async {}, |_| MakerMessage::GenerateClicked);
+                            }
+                            _ => {}
+                        },
                         _ => {}
                     }
                 }
             }
             MakerMessage::FilesDropped(paths) => {
-                // Handle drag & drop files on the general area
                 for path in paths {
-                    let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
-                    
-                    match extension.to_lowercase().as_str() {
+                    let ext = path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+                    let path_str = path.to_string_lossy().to_string();
+                    match ext.as_str() {
                         "b1n" => {
-                            // Load .b1n plugin file
-                            let path_str = path.to_string_lossy().to_string();
                             return self.update(MakerMessage::OpenB1nDone(Ok(path_str)));
                         }
+                        "exe" => {
+                            self.windows_exe = path_str;
+                            should_persist = true;
+                        }
+                        "dll" => {
+                            self.windows_lib = path_str;
+                            should_persist = true;
+                        }
+                        "so" => {
+                            self.linux_lib = path_str;
+                            should_persist = true;
+                        }
+                        "dylib" => {
+                            self.darwin_lib = path_str;
+                            should_persist = true;
+                        }
+                        "wasm" => {
+                            self.mega_plugin_wasm = path_str.clone();
+                            self.save_state();
+                            return Self::load_schema_task(path_str);
+                        }
                         _ => {
-                            // For other files, we'll need context about which field to populate
-                            // For now, just show a helpful message
-                            let _ = message_dialog(
-                                format!("File dropped: {}. Please drag onto a specific input field to set its value.", 
-                                    path.file_name().unwrap_or_default().to_string_lossy()),
-                                MessageLevel::Info,
-                            );
-                            break;
+                            // Unknown extension: try to assign as Linux exe (most common
+                            // ELF executables have no extension), otherwise inform user.
+                            if ext.is_empty() {
+                                // No extension — heuristic: assign as Linux exe if empty
+                                self.linux_exe = path_str;
+                                should_persist = true;
+                            } else {
+                                let _ = message_dialog(
+                                    format!(
+                                        "Unknown file type '.{}'. Drag .exe → Windows Exe, .dll → Windows Lib, .so → Linux Lib, .dylib → Darwin Lib, .wasm → Module, no extension → Linux Exe.",
+                                        ext
+                                    ),
+                                    MessageLevel::Info,
+                                );
+                            }
                         }
                     }
                 }
@@ -967,14 +1156,26 @@ impl Maker {
                     ChooseFileType::LinuxLib => self.linux_lib = path_str,
                     ChooseFileType::DarwinExe => self.darwin_exe = path_str,
                     ChooseFileType::DarwinLib => self.darwin_lib = path_str,
-                    ChooseFileType::EncryptShellcodePlugin => self.encrypt_shellcode_plugin = path_str,
-                    ChooseFileType::FormatEncryptedShellcodePlugin => self.format_encrypted_shellcode_plugin = path_str,
-                    ChooseFileType::FormatUrlRemote => self.format_url_remote_plugin = path_str,
-                    ChooseFileType::UploadFinalShellcodeRemote => self.upload_final_shellcode_remote_plugin = path_str,
+                    ChooseFileType::MegaPluginWasm => {
+                        self.mega_plugin_wasm = path_str.clone();
+                        self.save_state();
+                        let _ = message_dialog(
+                            format!(
+                                "File set: {}",
+                                path.file_name().unwrap_or_default().to_string_lossy()
+                            ),
+                            MessageLevel::Info,
+                        );
+
+                        return Self::load_schema_task(path_str);
+                    }
                 }
                 should_persist = true;
                 let _ = message_dialog(
-                    format!("File set: {}", path.file_name().unwrap_or_default().to_string_lossy()),
+                    format!(
+                        "File set: {}",
+                        path.file_name().unwrap_or_default().to_string_lossy()
+                    ),
                     MessageLevel::Info,
                 );
             }
@@ -987,7 +1188,124 @@ impl Maker {
         Task::none()
     }
 
-    pub fn view(&self) -> Column<MakerMessage> {
+    fn render_config_rows(&self) -> iced::widget::Column<'_, MakerMessage> {
+        column(
+            self.plugin_config
+                .iter()
+                .enumerate()
+                .map(|(idx, (key, value))| {
+                    let field = self.schema_field(key);
+                    let mut config_row = row![].spacing(8).align_y(Vertical::Center);
+
+                    if let Some(schema_field) = field {
+                        let tag = if schema_field.required {
+                            "required"
+                        } else {
+                            "optional"
+                        };
+                        let mut label_col = column![text(format!("{} ({})", key, tag))];
+                        if !schema_field.description.is_empty() {
+                            label_col =
+                                label_col.push(text(&schema_field.description).size(11).style(
+                                    |theme: &Theme| {
+                                        let mut c = theme.palette().text;
+                                        c.a = 0.55;
+                                        text::Style { color: Some(c) }
+                                    },
+                                ));
+                        }
+                        config_row = config_row.push(label_col.width(Length::FillPortion(2)));
+                    } else {
+                        config_row = config_row.push(
+                            text_input("key", key)
+                                .on_input(move |x| MakerMessage::ConfigKeyChanged(idx, x))
+                                .width(Length::FillPortion(2)),
+                        );
+                    }
+
+                    match field.map(|f| f.field_type.as_str()) {
+                        Some("choice") => {
+                            let options = field.map(|f| f.options.clone()).unwrap_or_default();
+                            let selected = options.contains(value).then(|| value.clone());
+                            config_row = config_row.push(
+                                pick_list(options, selected, move |choice| {
+                                    MakerMessage::ConfigValueChanged(idx, choice)
+                                })
+                                .width(Length::FillPortion(3)),
+                            );
+                        }
+                        Some("boolean") => {
+                            let options = vec!["true".to_string(), "false".to_string()];
+                            let normalized = value.to_ascii_lowercase();
+                            let selected = (normalized == "true" || normalized == "false")
+                                .then_some(normalized);
+                            config_row = config_row.push(
+                                pick_list(options, selected, move |choice| {
+                                    MakerMessage::ConfigValueChanged(idx, choice)
+                                })
+                                .width(Length::FillPortion(3)),
+                            );
+                        }
+                        _ => {
+                            config_row = config_row.push(
+                                text_input("value", value)
+                                    .on_input(move |x| MakerMessage::ConfigValueChanged(idx, x))
+                                    .width(Length::FillPortion(3)),
+                            );
+                        }
+                    }
+
+                    if field
+                        .map(|f| {
+                            f.field_type.eq_ignore_ascii_case("file")
+                                || f.field_type.eq_ignore_ascii_case("file_base64")
+                                || f.field_type.eq_ignore_ascii_case("file_path")
+                        })
+                        .unwrap_or_else(|| Self::config_key_is_file_like(key))
+                    {
+                        config_row = config_row.push(
+                            button("Browse").on_press(MakerMessage::ConfigBrowseClicked(idx)),
+                        );
+                    }
+
+                    config_row =
+                        config_row.push(button("X").on_press(MakerMessage::RemoveConfigRow(idx)));
+
+                    let mut entry = column![config_row].spacing(2);
+                    if let Some(err) = Self::config_value_error(field, key, value) {
+                        entry = entry.push(text(err).size(11).style(|theme: &Theme| text::Style {
+                            color: Some(theme.extended_palette().danger.base.color),
+                        }));
+                    }
+
+                    entry.into()
+                })
+                .collect::<Vec<_>>(),
+        )
+        .spacing(6)
+    }
+
+    pub fn view(&self) -> Column<'_, MakerMessage> {
+        // Helper closure: renders a colored status indicator for a binary slot
+        let binary_status_text = |path: &str| -> iced::widget::Text<'static> {
+            match self.binary_placeholder_status(path) {
+                None => text("—").style(|theme: &Theme| text::Style {
+                    color: Some(theme.extended_palette().background.strong.text),
+                }),
+                Some((true, true)) => text("✓").style(|theme: &Theme| text::Style {
+                    color: Some(theme.extended_palette().success.base.color),
+                }),
+                Some((true, false)) => {
+                    text("⚠ missing size holder").style(|theme: &Theme| text::Style {
+                        color: Some(theme.extended_palette().danger.base.color),
+                    })
+                }
+                Some((false, _)) => text("⚠ missing prefix").style(|theme: &Theme| text::Style {
+                    color: Some(theme.extended_palette().danger.base.color),
+                }),
+            }
+        };
+
         let choose_button = || {
             button(
                 Svg::new(Handle::from_memory(include_bytes!(
@@ -998,6 +1316,9 @@ impl Maker {
             .style(style::button::secondary)
         };
 
+        let plugin_config_rows = self.render_config_rows();
+        let config_errors = self.config_errors();
+
         let maker = column![
             column![
                 text("Maker Workspace")
@@ -1005,11 +1326,6 @@ impl Maker {
                     .font(JETBRAINS_MONO_FONT)
                     .style(|theme: &Theme| text::Style {
                         color: Some(theme.extended_palette().primary.base.color),
-                    }),
-                text("Builder workflow: metadata -> binaries -> wasm plugins -> generate")
-                    .size(12)
-                    .style(|theme: &Theme| text::Style {
-                        color: Some(theme.extended_palette().background.weak.text),
                     }),
                 horizontal_rule(0),
             ]
@@ -1025,10 +1341,9 @@ impl Maker {
                 if let Some(ref path) = self.current_file_path {
                     row![
                         text("Current file: ").size(12),
-                        text(path).size(12)
-                            .style(|theme: &Theme| text::Style {
-                                color: Some(theme.extended_palette().primary.base.color),
-                            })
+                        text(path).size(12).style(|theme: &Theme| text::Style {
+                            color: Some(theme.extended_palette().primary.base.color),
+                        })
                     ]
                     .spacing(5)
                 } else {
@@ -1039,24 +1354,41 @@ impl Maker {
                     column![
                         text("Recent files:").size(12),
                         column(
-                            self.recent_files.iter().take(5).map(|path| {
-                                let filename = std::path::Path::new(path)
-                                    .file_name()
-                                    .unwrap_or_default()
-                                    .to_string_lossy()
-                                    .to_string();
-                                button(
-                                    row![
-                                        text("📄"),
-                                        text(filename).size(12)
-                                    ]
-                                    .spacing(5)
-                                    .align_y(Vertical::Center)
-                                )
-                                .style(button::text)
-                                .on_press(MakerMessage::OpenRecentFile(path.clone()))
-                                .into()
-                            }).collect::<Vec<_>>()
+                            self.recent_files
+                                .iter()
+                                .take(10)
+                                .map(|path| {
+                                    let p = std::path::Path::new(path);
+                                    let basename = p
+                                        .file_name()
+                                        .unwrap_or_default()
+                                        .to_string_lossy()
+                                        .to_string();
+                                    let parent = p
+                                        .parent()
+                                        .and_then(|pp| pp.file_name())
+                                        .map(|pp| pp.to_string_lossy().to_string())
+                                        .unwrap_or_default();
+                                    let label = if parent.is_empty() {
+                                        basename
+                                    } else {
+                                        format!("{} ({})", basename, parent)
+                                    };
+                                    let display = if label.len() > 50 {
+                                        format!("{}...", &label[..47])
+                                    } else {
+                                        label
+                                    };
+                                    button(
+                                        row![text("📄"), text(display).size(12)]
+                                            .spacing(5)
+                                            .align_y(Vertical::Center),
+                                    )
+                                    .style(button::text)
+                                    .on_press(MakerMessage::OpenRecentFile(path.clone()))
+                                    .into()
+                                })
+                                .collect::<Vec<_>>()
                         )
                         .spacing(2)
                     ]
@@ -1066,9 +1398,7 @@ impl Maker {
                 }
             ]
             .spacing(5),
-            text("General")
-                .font(JETBRAINS_MONO_FONT)
-                .size(14),
+            text("General").font(JETBRAINS_MONO_FONT).size(14),
             row![
                 column![
                     text("Plugin Name"),
@@ -1142,34 +1472,22 @@ impl Maker {
             ]
             .spacing(5)
             .align_x(Horizontal::Left),
-            text("Template Binaries")
-                .font(JETBRAINS_MONO_FONT)
-                .size(14),
+            text("Template Binaries").font(JETBRAINS_MONO_FONT).size(14),
             column![
                 text("Windows"),
                 row![
                     text("Exe:"),
-                    text_input(
-                        if self.windows_exe().is_empty() {
-                            "Required for Windows executable template"
-                        } else {
-                            self.windows_exe()
-                        }, 
-                        self.windows_exe()
-                    ).on_input(MakerMessage::WindowsExeChanged),
+                    text_input("windows.exe", self.windows_exe())
+                        .on_input(MakerMessage::WindowsExeChanged),
                     choose_button()
                         .on_press(MakerMessage::ChooseFileClicked(ChooseFileType::WindowsExe)),
+                    binary_status_text(self.windows_exe()),
                     text("Lib:"),
-                    text_input(
-                        if self.windows_lib().is_empty() {
-                            "Optional for library-based templates"
-                        } else {
-                            "Path to Windows .dll file (drag & drop or click browse)"
-                        }, 
-                        self.windows_lib()
-                    ).on_input(MakerMessage::WindowsLibChanged),
+                    text_input("windows.dll", self.windows_lib())
+                        .on_input(MakerMessage::WindowsLibChanged),
                     choose_button()
                         .on_press(MakerMessage::ChooseFileClicked(ChooseFileType::WindowsLib)),
+                    binary_status_text(self.windows_lib()),
                 ]
                 .align_y(Vertical::Center)
                 .spacing(10)
@@ -1179,27 +1497,17 @@ impl Maker {
                 text("Linux"),
                 row![
                     text("Exe:"),
-                    text_input(
-                        if self.linux_exe().is_empty() {
-                            "Select your compiled Linux executable (no extension needed)"
-                        } else {
-                            "Path to Linux executable (drag & drop or click browse)"
-                        }, 
-                        self.linux_exe()
-                    ).on_input(MakerMessage::LinuxExeChanged),
+                    text_input("linux executable", self.linux_exe())
+                        .on_input(MakerMessage::LinuxExeChanged),
                     choose_button()
                         .on_press(MakerMessage::ChooseFileClicked(ChooseFileType::LinuxExe)),
+                    binary_status_text(self.linux_exe()),
                     text("Lib:"),
-                    text_input(
-                        if self.linux_lib().is_empty() {
-                            "Select your compiled Linux .so library (for library-based templates)"
-                        } else {
-                            "Path to Linux .so library (drag & drop or click browse)"
-                        }, 
-                        self.linux_lib()
-                    ).on_input(MakerMessage::LinuxLibChanged),
+                    text_input("linux.so", self.linux_lib())
+                        .on_input(MakerMessage::LinuxLibChanged),
                     choose_button()
                         .on_press(MakerMessage::ChooseFileClicked(ChooseFileType::LinuxLib)),
+                    binary_status_text(self.linux_lib()),
                 ]
                 .align_y(Vertical::Center)
                 .spacing(10)
@@ -1209,132 +1517,69 @@ impl Maker {
                 text("Darwin"),
                 row![
                     text("Exe:"),
-                    text_input(
-                        if self.darwin_exe().is_empty() {
-                            "Select your compiled macOS executable (no extension needed)"
-                        } else {
-                            "Path to macOS executable (drag & drop or click browse)"
-                        }, 
-                        self.darwin_exe()
-                    ).on_input(MakerMessage::DarwinExeChanged),
+                    text_input("macOS executable", self.darwin_exe())
+                        .on_input(MakerMessage::DarwinExeChanged),
                     choose_button()
                         .on_press(MakerMessage::ChooseFileClicked(ChooseFileType::DarwinExe)),
+                    binary_status_text(self.darwin_exe()),
                     text("Lib:"),
-                    text_input(
-                        if self.darwin_lib().is_empty() {
-                            "Select your compiled macOS .dylib library (for library-based templates)"
-                        } else {
-                            "Path to macOS .dylib library (drag & drop or click browse)"
-                        }, 
-                        self.darwin_lib()
-                    ).on_input(MakerMessage::DarwinLibChanged),
+                    text_input("macOS.dylib", self.darwin_lib())
+                        .on_input(MakerMessage::DarwinLibChanged),
                     choose_button()
                         .on_press(MakerMessage::ChooseFileClicked(ChooseFileType::DarwinLib)),
+                    binary_status_text(self.darwin_lib()),
                 ]
                 .align_y(Vertical::Center)
                 .spacing(10)
             ]
             .align_x(Horizontal::Left),
-            text("WASM Pipeline")
-                .font(JETBRAINS_MONO_FONT)
-                .size(14),
-            row![
-                column![column![
-                    text("Encrypt Shellcode Plug-in"),
-                    row![
-                        text_input(
-                            if self.encrypt_shellcode_plugin().is_empty() {
-                                "Select your encrypt plugin .wasm file (optional for encrypted shellcode)"
-                            } else {
-                                "Path to encrypt plugin .wasm file (drag & drop or click browse)"
-                            }, 
-                            self.encrypt_shellcode_plugin()
-                        ).on_input(MakerMessage::EncryptShllcodePluginChanged),
-                        choose_button().on_press(MakerMessage::ChooseFileClicked(
-                            ChooseFileType::EncryptShellcodePlugin
-                        ))
-                    ]
-                    .align_y(Vertical::Center)
-                    .spacing(10),
+            text("WASM Pipeline").font(JETBRAINS_MONO_FONT).size(14),
+            column![
+                text("Module (.wasm)"),
+                row![
+                    text_input("module.wasm", self.mega_plugin_wasm())
+                        .on_input(MakerMessage::MegaPluginWasmChanged),
+                    choose_button().on_press(MakerMessage::ChooseFileClicked(
+                        ChooseFileType::MegaPluginWasm
+                    ))
                 ]
-                .align_x(Horizontal::Left)]
-                .push_maybe(match self.shellcode_save_type() {
-                    ShellcodeSaveType::Local => None,
-                    ShellcodeSaveType::Remote => Some(column![
-                        text("Format Url Remote Plug-in"),
-                    row![
-                        text_input(
-                            if self.format_url_remote_plugin().is_empty() {
-                                "Select format URL plugin .wasm file (optional for remote type)"
-                            } else {
-                                "Path to format URL plugin .wasm file"
-                            }, 
-                            self.format_url_remote_plugin()
-                        ).on_input(MakerMessage::FormatUrlRemotePluginChanged),
-                            choose_button().on_press(MakerMessage::ChooseFileClicked(
-                                ChooseFileType::FormatUrlRemote
-                            ))
-                        ]
-                        .align_y(Vertical::Center)
-                        .spacing(10)
-                    ]),
-                })
-                .width(Length::FillPortion(1))
-                .align_x(Horizontal::Center),
-                column![column![
-                    text("Format Encrypted Shellcode Plug-in"),
-                    row![
-                        text_input(
-                            if self.format_encrypted_shellcode_plugin().is_empty() {
-                                "Select format encrypted shellcode plugin .wasm file (optional)"
-                            } else {
-                                "Path to format encrypted shellcode plugin .wasm file"
-                            }, 
-                            self.format_encrypted_shellcode_plugin()
-                        ).on_input(MakerMessage::FormatEncryptedShellcodePluginChanged),
-                        choose_button().on_press(MakerMessage::ChooseFileClicked(
-                            ChooseFileType::FormatEncryptedShellcodePlugin
-                        ))
-                    ]
-                    .align_y(Vertical::Center)
-                    .spacing(10),
-                ]
-                .align_x(Horizontal::Left)]
-                .push_maybe(match self.shellcode_save_type() {
-                    ShellcodeSaveType::Local => None,
-                    ShellcodeSaveType::Remote => Some(
-                        column![
-                            text("Upload Final Shellcode Remote Plug-in"),
-                            row![
-                                text_input("/path/to/upload_plugin.wasm", self.upload_final_shellcode_remote_plugin())
-                                    .on_input(
-                                        MakerMessage::UploadFinalShellcodeRemotePluginChanged
-                                    ),
-                                choose_button().on_press(MakerMessage::ChooseFileClicked(
-                                    ChooseFileType::UploadFinalShellcodeRemote
-                                ))
-                            ]
-                            .align_y(Vertical::Center)
-                            .spacing(10)
-                        ]
-                        .align_x(Horizontal::Left)
-                    ),
-                })
-                .width(Length::FillPortion(1))
-                .align_x(Horizontal::Center)
+                .align_y(Vertical::Center)
+                .spacing(10),
+                text("Module Config (required/optional)"),
+                checkbox("Use defaults on open", self.apply_schema_defaults_on_open,)
+                    .on_toggle(MakerMessage::ApplySchemaDefaultsOnOpenChanged),
+                plugin_config_rows,
+                if !config_errors.is_empty() {
+                    text(format!(
+                        "{} invalid config entr{}",
+                        config_errors.len(),
+                        if config_errors.len() == 1 { "y" } else { "ies" }
+                    ))
+                    .size(11)
+                    .style(|theme: &Theme| text::Style {
+                        color: Some(theme.extended_palette().danger.base.color),
+                    })
+                } else {
+                    text("").size(1)
+                },
+                button("Add Row").on_press(MakerMessage::AddConfigRow),
             ]
-            .align_y(Vertical::Center)
-            .spacing(10),
+            .align_x(Horizontal::Left)
+            .spacing(8),
             column![
                 text("Description"),
                 text_editor(self.desc())
                     .on_action(MakerMessage::DescAction)
-                    .height(Length::Fill)
+                    .height(150)
             ]
             .align_x(Horizontal::Left),
-            column![row![
-                button("Generate").on_press(MakerMessage::GenerateClicked)
-            ]]
+            column![row![button("Generate").on_press_maybe(
+                if config_errors.is_empty() {
+                    Some(MakerMessage::GenerateClicked)
+                } else {
+                    None
+                }
+            )]]
             .align_x(Horizontal::Center)
             .width(Length::Fill),
         ]
@@ -1342,7 +1587,13 @@ impl Maker {
         .padding(20)
         .spacing(10);
 
-        let version = text(format!("PumpBin  v{}", self.pumpbin_version()))
+        let footer = self.render_footer();
+
+        column![scrollable(maker).height(Length::Fill), footer].align_x(Horizontal::Center)
+    }
+
+    fn render_footer(&self) -> iced::widget::Column<'_, MakerMessage> {
+        let version = text(format!("PumpBin  v{}", self.pumpbin_version()))
             .color(self.theme().extended_palette().primary.base.color);
 
         let b1n = button(
@@ -1355,6 +1606,7 @@ impl Maker {
         )
         .style(button::text)
         .on_press(MakerMessage::B1nClicked);
+
         let github = button(
             Svg::new(Handle::from_memory(include_bytes!(
                 "../assets/svg/github.svg"
@@ -1372,17 +1624,12 @@ impl Maker {
             MakerMessage::ThemeChanged,
         );
 
-        let footer = column![
+        column![
             horizontal_rule(0),
             row![
-                column![
-                    version,
-                    text("F1: About • Ctrl+O: Open • Ctrl+N: New (Maker) • Ctrl+G: Generate • Ctrl+Shift+A: Add Plugin • Ctrl+K: Clear • Drag & Drop: Files")
-                        .size(10)
-                        .color(self.theme().extended_palette().background.base.text)
-                ]
-                .width(Length::Fill)
-                .align_x(Horizontal::Left),
+                column![version]
+                    .width(Length::Fill)
+                    .align_x(Horizontal::Left),
                 column![row![b1n, github].align_y(Vertical::Center)]
                     .width(Length::Shrink)
                     .align_x(Horizontal::Center),
@@ -1393,9 +1640,7 @@ impl Maker {
             .padding([0, 20])
             .align_y(Vertical::Center)
         ]
-        .align_x(Horizontal::Center);
-
-        column![maker, footer].align_x(Horizontal::Center)
+        .align_x(Horizontal::Center)
     }
 
     pub fn theme(&self) -> Theme {

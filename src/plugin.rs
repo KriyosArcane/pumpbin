@@ -6,7 +6,7 @@ use std::{
     sync::OnceLock,
 };
 
-use anyhow::{anyhow, bail};
+use anyhow;
 use bincode::{decode_from_slice, encode_to_vec, Decode, Encode};
 use capnp::{
     io::Write,
@@ -15,15 +15,7 @@ use capnp::{
 };
 use flate2::Compression;
 
-use crate::{
-    plugin_capnp,
-    plugin_system::{
-        run_plugin, EncryptShellcodeInput, EncryptShellcodeOutput, FormatEncryptedShellcodeInput,
-        FormatEncryptedShellcodeOutput, FormatUrlRemoteInput, FormatUrlRemoteOutput, Pass,
-        UploadFinalShellcodeRemoteInput, UploadFinalShellcodeRemoteOutput,
-    },
-    utils, BinaryType, Platform, ShellcodeSaveType,
-};
+use crate::{plugin_capnp, utils, BinaryType, Platform, ShellcodeSaveType};
 
 const BINCODE_PLUGINS_CONFIG: bincode::config::Configuration = bincode::config::standard();
 pub static CONFIG_FILE_PATH: OnceLock<PathBuf> = OnceLock::new();
@@ -72,6 +64,58 @@ impl PluginReplace {
 
     pub fn max_len(&self) -> usize {
         self.max_len as usize
+    }
+
+    /// Confirm that a candidate template binary contains every placeholder
+    /// this replace-config will look for at generate-time. Used by both the
+    /// Maker GUI (preflight before saving a .b1n) and the CLI `create-b1n`
+    /// subcommand (preflight before encoding). Pre-1.1.3 the Maker enforced
+    /// this and the CLI did not, producing silently-broken .b1n files that
+    /// failed only later at `generate` time.
+    ///
+    /// Local mode requires both `src_prefix` and `size_holder` to be present
+    /// in the template. Remote mode only requires `src_prefix` (the URL is
+    /// substituted into the same slot at runtime).
+    pub fn preflight_template(&self, template: &[u8]) -> anyhow::Result<()> {
+        if memchr::memmem::find(template, &self.src_prefix).is_none() {
+            return Err(crate::error::PumpBinError::PlaceholderNotFound {
+                holder: String::from_utf8_lossy(&self.src_prefix).into_owned(),
+            }
+            .into());
+        }
+
+        // Local mode also needs the size_holder. Remote mode skips it (the
+        // URL byte count is unbounded in the placeholder slot).
+        if let Some(holder) = &self.size_holder {
+            if memchr::memmem::find(template, holder).is_none() {
+                return Err(crate::error::PumpBinError::PlaceholderNotFound {
+                    holder: String::from_utf8_lossy(holder).into_owned(),
+                }
+                .into());
+            }
+        }
+        Ok(())
+    }
+
+    /// Measure the contiguous run of constant padding bytes that follows
+    /// `src_prefix` in `template`. Returns `None` if the prefix isn't
+    /// present. Used by `create-b1n` to auto-detect a sensible `max_len`
+    /// — the default of 4096 was wrong for ~every real loader, which
+    /// allocates 1 MiB+ of placeholder room.
+    ///
+    /// Algorithm: locate `src_prefix`, read the byte immediately after,
+    /// then count how many consecutive copies of that byte follow. Works
+    /// regardless of which fill byte the template author chose (`'\0'`,
+    /// `'0'`, `0xCC`, etc.) as long as it's a single repeating value.
+    pub fn measure_placeholder_capacity(&self, template: &[u8]) -> Option<usize> {
+        let prefix_at = memchr::memmem::find(template, &self.src_prefix)?;
+        let region_start = prefix_at + self.src_prefix.len();
+        let pad = *template.get(region_start)?;
+        let mut end = region_start;
+        while end < template.len() && template[end] == pad {
+            end += 1;
+        }
+        Some(end - region_start)
     }
 }
 
@@ -125,7 +169,7 @@ pub struct PluginBins {
 }
 
 impl PluginBins {
-    pub fn supported_plaforms(&self) -> Vec<Platform> {
+    pub fn supported_platforms(&self) -> Vec<Platform> {
         let mut platforms = Vec::default();
         if self.windows().is_platform_supported() {
             platforms.push(Platform::Windows);
@@ -140,16 +184,16 @@ impl PluginBins {
         platforms
     }
 
-    pub fn get_that_binary(&self, platform: Platform, bin_type: BinaryType) -> Vec<u8> {
-        let platform = match platform {
+    pub fn get_that_binary(&self, platform: Platform, bin_type: BinaryType) -> Option<Vec<u8>> {
+        let platform_bins = match platform {
             Platform::Windows => self.windows(),
             Platform::Linux => self.linux(),
             Platform::Darwin => self.darwin(),
         };
 
         match bin_type {
-            BinaryType::Executable => platform.executable().unwrap().to_vec(),
-            BinaryType::DynamicLibrary => platform.dynamic_library().unwrap().to_vec(),
+            BinaryType::Executable => platform_bins.executable().cloned(),
+            BinaryType::DynamicLibrary => platform_bins.dynamic_library().cloned(),
         }
     }
 }
@@ -174,62 +218,162 @@ pub struct PluginPlugins {
     pub format_encrypted_shellcode: Option<Vec<u8>>,
     pub format_url_remote: Option<Vec<u8>>,
     pub upload_final_shellcode_remote: Option<Vec<u8>>,
+    pub plugin_config: Vec<(String, String)>,
+    pub modules: Vec<Vec<u8>>,
 }
 
 impl PluginPlugins {
-    pub fn run_encrypt_shellcode(&self, path: &Path) -> anyhow::Result<EncryptShellcodeOutput> {
+    #[tracing::instrument(skip(self, runtime_config), fields(path = %path.display(), modules_count = self.modules().len()))]
+    pub fn run_encrypt_shellcode(
+        &self,
+        path: &Path,
+        runtime_config: Option<&std::collections::BTreeMap<String, String>>,
+    ) -> anyhow::Result<crate::plugin_system::EncryptShellcodeOutput> {
         let shellcode = fs::read(path)?;
-        Ok(if let Some(wasm) = self.encrypt_shellcode() {
-            let input = EncryptShellcodeInput { shellcode };
-            let res = run_plugin(wasm, "encrypt_shellcode", &input)?;
-            serde_json::from_slice(res.as_slice())?
-        } else {
-            EncryptShellcodeOutput {
-                encrypted: shellcode,
-                ..Default::default()
+        let input = crate::plugin_system::EncryptShellcodeInput {
+            shellcode: shellcode.clone(),
+        };
+
+        if let Some(res) = crate::plugin_system::EventManager::fire(
+            self.modules(),
+            "encrypt_shellcode",
+            &input,
+            runtime_config,
+        )? {
+            return Ok(res);
+        }
+
+        // Backwards compatibility with single WASM field
+        if let Some(wasm) = self.encrypt_shellcode() {
+            if let Some(res) =
+                crate::plugin_system::run_plugin(wasm, "encrypt_shellcode", &input, runtime_config)?
+            {
+                return Ok(serde_json::from_slice(res.as_slice())?);
             }
+        }
+
+        Ok(crate::plugin_system::EncryptShellcodeOutput {
+            encrypted: shellcode,
+            ..Default::default()
         })
     }
 
+    #[tracing::instrument(skip(self, shellcode, runtime_config), fields(shellcode_len = shellcode.len()))]
     pub fn run_format_encrypted_shellcode(
         &self,
         shellcode: &[u8],
-    ) -> anyhow::Result<FormatEncryptedShellcodeOutput> {
+        runtime_config: Option<&std::collections::BTreeMap<String, String>>,
+    ) -> anyhow::Result<crate::plugin_system::FormatEncryptedShellcodeOutput> {
         let shellcode = shellcode.to_owned();
-        Ok(if let Some(wasm) = self.format_encrypted_shellcode() {
-            let input = FormatEncryptedShellcodeInput { shellcode };
-            let res = run_plugin(wasm, "format_encrypted_shellcode", &input)?;
-            serde_json::from_slice(res.as_slice())?
-        } else {
-            FormatEncryptedShellcodeOutput {
-                formated_shellcode: shellcode,
+        let input = crate::plugin_system::FormatEncryptedShellcodeInput {
+            shellcode: shellcode.clone(),
+        };
+
+        if let Some(res) = crate::plugin_system::EventManager::fire(
+            self.modules(),
+            "format_encrypted_shellcode",
+            &input,
+            runtime_config,
+        )? {
+            return Ok(res);
+        }
+
+        if let Some(wasm) = self.format_encrypted_shellcode() {
+            if let Some(res) = crate::plugin_system::run_plugin(
+                wasm,
+                "format_encrypted_shellcode",
+                &input,
+                runtime_config,
+            )? {
+                return Ok(serde_json::from_slice(res.as_slice())?);
             }
+        }
+
+        Ok(crate::plugin_system::FormatEncryptedShellcodeOutput {
+            formatted_shellcode: shellcode,
         })
     }
 
-    pub fn run_format_url_remote(&self, url: &str) -> anyhow::Result<FormatUrlRemoteOutput> {
+    pub fn run_format_url_remote(
+        &self,
+        url: &str,
+        runtime_config: Option<&std::collections::BTreeMap<String, String>>,
+    ) -> anyhow::Result<crate::plugin_system::FormatUrlRemoteOutput> {
         let url = url.to_owned();
-        Ok(if let Some(wasm) = self.format_url_remote() {
-            let input = FormatUrlRemoteInput { url };
-            let res = run_plugin(wasm, "format_url_remote", &input)?;
-            serde_json::from_slice(res.as_slice())?
-        } else {
-            FormatUrlRemoteOutput { formated_url: url }
-        })
+        let input = crate::plugin_system::FormatUrlRemoteInput { url: url.clone() };
+
+        if let Some(res) = crate::plugin_system::EventManager::fire(
+            self.modules(),
+            "format_url_remote",
+            &input,
+            runtime_config,
+        )? {
+            return Ok(res);
+        }
+
+        if let Some(wasm) = self.format_url_remote() {
+            if let Some(res) =
+                crate::plugin_system::run_plugin(wasm, "format_url_remote", &input, runtime_config)?
+            {
+                return Ok(serde_json::from_slice(res.as_slice())?);
+            }
+        }
+
+        Ok(crate::plugin_system::FormatUrlRemoteOutput { formatted_url: url })
     }
 
     pub fn run_upload_final_shellcode_remote(
         &self,
         final_shellcode: &[u8],
-    ) -> anyhow::Result<UploadFinalShellcodeRemoteOutput> {
+        runtime_config: Option<&std::collections::BTreeMap<String, String>>,
+    ) -> anyhow::Result<crate::plugin_system::UploadFinalShellcodeRemoteOutput> {
         let final_shellcode = final_shellcode.to_owned();
-        Ok(if let Some(wasm) = self.upload_final_shellcode_remote() {
-            let input = UploadFinalShellcodeRemoteInput { final_shellcode };
-            let res = run_plugin(wasm, "upload_final_shellcode_remote", &input)?;
-            serde_json::from_slice(res.as_slice())?
-        } else {
-            UploadFinalShellcodeRemoteOutput::default()
-        })
+        let input = crate::plugin_system::UploadFinalShellcodeRemoteInput {
+            final_shellcode: final_shellcode.clone(),
+        };
+
+        if let Some(res) = crate::plugin_system::EventManager::fire(
+            self.modules(),
+            "upload_final_shellcode_remote",
+            &input,
+            runtime_config,
+        )? {
+            return Ok(res);
+        }
+
+        if let Some(wasm) = self.upload_final_shellcode_remote() {
+            if let Some(res) = crate::plugin_system::run_plugin(
+                wasm,
+                "upload_final_shellcode_remote",
+                &input,
+                runtime_config,
+            )? {
+                return Ok(serde_json::from_slice(res.as_slice())?);
+            }
+        }
+
+        Ok(crate::plugin_system::UploadFinalShellcodeRemoteOutput::default())
+    }
+
+    /// Run all `post_binary` hooks: WASM modules are chained in order, then
+    /// Chain every post_binary module in order, returning the final bytes.
+    ///
+    /// Pre-1.1.2 this method also ran a host-side `host_self_sign` path that
+    /// generated an ephemeral self-signed RSA cert on every build and shelled
+    /// out to `openssl` + `osslsigncode`. That path was deleted because (1) a
+    /// fresh per-build cert pollutes operator OPSEC with a unique signer
+    /// identity, (2) the cert never chained to a real CA so it added no trust
+    /// value, and (3) embedding a signing tool inside the core forced
+    /// `openssl`/`osslsigncode` as hard host dependencies. Signing now lives in
+    /// dedicated post_binary plugins (osslsigncode, signtool, blob-steal)
+    /// shipped under `plugin-examples/signers/` from v1.2.0.
+    #[tracing::instrument(skip(self, binary, runtime_config), fields(binary_len = binary.len(), modules_count = self.modules().len()))]
+    pub fn run_post_binary(
+        &self,
+        binary: Vec<u8>,
+        runtime_config: Option<&std::collections::BTreeMap<String, String>>,
+    ) -> anyhow::Result<Vec<u8>> {
+        crate::plugin_system::EventManager::fire_post_binary(self.modules(), binary, runtime_config)
     }
 }
 
@@ -250,6 +394,14 @@ impl PluginPlugins {
         self.upload_final_shellcode_remote.as_ref()
     }
 
+    pub fn plugin_config(&self) -> &[(String, String)] {
+        &self.plugin_config
+    }
+
+    pub fn plugin_config_mut(&mut self) -> &mut Vec<(String, String)> {
+        &mut self.plugin_config
+    }
+
     pub fn encrypt_shellcode_mut(&mut self) -> &mut Option<Vec<u8>> {
         &mut self.encrypt_shellcode
     }
@@ -264,6 +416,14 @@ impl PluginPlugins {
 
     pub fn upload_final_shellcode_remote_mut(&mut self) -> &mut Option<Vec<u8>> {
         &mut self.upload_final_shellcode_remote
+    }
+
+    pub fn modules(&self) -> &[Vec<u8>] {
+        &self.modules
+    }
+
+    pub fn modules_mut(&mut self) -> &mut Vec<Vec<u8>> {
+        &mut self.modules
     }
 }
 
@@ -342,6 +502,25 @@ impl Plugin {
                 upload_final_shellcode_remote: check_empty(
                     plugins.get_upload_final_shellcode_remote()?,
                 ),
+                plugin_config: {
+                    let entries = plugins.get_config_entries()?;
+                    let mut config = Vec::new();
+                    for entry in entries {
+                        config.push((
+                            entry.get_key()?.to_string()?,
+                            entry.get_value()?.to_string()?,
+                        ));
+                    }
+                    config
+                },
+                modules: {
+                    let mods = plugins.get_modules()?;
+                    let mut decoded = Vec::new();
+                    for m in mods {
+                        decoded.push(m?.to_vec());
+                    }
+                    decoded
+                },
             },
         })
     }
@@ -416,6 +595,24 @@ impl Plugin {
             plugins.set_upload_final_shellcode_remote(plugin);
         }
 
+        let config = plugin_plugins.plugin_config();
+        if !config.is_empty() {
+            let mut entries = plugins.reborrow().init_config_entries(config.len() as u32);
+            for (i, (k, v)) in config.iter().enumerate() {
+                let mut entry = entries.reborrow().get(i as u32);
+                entry.set_key(k);
+                entry.set_value(v);
+            }
+        }
+
+        let mods = plugin_plugins.modules();
+        if !mods.is_empty() {
+            let mut modules_list = plugins.reborrow().init_modules(mods.len() as u32);
+            for (i, m) in mods.iter().enumerate() {
+                modules_list.set(i as u32, m);
+            }
+        }
+
         let mut buf = Vec::new();
         serialize_packed::write_message(&mut buf, &message)?;
 
@@ -434,38 +631,63 @@ impl Plugin {
         }
     }
 
+    /// `shellcode_src` is skipped because for Local mode it's a path that
+    /// may identify the operator's working directory; for Remote mode it
+    /// may be an attacker-controlled URL. The save_type and any failure
+    /// reason still surface via the returned error.
+    #[tracing::instrument(skip(self, shellcode_src), fields(plugin = %self.info().plugin_name(), save_type = ?self.save_type()))]
     pub fn validate_shellcode_source(&self, shellcode_src: &str) -> anyhow::Result<()> {
+        use crate::error::PumpBinError;
+
         if shellcode_src.trim().is_empty() {
-            bail!("Shellcode source cannot be empty.");
+            return Err(PumpBinError::ShellcodeSourceEmpty.into());
         }
 
         match self.save_type() {
             ShellcodeSaveType::Local => {
                 let path = Path::new(shellcode_src);
                 if path.exists().not() {
-                    bail!("Shellcode file not found: {}", shellcode_src);
+                    return Err(PumpBinError::ShellcodeFileNotFound {
+                        path: shellcode_src.to_string(),
+                    }
+                    .into());
                 }
 
-                let data = fs::read(path).map_err(|e| {
-                    anyhow!("Failed to read shellcode file: {}: {}", shellcode_src, e)
-                })?;
+                // Wrap the read in SecretBuf so the heap bytes are zeroized
+                // when this scope exits — even on the success path where we
+                // only used the bytes to check for the placeholder marker.
+                let data: crate::secret::SecretBuf = fs::read(path)
+                    .map_err(|source| PumpBinError::ShellcodeReadFailed {
+                        path: shellcode_src.to_string(),
+                        source,
+                    })?
+                    .into();
 
                 if data.is_empty() {
-                    bail!("Shellcode file is empty: {}", shellcode_src);
+                    return Err(PumpBinError::ShellcodeFileEmpty {
+                        path: shellcode_src.to_string(),
+                    }
+                    .into());
                 }
 
                 if data
                     .windows(b"$$SHELLCODE$$".len())
                     .any(|w| w == b"$$SHELLCODE$$")
                 {
-                    bail!("Shellcode file contains placeholder: {}", shellcode_src);
+                    return Err(PumpBinError::ShellcodeContainsPlaceholder {
+                        path: shellcode_src.to_string(),
+                    }
+                    .into());
                 }
             }
             ShellcodeSaveType::Remote => {
                 if shellcode_src.starts_with("http://").not()
                     && shellcode_src.starts_with("https://").not()
                 {
-                    bail!("Remote shellcode source must start with http:// or https://");
+                    return Err(PumpBinError::RemoteUrlInvalidScheme {
+                        url: shellcode_src.to_string(),
+                    }
+                    .into());
                 }
             }
         }
@@ -473,11 +695,14 @@ impl Plugin {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self), fields(plugin = %self.info().plugin_name()))]
     pub fn validate_for_generation(
         &self,
         platform: Platform,
         bin_type: BinaryType,
     ) -> anyhow::Result<()> {
+        use crate::error::PumpBinError;
+
         let save_type = self.save_type();
 
         let platform_bins = match platform {
@@ -492,101 +717,152 @@ impl Plugin {
         };
 
         if !binary_exists {
-            bail!(
-                "Binary for {} ({}) is not included in this plugin.",
-                platform,
-                bin_type
-            );
+            return Err(PumpBinError::BinaryNotInPlugin {
+                platform: platform.to_string(),
+                bin_type: bin_type.to_string(),
+            }
+            .into());
         }
 
         if save_type == ShellcodeSaveType::Local && self.replace().size_holder().is_none() {
-            bail!("Local save type requires a size holder, but none is defined.");
+            return Err(PumpBinError::LocalRequiresSizeHolder.into());
         }
 
         if self.replace().max_len() == 0 {
-            bail!("Maximum shellcode length cannot be zero.");
+            return Err(PumpBinError::MaxLenZero.into());
         }
 
         Ok(())
     }
 
+    /// Inject shellcode into a binary template and run all post-processing modules.
+    ///
+    /// Takes ownership of `bin` so that `post_binary` modules can resize it,
+    /// and returns the fully-processed binary bytes.
+    ///
+    /// `#[instrument]`: every shellcode/secret argument is in `skip(...)` to
+    /// keep the JSON log file free of shellcode bytes, Pass holder/replace
+    /// values, and runtime config (which often contains keys/passwords).
+    /// Only metadata that's safe to leak — plugin name, save_type, binary
+    /// length — is logged.
+    #[tracing::instrument(
+        skip(self, bin, shellcode_src, pass, runtime_config),
+        fields(
+            plugin = %self.info().plugin_name(),
+            bin_len = bin.len(),
+            pass_count = pass.len(),
+        ),
+    )]
     pub fn replace_binary(
         &self,
-        bin: &mut [u8],
+        mut bin: Vec<u8>,
         shellcode_src: String,
-        mut pass: Vec<Pass>,
-    ) -> anyhow::Result<()> {
+        mut pass: Vec<crate::plugin_system::Pass>,
+        runtime_config: Option<&std::collections::BTreeMap<String, String>>,
+    ) -> anyhow::Result<Vec<u8>> {
         let save_type = self.save_type();
 
-        // replace shellcode src
-        let shellcode_src = match save_type {
+        // Resolve and process shellcode source
+        let shellcode_bytes = match save_type {
             ShellcodeSaveType::Local => {
                 let path = Path::new(&shellcode_src);
-                let output = self.plugins().run_encrypt_shellcode(path)?;
-                pass = output.pass().to_vec();
+                let output = self.plugins().run_encrypt_shellcode(path, runtime_config)?;
+
+                // Merge plugin-supplied Pass entries with caller-supplied ones.
+                // Policy: caller wins on holder collision. Rationale: an operator
+                // who pre-encrypted in the GUI and passed the resulting Pass list
+                // has already committed to specific replacement bytes; re-running
+                // encrypt_shellcode would generate a fresh key and silently
+                // invalidate their plaintext shellcode. (Pre-1.1.2 this method
+                // unconditionally clobbered `pass` with plugin output, dropping
+                // any caller-supplied entries.)
+                let caller_holders: std::collections::HashSet<Vec<u8>> =
+                    pass.iter().map(|p| p.holder.clone()).collect();
+                for p in output.pass() {
+                    if !caller_holders.contains(&p.holder) {
+                        pass.push(p.clone());
+                    }
+                }
 
                 let final_shellcode = self
                     .plugins()
-                    .run_format_encrypted_shellcode(output.encrypted())?;
+                    .run_format_encrypted_shellcode(output.encrypted(), runtime_config)?;
 
-                final_shellcode.formated_shellcode().to_vec()
+                final_shellcode.formatted_shellcode().to_vec()
             }
             ShellcodeSaveType::Remote => {
-                let mut shellcode_src = self
+                let mut src = self
                     .plugins()
-                    .run_format_url_remote(&shellcode_src)?
-                    .formated_url()
+                    .run_format_url_remote(&shellcode_src, runtime_config)?
+                    .formatted_url()
                     .as_bytes()
                     .to_vec();
-                shellcode_src.push(b'\0');
-
-                shellcode_src
+                src.push(b'\0');
+                src
             }
         };
 
-        if shellcode_src.len() > self.replace().max_len() {
-            bail!(
-                "{} too long.",
-                match save_type {
+        if shellcode_bytes.len() > self.replace().max_len() {
+            return Err(crate::error::PumpBinError::ShellcodeTooLong {
+                kind: match save_type {
                     ShellcodeSaveType::Local => "Shellcode",
-                    ShellcodeSaveType::Remote => "Shellcode Url",
-                }
-            );
+                    ShellcodeSaveType::Remote => "Shellcode URL",
+                },
+                got: shellcode_bytes.len(),
+                max: self.replace().max_len(),
+            }
+            .into());
         }
 
         utils::replace(
-            bin,
+            &mut bin,
             self.replace().src_prefix(),
-            shellcode_src.as_slice(),
+            shellcode_bytes.as_slice(),
             self.replace().max_len(),
         )?;
 
-        // replace pass
-        for pass in pass {
-            let holder = pass.holder();
-            let replace_by = pass.replace_by();
-
-            utils::replace(bin, holder, replace_by, holder.len())?;
+        // Apply Pass replacements (encryption keys, nonces, etc.)
+        for p in pass {
+            utils::replace(&mut bin, p.holder(), p.replace_by(), p.holder().len())?;
         }
 
-        // replace size_holder
+        // Embed shellcode byte-count for local loaders
         if save_type == ShellcodeSaveType::Local {
             let size_holder = self.replace().size_holder().unwrap();
-            let shellcode_len_bytes = shellcode_src.len().to_string().as_bytes().to_vec();
+            let len_str = shellcode_bytes.len().to_string();
+            let len_bytes = len_str.as_bytes();
 
-            if shellcode_len_bytes.len() > size_holder.len() {
-                bail!("Shellcode size bytes too long.");
+            if len_bytes.len() > size_holder.len() {
+                return Err(crate::error::PumpBinError::SizeStringTooLong {
+                    got: len_bytes.len(),
+                    holder_len: size_holder.len(),
+                }
+                .into());
             }
 
-            let mut size_bytes: Vec<u8> = iter::repeat(b'0')
-                .take(size_holder.len() - shellcode_len_bytes.len())
-                .collect();
-            size_bytes.extend_from_slice(shellcode_len_bytes.as_slice());
+            let mut size_bytes: Vec<u8> =
+                iter::repeat_n(b'0', size_holder.len() - len_bytes.len()).collect();
+            size_bytes.extend_from_slice(len_bytes);
 
-            utils::replace(bin, size_holder, size_bytes.as_slice(), size_holder.len())?;
+            utils::replace(
+                &mut bin,
+                size_holder,
+                size_bytes.as_slice(),
+                size_holder.len(),
+            )?;
         }
 
-        Ok(())
+        // Run post_binary modules (signing, obfuscation, etc.)
+        bin = self.plugins().run_post_binary(bin, runtime_config)?;
+
+        // Recompute PE CheckSum if this output is a PE. Without this,
+        // every stamped EXE keeps the template's stale CheckSum, which
+        // (a) makes `pumpbin-cli verify` fail on PumpBin's own output,
+        // (b) is a strong tamper signal for stock Windows tooling and
+        // AV. No-op for non-PE outputs (ELF, Mach-O).
+        utils::recompute_pe_checksum(&mut bin);
+
+        Ok(bin)
     }
 }
 
@@ -616,27 +892,33 @@ impl Plugin {
 pub struct Plugins(HashMap<String, Vec<u8>>);
 
 impl Plugins {
-    pub fn reade_plugins() -> anyhow::Result<Plugins> {
-        let plugins_path = CONFIG_FILE_PATH
-            .get()
-            .ok_or(anyhow!("Get config file path failed."))?;
+    pub fn read_plugins() -> anyhow::Result<Plugins> {
+        let plugins_path =
+            CONFIG_FILE_PATH
+                .get()
+                .ok_or(crate::error::PumpBinError::ConfigPathUnavailable {
+                    what: "CONFIG_FILE_PATH was never initialized",
+                })?;
 
         let buf = fs::read(plugins_path)?;
         let (plugins, _) = decode_from_slice(buf.as_slice(), BINCODE_PLUGINS_CONFIG)?;
         Ok(plugins)
     }
 
-    pub fn uptade_plugins(&self) -> anyhow::Result<()> {
+    pub fn update_plugins(&self) -> anyhow::Result<()> {
         let buf = encode_to_vec(self, BINCODE_PLUGINS_CONFIG)?;
-        let plugins_path = CONFIG_FILE_PATH
-            .get()
-            .ok_or(anyhow!("Get config file path failed."))?;
+        let plugins_path =
+            CONFIG_FILE_PATH
+                .get()
+                .ok_or(crate::error::PumpBinError::ConfigPathUnavailable {
+                    what: "CONFIG_FILE_PATH was never initialized",
+                })?;
 
         if plugins_path.is_dir() {
             fs::remove_dir(plugins_path)?;
         }
 
-        fs::write(plugins_path, buf)?;
+        utils::atomic_write(plugins_path, &buf)?;
 
         Ok(())
     }
@@ -645,7 +927,9 @@ impl Plugins {
         let buf = self
             .0
             .get(name)
-            .ok_or(anyhow!("Get plugin by name failed."))?;
+            .ok_or_else(|| crate::error::PumpBinError::PluginNotFound {
+                name: name.to_string(),
+            })?;
 
         Plugin::decode_from_slice(buf)
     }

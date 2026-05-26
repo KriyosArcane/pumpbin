@@ -1,6 +1,6 @@
 use iced::{
     widget::button::{Status, Style},
-    Border, Color, Theme, Background,
+    Background, Border, Color, Theme,
 };
 
 const BUTTON_RADIUS: f32 = 0.0;
@@ -8,11 +8,13 @@ const CARD_RADIUS: f32 = 0.0;
 
 pub fn primary(theme: &Theme, status: Status) -> Style {
     let palette = theme.extended_palette();
-    let mut style = Style::default();
-    style.border = Border {
-        width: 1.0,
-        color: palette.primary.base.color,
-        radius: BUTTON_RADIUS.into(),
+    let mut style = Style {
+        border: Border {
+            width: 1.0,
+            color: palette.primary.base.color,
+            radius: BUTTON_RADIUS.into(),
+        },
+        ..Style::default()
     };
 
     match status {
@@ -35,11 +37,13 @@ pub fn primary(theme: &Theme, status: Status) -> Style {
 
 pub fn secondary(theme: &Theme, status: Status) -> Style {
     let palette = theme.extended_palette();
-    let mut style = Style::default();
-    style.border = Border {
-        width: 1.0,
-        color: palette.secondary.base.color,
-        radius: BUTTON_RADIUS.into(),
+    let mut style = Style {
+        border: Border {
+            width: 1.0,
+            color: palette.secondary.base.color,
+            radius: BUTTON_RADIUS.into(),
+        },
+        ..Style::default()
     };
 
     match status {
@@ -58,11 +62,13 @@ pub fn secondary(theme: &Theme, status: Status) -> Style {
 
 pub fn danger(theme: &Theme, status: Status) -> Style {
     let palette = theme.extended_palette();
-    let mut style = Style::default();
-    style.border = Border {
-        width: 1.0,
-        color: palette.danger.base.color,
-        radius: BUTTON_RADIUS.into(),
+    let mut style = Style {
+        border: Border {
+            width: 1.0,
+            color: palette.danger.base.color,
+            radius: BUTTON_RADIUS.into(),
+        },
+        ..Style::default()
     };
 
     match status {
@@ -85,11 +91,13 @@ pub fn danger(theme: &Theme, status: Status) -> Style {
 
 pub fn selected(theme: &Theme, status: Status) -> Style {
     let palette = theme.extended_palette();
-    let mut style = Style::default();
-    style.border = Border {
-        width: 1.0,
-        color: palette.success.base.color,
-        radius: CARD_RADIUS.into(),
+    let mut style = Style {
+        border: Border {
+            width: 1.0,
+            color: palette.success.base.color,
+            radius: CARD_RADIUS.into(),
+        },
+        ..Style::default()
     };
 
     match status {
@@ -107,11 +115,13 @@ pub fn selected(theme: &Theme, status: Status) -> Style {
 
 pub fn unselected(theme: &Theme, status: Status) -> Style {
     let palette = theme.extended_palette();
-    let mut style = Style::default();
-    style.border = Border {
-        width: 1.0,
-        color: palette.primary.base.color,
-        radius: CARD_RADIUS.into(),
+    let mut style = Style {
+        border: Border {
+            width: 1.0,
+            color: palette.primary.base.color,
+            radius: CARD_RADIUS.into(),
+        },
+        ..Style::default()
     };
 
     match status {
@@ -129,11 +139,13 @@ pub fn unselected(theme: &Theme, status: Status) -> Style {
 
 pub fn text_button(theme: &Theme, status: Status) -> Style {
     let palette = theme.extended_palette();
-    let mut style = Style::default();
-    style.border = Border {
-        width: 0.0,
-        color: Color::TRANSPARENT,
-        radius: 0.0.into(),
+    let mut style = Style {
+        border: Border {
+            width: 0.0,
+            color: Color::TRANSPARENT,
+            radius: 0.0.into(),
+        },
+        ..Style::default()
     };
 
     match status {
