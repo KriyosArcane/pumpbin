@@ -110,3 +110,45 @@ fn remote_template_still_needs_prefix() {
     let err = remote_replace().preflight_template(&bin).unwrap_err();
     assert_placeholder_error(err, PREFIX);
 }
+
+#[test]
+fn measure_capacity_returns_run_length_of_padding_byte() {
+    // src_prefix followed by 1024 ASCII '0' bytes, then a sentinel.
+    let mut bin = Vec::new();
+    bin.extend_from_slice(b"\xCC\xCC");
+    bin.extend_from_slice(PREFIX);
+    bin.extend(std::iter::repeat_n(b'0', 1024));
+    bin.extend_from_slice(b"END_OF_PAD");
+    assert_eq!(
+        local_replace().measure_placeholder_capacity(&bin),
+        Some(1024)
+    );
+}
+
+#[test]
+fn measure_capacity_works_with_zero_padding() {
+    // Same shape, but the author chose '\0' as the fill byte.
+    let mut bin = Vec::new();
+    bin.extend_from_slice(PREFIX);
+    bin.extend(std::iter::repeat_n(0u8, 512));
+    bin.extend_from_slice(b"trailing");
+    assert_eq!(
+        local_replace().measure_placeholder_capacity(&bin),
+        Some(512)
+    );
+}
+
+#[test]
+fn measure_capacity_none_when_prefix_absent() {
+    let bin = b"no placeholder anywhere".to_vec();
+    assert_eq!(local_replace().measure_placeholder_capacity(&bin), None);
+}
+
+#[test]
+fn measure_capacity_zero_when_prefix_at_eof() {
+    // Prefix exists but no padding follows it. The auto-detect path in
+    // create-b1n treats 0 as "could not detect; ask the user."
+    let mut bin = Vec::new();
+    bin.extend_from_slice(PREFIX);
+    assert_eq!(local_replace().measure_placeholder_capacity(&bin), None);
+}

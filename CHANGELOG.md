@@ -20,6 +20,46 @@
   source + assembled blob), Linux/Windows loader `.b1n`s, README
   explaining how to rebuild each fixture and how to wire SSH for the
   Windows side.
+- **`examples/starter-plugins/{linux,windows}.b1n`** — ready-to-use
+  loader plugin packs so a new operator gets from `git clone` to a
+  working implant in 30 seconds. Documented as smoke-test / learning
+  fixtures, not for fielding against EDR. (Operator-QA finding O-1.)
+- **`OPERATOR_QA.md`** — companion to `QA_REPORT.md`: tracks
+  operator-friction findings from a junior-red-teamer drive-through.
+
+### Fixed
+
+- **O-2: README quick-start TOML was invalid.** Rewrote the example
+  using one-table-per-line TOML so first-contact copy-paste works.
+- **O-3: "plugin not found" error gave no next step.** Appended a
+  one-line hint pointing at `examples/starter-plugins/` and
+  `pumpbin-cli create-b1n --help`.
+- **O-4: `plugin-examples/` was ambiguous.** Added a top-of-README
+  note clarifying these are WASM *modules* (embedded inside `.b1n`
+  via `--module`), not standalone plugin packs.
+- **O-9: `pumpbin-cli verify <non-pe>` reported a confusing
+  Authenticode failure on top of the format failure.** Verify now
+  short-circuits PE-specific checks (Authenticode + checksum) when
+  the input has no `MZ`/`PE\0\0` header and reports a single error.
+- **O-7: `pumpbin-cli create-b1n` `--max-len` defaulted to 4096
+  bytes.** That was wrong-by-default for every real loader (the
+  standard `rust-shellcode` pattern is 1 MiB padding). Added
+  `PluginReplace::measure_placeholder_capacity` that scans the
+  template for the contiguous padding run after `src_prefix`;
+  `create-b1n` now uses it as the auto-default. Explicit `--max-len`
+  is still honored, but a value larger than the measured capacity is
+  rejected up-front (used to fail silently at generate-time with
+  PB-E0012). Covered by 4 new `tests/preflight.rs` cases.
+- **O-6: PumpBin patched the loader without recomputing the PE
+  `IMAGE_OPTIONAL_HEADER.CheckSum`.** Every stamped EXE kept the
+  template's stale CheckSum, which (a) caused `pumpbin-cli verify`
+  to fail on PumpBin's own output and (b) was a strong tamper signal
+  for stock Windows tooling and AV. Added
+  `utils::recompute_pe_checksum` implementing the documented
+  `CheckSumMappedFile` algorithm; `replace_binary` calls it as the
+  final step. No-op on non-PE outputs. Covered by 6 unit tests
+  (minimal-PE, payload-bearing PE, odd-size PE, ELF rejection,
+  truncated PE, tiny buffer) + 1 `#[ignore]`d end-to-end test.
 
 ## v1.4.6
 

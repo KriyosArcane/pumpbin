@@ -221,9 +221,13 @@ enum Commands {
         #[arg(long, default_value = "$$99999$$")]
         size_holder: String,
 
-        /// Max placeholder region size
-        #[arg(long, default_value_t = 4096)]
-        max_len: u64,
+        /// Max placeholder region size. If omitted, PumpBin measures
+        /// the contiguous padding run after `src_prefix` in the template
+        /// and uses that as the capacity. The pre-1.5.x default of 4096
+        /// bytes was a wrong-by-default value for most loaders (which
+        /// allocate 1 MiB+ of placeholder room).
+        #[arg(long)]
+        max_len: Option<u64>,
 
         /// Unified module wasm path (optional)
         #[arg(long, value_hint = clap::ValueHint::FilePath)]
@@ -610,6 +614,9 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 format!("failed to read template binary: {}", template.display())
             })?;
 
+            // Build the replace config with a temporary max_len so we can
+            // call preflight_template; the real value gets stamped in below
+            // after we either auto-detect it or honor the user's override.
             let mut plugin = Plugin {
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 info: PluginInfo {
@@ -624,7 +631,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
                         ShellcodeSaveType::Local => Some(size_holder.as_bytes().to_vec()),
                         ShellcodeSaveType::Remote => None,
                     },
-                    max_len: *max_len,
+                    max_len: 0,
                 },
                 ..Default::default()
             };
@@ -637,6 +644,47 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 .replace
                 .preflight_template(&template_bytes)
                 .with_context(|| format!("Template at '{}'", template.display()))?;
+
+            // Auto-detect placeholder capacity (the contiguous padding run
+            // after src_prefix). Used as the default when --max-len is
+            // omitted; if --max-len is set and exceeds the detected
+            // capacity, refuse — that combination silently produces .b1n
+            // files that fail at generate-time with PB-E0012.
+            let detected_capacity = plugin
+                .replace
+                .measure_placeholder_capacity(&template_bytes)
+                .unwrap_or(0);
+            plugin.replace.max_len = match max_len {
+                Some(explicit) => {
+                    if *explicit > detected_capacity as u64 && detected_capacity > 0 {
+                        anyhow::bail!(
+                            "--max-len {} exceeds the {} bytes of padding measured \
+                             after `{}` in the template. Stamped shellcodes larger \
+                             than the padding run would overflow into adjacent \
+                             template bytes and corrupt the loader.",
+                            explicit,
+                            detected_capacity,
+                            src_prefix,
+                        );
+                    }
+                    *explicit
+                }
+                None => {
+                    if detected_capacity == 0 {
+                        anyhow::bail!(
+                            "could not auto-detect placeholder capacity (no padding \
+                             after `{}` in template). Pass --max-len <bytes> \
+                             explicitly.",
+                            src_prefix,
+                        );
+                    }
+                    tracing::info!(
+                        detected_capacity,
+                        "auto-detected placeholder capacity from template"
+                    );
+                    detected_capacity as u64
+                }
+            };
 
             match (parsed_platform, parsed_binary_type) {
                 (Platform::Windows, BinaryType::Executable) => {
@@ -1116,7 +1164,6 @@ fn verify_binary(binary: &PathBuf) -> Result<()> {
         .with_context(|| format!("failed to read binary: {}", binary.display()))?;
 
     let pe = analyze_pe(&bytes)?;
-    let auth = verify_authenticode(binary, pe.security_dir_size.unwrap_or(0));
 
     // Collect human-readable failure reasons. Each push here makes the final
     // exit code non-zero, so automation can `pumpbin-cli verify --binary X`
@@ -1127,9 +1174,17 @@ fn verify_binary(binary: &PathBuf) -> Result<()> {
 
     println!("Binary: {}", binary.display());
     println!("PE format: {}", if pe.is_pe { "yes" } else { "no" });
+
+    // PE-specific checks (Authenticode signature, IMAGE_OPTIONAL_HEADER
+    // checksum, embedded markers) only make sense on a valid PE. On
+    // ELF/Mach-O/etc. we report once that the input isn't a PE and
+    // short-circuit — running osslsigncode on an ELF produced two
+    // confusing failure lines for one underlying fact.
     if !pe.is_pe {
-        failures.push("input is not a valid PE binary".to_string());
+        bail!("input is not a valid PE binary");
     }
+
+    let auth = verify_authenticode(binary, pe.security_dir_size.unwrap_or(0));
 
     if let (Some(current), Some(calculated)) = (pe.checksum_current, pe.checksum_calculated) {
         println!(

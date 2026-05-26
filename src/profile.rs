@@ -156,7 +156,10 @@ impl Profile {
 
         let plugin_bytes = std::fs::read(&self.plugin.source).map_err(|e| {
             anyhow::anyhow!(
-                "Failed to read plugin {}: {}",
+                "Failed to read plugin {}: {}\n\
+                 hint: see examples/starter-plugins/ for ready-to-use \
+                 loader .b1n files, or `pumpbin-cli create-b1n --help` \
+                 to build your own from a template binary.",
                 self.plugin.source.display(),
                 e
             )

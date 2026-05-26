@@ -96,6 +96,27 @@ impl PluginReplace {
         }
         Ok(())
     }
+
+    /// Measure the contiguous run of constant padding bytes that follows
+    /// `src_prefix` in `template`. Returns `None` if the prefix isn't
+    /// present. Used by `create-b1n` to auto-detect a sensible `max_len`
+    /// — the default of 4096 was wrong for ~every real loader, which
+    /// allocates 1 MiB+ of placeholder room.
+    ///
+    /// Algorithm: locate `src_prefix`, read the byte immediately after,
+    /// then count how many consecutive copies of that byte follow. Works
+    /// regardless of which fill byte the template author chose (`'\0'`,
+    /// `'0'`, `0xCC`, etc.) as long as it's a single repeating value.
+    pub fn measure_placeholder_capacity(&self, template: &[u8]) -> Option<usize> {
+        let prefix_at = memchr::memmem::find(template, &self.src_prefix)?;
+        let region_start = prefix_at + self.src_prefix.len();
+        let pad = *template.get(region_start)?;
+        let mut end = region_start;
+        while end < template.len() && template[end] == pad {
+            end += 1;
+        }
+        Some(end - region_start)
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -833,6 +854,13 @@ impl Plugin {
 
         // Run post_binary modules (signing, obfuscation, etc.)
         bin = self.plugins().run_post_binary(bin, runtime_config)?;
+
+        // Recompute PE CheckSum if this output is a PE. Without this,
+        // every stamped EXE keeps the template's stale CheckSum, which
+        // (a) makes `pumpbin-cli verify` fail on PumpBin's own output,
+        // (b) is a strong tamper signal for stock Windows tooling and
+        // AV. No-op for non-PE outputs (ELF, Mach-O).
+        utils::recompute_pe_checksum(&mut bin);
 
         Ok(bin)
     }

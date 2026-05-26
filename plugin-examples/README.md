@@ -3,6 +3,11 @@
 WASM modules that hook into PumpBin's generation pipeline. Each is an independent
 Rust crate compiled to `wasm32-wasip1`.
 
+> **Looking for a ready-to-use `.b1n` plugin pack?** This directory is
+> *not* the place. WASM modules here get embedded *inside* a `.b1n`
+> via `pumpbin-cli create-b1n --module ...`. For ready-to-use
+> loader-only `.b1n` files, see [`../examples/starter-plugins/`](../examples/starter-plugins/).
+
 ## Build
 
 ```bash

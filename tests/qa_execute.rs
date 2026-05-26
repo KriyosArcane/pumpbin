@@ -14,6 +14,7 @@
 //!   - A `pumpbin-w10` host alias in ~/.ssh/config (or
 //!     `PUMPBIN_QA_SSH_HOST=...`) reachable with key auth.
 //!   - The win10 VM accessible at that host.
+//!
 //! It skips (not fails) if ssh isn't reachable.
 
 use std::process::Command;
@@ -58,8 +59,7 @@ fn windows_implant_writes_sentinel() {
     // Skip-don't-fail when ssh isn't wired up — this lets the test
     // run on dev machines without a VM, while still being mandatory
     // for the pre-tag hook (which runs without --windows-only-skip).
-    let host = std::env::var("PUMPBIN_QA_SSH_HOST")
-        .unwrap_or_else(|_| "pumpbin-w10".to_string());
+    let host = std::env::var("PUMPBIN_QA_SSH_HOST").unwrap_or_else(|_| "pumpbin-w10".to_string());
     let probe = Command::new("ssh")
         .args([
             "-o",

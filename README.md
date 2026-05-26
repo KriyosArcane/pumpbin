@@ -65,24 +65,41 @@ shellcode generator. Everything else integrates upstream of it.
 ## Quick start (CLI, headless)
 
 ```bash
-# 1. Write a 10-line build profile.
-cat > pumpbin.toml <<EOF
+# 0. Need a plugin? Use one of the starter loaders shipped in the
+#    repo. They are unencrypted, single-stage — perfect for smoke
+#    tests, not for fielding against EDR. See
+#    examples/starter-plugins/README.md for how to compose an
+#    encryption module.
+
+# 1. Write a build profile.
+cat > pumpbin.toml <<'EOF'
 schema = "pumpbin.profile/v1"
-[plugin]    source = "/opt/plugins/stealth-aes.b1n"
-[target]    platform = "windows"; binary_type = "exe"
-[shellcode] source = "file"; path = "payload.bin"
-[output]    path = "out/implant.exe"; sbom = true
+
+[plugin]
+source = "examples/starter-plugins/windows.b1n"
+
+[target]
+platform = "windows"
+binary_type = "exe"
+
+[shellcode]
+source = "file"
+path = "payload.bin"
+
+[output]
+path = "out/implant.exe"
+sbom = true
 EOF
 
 # 2. Build. Get an implant + an SBOM.
 pumpbin-cli build -f pumpbin.toml --json
 # {"schema":"pumpbin.cli/v1","ok":true,"data":{
-#   "output_path":"out/implant.exe","bytes_written":4233,
+#   "output_path":"out/implant.exe","bytes_written":1300992,
 #   "sbom_path":"out/implant.exe.pbom.json"}}
 
 # 3. Inspect a plugin pack before adding it to your registry.
-pumpbin-cli inspect /opt/plugins/stealth-aes.b1n
-# Path: ... | Plugin: stealth-aes | sha256s | runtime policy | config fields
+pumpbin-cli inspect examples/starter-plugins/windows.b1n
+# Path: ... | Plugin: starter-windows | sha256s | runtime policy | config fields
 
 # 4. Convert shellcode for use outside the PumpBin flow.
 pumpbin-cli convert --input payload.bin --format python > shellcode.py
