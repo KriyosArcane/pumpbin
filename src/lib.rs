@@ -4,6 +4,7 @@ pub mod logging;
 pub mod maker;
 pub mod plugin;
 pub mod plugin_system;
+pub mod profile;
 pub mod secret;
 pub mod style;
 pub mod utils;
@@ -17,6 +18,7 @@ pub use plugin_system::{
     get_plugin_config_schema, OnError, Pass, PluginConfigField, PluginConfigSchema, RuntimeConfig,
     PUMPBIN_SDK_VERSION,
 };
+pub use profile::{BuildArtifact, Profile, PROFILE_SCHEMA};
 pub use secret::SecretBuf;
 
 /// LRU cap on the recent-files list (both Generator and Maker workspaces).

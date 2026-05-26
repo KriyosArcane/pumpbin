@@ -1,5 +1,115 @@
 # CHANGELOG
 
+## v1.3.0
+
+**Minor release** — first chip of v2.0 Phase 1 (profile + headless
+build) landed as backward-compatible additions on the 1.x line.
+Operators can now drive a full build from a single TOML file.
+
+### Plan adjustment
+
+The original v2.0 plan staged Phase 1 (profile + JSON + inspect +
+SBOM + stdin/hex/base64) as a single mega-cut with breaking changes.
+v1.3.0 lands the profile + `pumpbin-cli build` foundation as a
+minor release with zero breakage; the JSON output, `inspect`
+subcommand, and SBOM emission ship as follow-up v1.3.x chips. Plan
+file updated to document the deferral.
+
+### Added
+- **`pumpbin::profile` module** with `Profile`, `BuildArtifact`,
+  `PROFILE_SCHEMA`. Re-exported at crate root: `pumpbin::Profile`,
+  `pumpbin::BuildArtifact`, `pumpbin::PROFILE_SCHEMA`.
+- **`Profile::from_toml(path)`** — parse + validate the schema header.
+  Mismatched schema refuses load with an actionable error.
+- **`Profile::execute()`** — end-to-end build. Resolves shellcode
+  source (file / url / base64 / hex; the latter two decode to a
+  tempfile and pass through the existing Local-mode flow), validates
+  plugin compatibility, runs `replace_binary` + `post_binary`, writes
+  via `utils::atomic_write`. Returns a `BuildArtifact` with the
+  output path and byte count.
+- **`pumpbin-cli build -f pumpbin.toml`** — new subcommand. Drives
+  the profile flow through the same library code path that the
+  ad-hoc-flags `generate` subcommand uses.
+- **`tests/profile_build.rs`** (4 tests):
+  - parse + schema round-trip
+  - reject mismatched schema
+  - end-to-end execute (file shellcode source) → verify bytes
+    written, output path, shellcode bytes present
+  - end-to-end with hex shellcode source (with `: , ` separators)
+
+### Profile schema (v1)
+
+```toml
+schema = "pumpbin.profile/v1"
+
+[plugin]
+source = "/path/to/plugin.b1n"
+
+[target]
+platform = "windows"      # windows | linux | darwin (alias: macos)
+binary_type = "exe"       # exe | lib (alias: dll / so / dylib)
+
+[shellcode]
+source = "file"           # file | url | base64 | hex
+path = "shellcode.bin"
+# url = "https://..."     # for source = "url"
+# data = "..."            # for source = "base64" or "hex"
+
+[module_config]
+# Arbitrary key=value pairs forwarded to the WASM module's runtime
+# config. Empty table is fine.
+
+[output]
+path = "./out/implant.exe"
+```
+
+Fields intentionally deferred to follow-up chips:
+- `plugin.preset` (Phase 2)
+- `output.name_template` (Phase 2)
+- `output.sbom = true` (this release ships profile execution; SBOM
+  emission lands in a follow-up)
+- `security.allow_unrestricted_network` (Phase 0.4 layer is already
+  in place; this gate ships when the profile begins gating WASM
+  network policy at runtime)
+
+### Operator workflow
+
+```
+$ cat pumpbin.toml
+schema = "pumpbin.profile/v1"
+[plugin]   source = "/opt/implants/stealth-aes.b1n"
+[target]   platform = "windows"; binary_type = "exe"
+[shellcode] source = "file"; path = "/tmp/shellcode.bin"
+[output]    path = "/tmp/out/implant.exe"
+
+$ pumpbin-cli build -f pumpbin.toml
+INFO Loading build profile profile="pumpbin.toml"
+INFO Profile loaded schema="pumpbin.profile/v1" ...
+INFO Build complete output="/tmp/out/implant.exe" bytes=4201
+```
+
+### Dependencies
+- `toml = "1.1"` with `parse` feature.
+
+### Verification
+```
+cargo test --all-targets    -> 58/58 pass + 1 wine-gated ignored (was 54)
+cargo fmt --check           -> clean
+cargo clippy --all-targets -- -D warnings -> clean
+```
+
+### Roadmap
+
+Next chips on the v1.3.x / v2.0 train:
+- `--json` versioned output (Phase 1.3) — `{"schema":"pumpbin.cli/v1",
+  "ok":..., "data":..., "error":...}` on stdout
+- `pumpbin-cli inspect <file.b1n>` (+ `--diff`) (Phase 1.4)
+- SBOM emission `<output>.pbom.json` (Phase 1.6)
+- Phase 2: plugin presets, OPSEC profile, `pumpbin-cli convert`
+- Phase 3: marketplace + signature verification + rust-shellcode
+  template conversion + SDK PE/codec helpers
+- Phase 4: mdBook docs (CLI ref, SDK ref, OPSEC guide, positioning)
+
 ## v1.2.0
 
 **Minor release** — first signer plugin, picking up the slot left

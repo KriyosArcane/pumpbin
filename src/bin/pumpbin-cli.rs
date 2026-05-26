@@ -193,6 +193,19 @@ enum Commands {
         binary: PathBuf,
     },
 
+    /// Build an implant from a pumpbin.toml profile file.
+    ///
+    /// The profile captures plugin source, target platform/binary type,
+    /// shellcode source (file/url/base64/hex), module config overrides,
+    /// and output path. See `pumpbin::profile` module docs for the
+    /// full schema. v1.3.0 first lands the profile flow; `--json` output
+    /// and SBOM emission come in follow-up chips.
+    Build {
+        /// Path to the pumpbin.toml profile.
+        #[arg(short = 'f', long, value_hint = clap::ValueHint::FilePath)]
+        profile: PathBuf,
+    },
+
     /// Print shell completion script to stdout
     Completions {
         /// Target shell
@@ -582,6 +595,24 @@ fn main() -> Result<()> {
             Ok(())
         }
         Commands::Verify { binary } => verify_binary(binary),
+        Commands::Build { profile } => {
+            tracing::info!(profile = ?profile, "Loading build profile");
+            let profile = pumpbin::Profile::from_toml(profile)?;
+            tracing::info!(
+                schema = %profile.schema,
+                plugin = ?profile.plugin.source,
+                platform = %profile.target.platform,
+                binary_type = %profile.target.binary_type,
+                "Profile loaded"
+            );
+            let artifact = profile.execute()?;
+            tracing::info!(
+                output = %artifact.output_path.display(),
+                bytes = artifact.bytes_written,
+                "Build complete"
+            );
+            Ok(())
+        }
         Commands::Completions {
             shell,
             command_name,
