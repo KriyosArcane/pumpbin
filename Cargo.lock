@@ -6205,7 +6205,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -7050,8 +7050,3 @@ dependencies = [
  "quote",
  "syn 2.0.117",
 ]
-
-[[patch.unused]]
-name = "extism"
-version = "0.0.0+replaced-by-ci"
-source = "git+https://github.com/extism/extism?rev=7038ad1c427fa3b25bf0f5d9439490cbb218e262#7038ad1c427fa3b25bf0f5d9439490cbb218e262"

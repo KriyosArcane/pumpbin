@@ -19,6 +19,21 @@ ignore = [
     # drop-in replacement yet. Re-check when the rustls ecosystem
     # migrates to rustls-pki-types-only loading.
     { id = "RUSTSEC-2025-0134", reason = "unmaintained, no replacement upstream yet" },
+    # wasmtime 41.0.4 panic-on-oversize-table allocation.
+    # Fix is in `>=36.0.8,<37` OR `>=43.0.2,<44` OR `>=44.0.1`, but
+    # extism 1.21.0 (latest release, latest git tag) pins
+    # `wasmtime ^41` and there's no published extism > 1.21.0 yet
+    # that picks up wasmtime 43+. v1.4.6 tried [patch.crates-io]
+    # against extism HEAD; the patch silently no-op'd because HEAD's
+    # version string is "0.0.0+replaced-by-ci" and cannot satisfy
+    # `extism = "1.4"`.
+    # Impact for PumpBin: this is a *panic*, not a sandbox escape —
+    # a guest wasm requesting a >= host-address-space-sized table
+    # crashes the wasmtime engine. PumpBin runs plugin modules with
+    # 3s timeouts and operator-controlled .wasm bytes, so the worst
+    # case is a build failing with a panic instead of an error.
+    # Re-check when extism cuts a release > 1.21.0 with wasmtime 43+.
+    { id = "RUSTSEC-2026-0114", reason = "upstream-blocked: extism 1.21.0 pins wasmtime ^41; no patched release yet" },
 ]
 
 [licenses]
@@ -61,7 +76,3 @@ deny = []
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# Temporary git pin for extism (see [patch.crates-io] in Cargo.toml).
-# Drop the moment extism cuts a release > 1.21.0 that ships
-# wasmtime >= 43.
-allow-git = ["https://github.com/extism/extism"]

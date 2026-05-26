@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Fixed (post-v1.4.6 cargo-deny followup)
+
+- **v1.4.6's `[patch.crates-io] extism = git...` was a silent no-op.**
+  Upstream extism HEAD declares `version = "0.0.0+replaced-by-ci"`
+  (a CI placeholder), which the resolver cannot match against this
+  crate's `extism = "1.4"` requirement. The graph kept resolving to
+  registry `extism 1.21.0` → `wasmtime 41.0.4`, leaving the wasmtime
+  advisory chain unaddressed. cargo printed a `warning: patch ... was
+  not used` line that was missed.
+- Removed the broken `[patch.crates-io]` block and its `allow-git`
+  entry in `deny.toml`; both were carrying complexity for no benefit.
+- **Ignored `RUSTSEC-2026-0114`** (wasmtime panic on oversize-table
+  allocation) with a dated, scoped reason. The fix lives in wasmtime
+  `>= 43.0.2`, but extism 1.21.0 (latest tag) pins `wasmtime ^41` and
+  no patched extism release exists yet. Impact in PumpBin's threat
+  model: a misbehaving guest wasm can crash the build, not escape
+  the sandbox. Re-check when extism ships > 1.21.0.
+
 ### Added
 
 - **Execute-QA harness** — `scripts/qa-execute.sh` generates a real

@@ -64,10 +64,11 @@ opt-level = 3
 lto = true
 codegen-units = 1
 
-# Pin extism to HEAD (commit 7038ad1c, 2026-05-20) to pick up its
-# wasmtime 37 -> 43 bump, which clears 14 RUSTSEC sandbox-escape and
-# panic advisories filed against wasmtime 37 (RUSTSEC-2026-008x..0114).
-# Remove this patch the moment extism cuts a release > 1.21.0 that
-# carries the same bump.
-[patch.crates-io]
-extism = { git = "https://github.com/extism/extism", rev = "7038ad1c427fa3b25bf0f5d9439490cbb218e262" }
+# NOTE: v1.4.6 attempted to pin extism to git HEAD to pull wasmtime
+# 43 here, but the patch silently no-op'd — upstream extism's HEAD
+# Cargo.toml declares `version = "0.0.0+replaced-by-ci"` (a CI
+# placeholder), which the resolver cannot match against pumpbin's
+# `^1.4` requirement. The graph kept resolving to the registry
+# `extism 1.21.0` -> `wasmtime 41.0.4`, leaving the advisory chain
+# unaddressed. See deny.toml's RUSTSEC-2026-0114 ignore for the
+# real status.
