@@ -948,7 +948,12 @@ impl Maker {
                     Ok(result) => {
                         self.current_file_path = Some(result.saved_path.clone());
                         self.add_recent_file(result.saved_path.clone());
-                        should_persist = true;
+                        // Note: not setting should_persist=true here because
+                        // we immediately `return` — the persist-on-fall-through
+                        // path at the bottom of update() would never see it.
+                        // add_recent_file + current_file_path mutation is
+                        // already enough for the next Generate to find the
+                        // right state.
                         return message_dialog(
                             format!(
                                 "Generate done.\nSaved: {}\n\n{}",

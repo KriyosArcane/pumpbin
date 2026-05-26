@@ -1,5 +1,75 @@
 # CHANGELOG
 
+## v1.1.9
+
+Fifth chip of v2.0 Phase 0: real CI. The previous workflow ran
+`cargo build && cargo test` on `ubuntu-latest` only, with no fmt /
+clippy / deny gates. Since the source tree had zero tests until v1.1.2,
+the green badge was vacuous. v1.1.9 builds a real CI matrix.
+
+### Added
+- **`.github/workflows/rust.yml`** rewritten with 6 jobs:
+  - `fmt` — `cargo fmt --all -- --check` (Linux)
+  - `clippy` — `cargo clippy --all-targets -- -D warnings` (Linux,
+    installs GUI build deps so the `pumpbin` binary clippy-compiles)
+  - `test` — matrix `ubuntu-latest`, `macos-latest`, `windows-latest`,
+    runs `cargo test --lib --tests --no-fail-fast`. GUI binary is
+    *not* compiled on macOS/Windows because the Iced 0.13 wgpu deps
+    are flaky to install on CI runners; the library code path the
+    tests cover is what matters for parity.
+  - `deny` — `cargo deny check` (Linux, runs against `deny.toml`)
+  - `gui-build` — `cargo build --release --bin pumpbin` (Linux)
+  - `cli-smoke` — matrix Linux/macOS/Windows, builds the CLI release
+    binary and runs `--version` / `--help` on every subcommand. Cheap
+    sanity check that all three platforms get a working `pumpbin-cli`.
+- **`deny.toml`** at repo root: license allowlist (MIT, Apache-2.0,
+  BSD-*, ISC, Unicode, Zlib, CC0, MPL-2.0, BSL-1.0, OpenSSL), advisory
+  gate (yanked = warn), source restriction (deny unknown git /
+  registry). Existing `ring` license override documented.
+- **Trigger rules**: runs on push to `main`, `hotfix/**`, `release/**`,
+  any `v*` tag, and on PR to `main`.
+
+### Fixed
+- **`should_persist` dead-store warning** in `src/maker.rs:951`. The
+  assignment was immediately overshadowed by `return`, so the value
+  was never read on that branch. Removed the dead write; the
+  `add_recent_file` + `current_file_path` mutations on the same path
+  are sufficient. This was the only warning that would have tripped
+  `cargo clippy -- -D warnings` in CI.
+
+### Intentional scope: cross-platform test caveat
+
+`cargo test --lib --tests` runs on macOS/Windows; `cargo test
+--all-targets` does not. The latter compiles the GUI binary, which
+needs the Iced 0.13 wgpu graphics stack — getting that to install
+reliably on macOS and Windows CI runners is its own engineering
+project. The library code path tested cross-platform IS the code that
+both the CLI and GUI delegate into (`Plugin::replace_binary`,
+`utils::atomic_write`, `plugin_system::run_module`, etc.), so the
+parity guarantee is real. A v2.0 Phase 0 chip will feature-flag the
+Iced deps so the GUI can be opt-in; until then this is documented
+honestly.
+
+### Verification
+```
+cargo test --all-targets    -> 48/48 pass + 1 wine-gated ignored (was 48)
+cargo test --lib --tests    -> same 48/48 (subset that CI runs cross-platform)
+cargo fmt --all -- --check  -> clean
+cargo clippy --all-targets -- -D warnings -> clean
+cargo deny check            -> (verified by CI on push)
+```
+
+### Roadmap
+
+Remaining v2.0 Phase 0 items deferred to a later chip:
+- Maker `fs::read` off the UI thread
+- Recent-files LRU cap
+- Collapse legacy single-WASM dispatch path
+- `OnError::Skip` runtime semantics in the dispatch chain
+- Signature migration to `PumpBinResult<T>`
+- Iced 0.13 feature-flag refactor (would let macOS/Windows CI run the
+  full test suite)
+
 ## v1.1.8
 
 Fourth chip of v2.0 Phase 0: zeroize-on-drop wrapper for shellcode bytes.
