@@ -1,5 +1,92 @@
 # CHANGELOG
 
+## v1.1.6
+
+Second chip of v2.0 Phase 0: `tracing` initialization + `#[instrument]`
+annotations across the library hot path + a secret-leak regression
+guard. The CLI now writes structured JSON logs to disk by default;
+operators can find every generate / batch / verify run in
+`$XDG_DATA_HOME/PumpBin/logs/<build-id>.jsonl`.
+
+### Added
+- **`pumpbin::logging` module** with `init(LoggingConfig)` and
+  `init_default()`. Installs an `EnvFilter`-driven stderr console layer
+  and (unless disabled) a JSON file-sink layer.
+- **JSON log file**: one file per process invocation at
+  `$XDG_DATA_HOME/PumpBin/logs/{timestamp}-{pid}.jsonl`. Append-only
+  within the run; rotation is by-invocation. Log-open failure (disk
+  full, permission) degrades silently to console-only — never aborts
+  the binary.
+- **CLI flags** (global, work on every subcommand):
+  - `--no-log` — disable the JSON file sink
+  - `--log-level <FILTER>` — override level; accepts EnvFilter syntax
+    like `debug` or `info,extism=warn`
+- **Env vars**:
+  - `PUMPBIN_NO_LOG=1` — same as `--no-log`
+  - `PUMPBIN_LOG=<filter>` — same as `--log-level`, but `--log-level`
+    wins when both are set
+- **`#[tracing::instrument]`** on every hot library function:
+  - `Plugin::replace_binary`        — `skip(self, bin, shellcode_src, pass, runtime_config)`
+  - `Plugin::validate_for_generation` — `skip(self)`
+  - `Plugin::validate_shellcode_source` — `skip(self, shellcode_src)`
+  - `PluginPlugins::run_encrypt_shellcode` — `skip(self, runtime_config)`
+  - `PluginPlugins::run_format_encrypted_shellcode` — `skip(self, shellcode, runtime_config)`
+  - `PluginPlugins::run_post_binary` — `skip(self, binary, runtime_config)`
+  - `plugin_system::run_module` — `skip(wasm, input, config)`
+  - `utils::atomic_write` — `skip(data)`
+  Every shellcode / Pass / runtime_config / key argument is in
+  `skip(...)`. The `fields(...)` portion logs only safe metadata
+  (plugin name, lengths, save_type, paths).
+- **`tests/log_redaction.rs`** — regression guard. Drives a full
+  generate with a distinctive `0xDEADBEEF×8` marker shellcode, captures
+  every byte the tracing subscriber emits, asserts the marker never
+  appears in any form (raw, Debug Vec<u8>, hex). This test is the only
+  thing preventing a future PR from accidentally removing a
+  `skip(shellcode, ...)` clause and leaking secrets to the log file.
+
+### Changed
+- **`pumpbin-cli` progress messages** (Generate, Batch, CreateB1n)
+  migrated from `println!`/`eprintln!` to `tracing::info!`/`warn!`.
+  Goes to stderr so stdout is reserved for the eventual `--json`
+  machine-readable output (planned in Phase 1.3).
+- **`pumpbin-cli verify` report** stays on `println!` — its stdout IS
+  the subcommand's deliverable output (human-readable PE/Authenticode
+  report), not progress chatter.
+- **`pumpbin-cli completions <shell>`** stays on `println!` — same
+  reason; the shell-completion script IS the output.
+- **`src/main.rs` (GUI)** calls `pumpbin::logging::init_default()`
+  before any other startup work, so config-path setup, capnp decode
+  failures, and Iced runtime errors all land in the JSON log too.
+
+### Dependencies
+- `tracing = "0.1"` — added (was claimed by the v2.0 plan to already
+  exist; verified absent in Cargo.toml, added fresh).
+- `tracing-subscriber = "0.3"` with features `env-filter`, `fmt`,
+  `json`, `ansi`, `std`.
+
+### Verification
+```
+cargo test --all-targets    -> 32/32 pass + 1 wine-gated ignored
+  - golden          : 2
+  - pass_merge      : 1
+  - preflight       : 6
+  - parity_harness  : 5
+  - cli_exit_codes  : 5
+  - error_codes     : 12
+  - log_redaction   : 1  (new)
+cargo fmt --check           -> clean
+cargo clippy --all-targets  -> clean of new warnings
+```
+
+### Roadmap
+
+Remaining v2.0 Phase 0 items deferred to a later chip:
+- Signature migration to `PumpBinResult<T>`
+- `zeroize` on shellcode and Pass buffers
+- CI matrix (Linux/macOS/Windows + clippy + fmt + cargo deny)
+- Per-module WASM policy (timeout, allowed_hosts, sdk_version)
+- Collapse legacy single-WASM dispatch
+
 ## v1.1.5
 
 First chip of v2.0 Phase 0: structured error codes. Public API signatures

@@ -124,6 +124,7 @@ pub fn replace_with_rng<R: RngCore>(
 ///
 /// The temp file must share `path`'s directory so the final rename is a
 /// same-filesystem operation; otherwise atomicity is not guaranteed.
+#[tracing::instrument(skip(data), fields(path = %path.display(), len = data.len()))]
 pub fn atomic_write(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
 

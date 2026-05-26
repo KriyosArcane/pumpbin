@@ -202,6 +202,7 @@ pub struct PluginPlugins {
 }
 
 impl PluginPlugins {
+    #[tracing::instrument(skip(self, runtime_config), fields(path = %path.display(), modules_count = self.modules().len()))]
     pub fn run_encrypt_shellcode(
         &self,
         path: &Path,
@@ -236,6 +237,7 @@ impl PluginPlugins {
         })
     }
 
+    #[tracing::instrument(skip(self, shellcode, runtime_config), fields(shellcode_len = shellcode.len()))]
     pub fn run_format_encrypted_shellcode(
         &self,
         shellcode: &[u8],
@@ -344,6 +346,7 @@ impl PluginPlugins {
     /// `openssl`/`osslsigncode` as hard host dependencies. Signing now lives in
     /// dedicated post_binary plugins (osslsigncode, signtool, blob-steal)
     /// shipped under `plugin-examples/signers/` from v1.2.0.
+    #[tracing::instrument(skip(self, binary, runtime_config), fields(binary_len = binary.len(), modules_count = self.modules().len()))]
     pub fn run_post_binary(
         &self,
         binary: Vec<u8>,
@@ -607,6 +610,11 @@ impl Plugin {
         }
     }
 
+    /// `shellcode_src` is skipped because for Local mode it's a path that
+    /// may identify the operator's working directory; for Remote mode it
+    /// may be an attacker-controlled URL. The save_type and any failure
+    /// reason still surface via the returned error.
+    #[tracing::instrument(skip(self, shellcode_src), fields(plugin = %self.info().plugin_name(), save_type = ?self.save_type()))]
     pub fn validate_shellcode_source(&self, shellcode_src: &str) -> anyhow::Result<()> {
         use crate::error::PumpBinError;
 
@@ -661,6 +669,7 @@ impl Plugin {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self), fields(plugin = %self.info().plugin_name()))]
     pub fn validate_for_generation(
         &self,
         platform: Platform,
@@ -704,6 +713,20 @@ impl Plugin {
     ///
     /// Takes ownership of `bin` so that `post_binary` modules can resize it,
     /// and returns the fully-processed binary bytes.
+    ///
+    /// `#[instrument]`: every shellcode/secret argument is in `skip(...)` to
+    /// keep the JSON log file free of shellcode bytes, Pass holder/replace
+    /// values, and runtime config (which often contains keys/passwords).
+    /// Only metadata that's safe to leak — plugin name, save_type, binary
+    /// length — is logged.
+    #[tracing::instrument(
+        skip(self, bin, shellcode_src, pass, runtime_config),
+        fields(
+            plugin = %self.info().plugin_name(),
+            bin_len = bin.len(),
+            pass_count = pass.len(),
+        ),
+    )]
     pub fn replace_binary(
         &self,
         mut bin: Vec<u8>,

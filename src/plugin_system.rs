@@ -53,6 +53,7 @@ pub struct PluginConfigSchema {
 
 /// Call a single WASM module's exported function with JSON input.
 /// Returns `None` if the function is not exported (optional hook).
+#[tracing::instrument(skip(wasm, input, config), fields(func, wasm_len = wasm.len()))]
 pub fn run_module<T: Serialize>(
     wasm: &[u8],
     func: &str,

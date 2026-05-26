@@ -19,6 +19,16 @@ use std::process::Command;
 #[command(author, version, about, long_about = None)]
 #[command(propagate_version = true)]
 struct Cli {
+    /// Disable the JSON log file sink (stderr console layer stays on).
+    /// Equivalent to `PUMPBIN_NO_LOG=1`.
+    #[arg(long, global = true)]
+    no_log: bool,
+
+    /// Override log level. Accepts EnvFilter syntax, e.g. `debug` or
+    /// `info,extism=warn`. Takes precedence over `PUMPBIN_LOG`.
+    #[arg(long, global = true, value_name = "FILTER")]
+    log_level: Option<String>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -198,6 +208,18 @@ enum Commands {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // Install tracing subscriber driven by --no-log / --log-level flags
+    // (overriding PUMPBIN_NO_LOG / PUMPBIN_LOG env vars). init() is
+    // idempotent and never panics; failure to open the log file degrades
+    // silently to console-only.
+    let log_cfg = pumpbin::logging::LoggingConfig {
+        no_log_file: cli.no_log || std::env::var_os("PUMPBIN_NO_LOG").is_some(),
+        level_override: cli.log_level.clone(),
+        log_dir_override: None,
+    };
+    let _ = pumpbin::logging::init(log_cfg);
+    tracing::debug!("pumpbin-cli starting");
+
     match &cli.command {
         Commands::Generate {
             plugin,
@@ -207,19 +229,16 @@ fn main() -> Result<()> {
             output,
             module_config,
         } => {
-            println!("Starting automated CLI generation...");
+            tracing::info!("Starting automated CLI generation...");
 
             let parsed_platform = parse_platform(platform)?;
             let parsed_binary_type = parse_binary_type(binary_type)?;
 
-            println!("Loading plugin from {:?}", plugin);
+            tracing::info!(plugin = ?plugin, "Loading plugin");
             let plugin_buf = std::fs::read(plugin)?;
             let plugin_obj = Plugin::decode_from_slice(&plugin_buf)?;
 
-            println!(
-                "Validating plugin for platform {} and type {}...",
-                platform, binary_type
-            );
+            tracing::info!(%platform, %binary_type, "Validating plugin for target");
             plugin_obj.validate_for_generation(parsed_platform, parsed_binary_type)?;
 
             let bin = plugin_obj
@@ -236,7 +255,7 @@ fn main() -> Result<()> {
             let runtime_config =
                 normalize_runtime_config_for_schema(runtime_config, &schema_fields)?;
 
-            println!("Injecting shellcode...");
+            tracing::info!("Injecting shellcode");
             let bin = plugin_obj.replace_binary(
                 bin,
                 final_shellcode_src,
@@ -266,9 +285,9 @@ fn main() -> Result<()> {
                 ))
             };
 
-            println!("Saving to {:?}", output_path);
+            tracing::info!(output = ?output_path, "Saving generated binary");
             pumpbin::utils::atomic_write(&output_path, &bin)?;
-            println!("Generation complete!");
+            tracing::info!(output = ?output_path, "Generation complete");
 
             Ok(())
         }
@@ -280,12 +299,12 @@ fn main() -> Result<()> {
             output_dir,
             module_config,
         } => {
-            println!("Starting automated Batch generation...");
+            tracing::info!("Starting automated Batch generation");
 
             let parsed_platform = parse_platform(platform)?;
             let parsed_binary_type = parse_binary_type(binary_type)?;
 
-            println!("Loading plugin from {:?}", plugin);
+            tracing::info!(plugin = ?plugin, "Loading plugin");
             let plugin_buf = std::fs::read(plugin)?;
             let plugin_obj = Plugin::decode_from_slice(&plugin_buf)?;
             let runtime_config = parse_module_config(module_config)?;
@@ -293,10 +312,7 @@ fn main() -> Result<()> {
             let runtime_config =
                 normalize_runtime_config_for_schema(runtime_config, &schema_fields)?;
 
-            println!(
-                "Validating plugin for platform {} and type {}...",
-                platform, binary_type
-            );
+            tracing::info!(%platform, %binary_type, "Validating plugin for target");
             plugin_obj.validate_for_generation(parsed_platform, parsed_binary_type)?;
 
             let save_type = if plugin_obj.replace().size_holder().is_some() {
@@ -321,7 +337,7 @@ fn main() -> Result<()> {
                 None => std::env::current_dir()?,
             };
 
-            println!("Scanning directory {:?} for shellcode files...", directory);
+            tracing::info!(directory = ?directory, "Scanning directory for shellcode files");
             let entries = std::fs::read_dir(directory)?;
 
             let mut success_count = 0;
@@ -335,7 +351,7 @@ fn main() -> Result<()> {
                     let is_bin =
                         path.extension().and_then(|ext| ext.to_str()).unwrap_or("") == "bin";
                     if is_bin {
-                        println!("[-] Processing {:?}", path.file_name().unwrap_or_default());
+                        tracing::info!(file = ?path.file_name().unwrap_or_default(), "Processing shellcode");
 
                         let bin = plugin_obj
                             .bins()
@@ -347,14 +363,14 @@ fn main() -> Result<()> {
                         let data = match std::fs::read(&path) {
                             Ok(d) => d,
                             Err(e) => {
-                                eprintln!("  [!] Failed to read {:?}: {}", path, e);
+                                tracing::warn!(file = ?path, error = %e, "Failed to read shellcode");
                                 fail_count += 1;
                                 continue;
                             }
                         };
 
                         if data.is_empty() {
-                            eprintln!("  [!] Shellcode file is empty: {:?}", path);
+                            tracing::warn!(file = ?path, "Shellcode file is empty");
                             fail_count += 1;
                             continue;
                         }
@@ -362,14 +378,14 @@ fn main() -> Result<()> {
                             .windows(b"$$SHELLCODE$$".len())
                             .any(|w| w == b"$$SHELLCODE$$")
                         {
-                            eprintln!("  [!] Shellcode file contains placeholder: {:?}", path);
+                            tracing::warn!(file = ?path, "Shellcode file contains placeholder");
                             fail_count += 1;
                             continue;
                         }
 
                         let shellcode_src = path.to_string_lossy().to_string();
                         if let Err(e) = plugin_obj.validate_shellcode_source(&shellcode_src) {
-                            eprintln!("  [!] Invalid shellcode source: {}", e);
+                            tracing::warn!(file = ?path, error = %e, "Invalid shellcode source");
                             fail_count += 1;
                             continue;
                         }
@@ -384,7 +400,7 @@ fn main() -> Result<()> {
                         ) {
                             Ok(b) => b,
                             Err(e) => {
-                                eprintln!("  [!] Failed to inject shellcode: {}", e);
+                                tracing::warn!(file = ?path, error = %e, "Failed to inject shellcode");
                                 fail_count += 1;
                                 continue;
                             }
@@ -412,23 +428,24 @@ fn main() -> Result<()> {
                         let output_path = out_dir.join(filename);
 
                         if let Err(e) = pumpbin::utils::atomic_write(&output_path, &bin) {
-                            eprintln!("  [!] Failed to save generated binary: {}", e);
+                            tracing::warn!(file = ?path, error = %e, "Failed to save generated binary");
                             fail_count += 1;
                             continue;
                         }
 
-                        println!(
-                            "  [+] Saved as {:?}",
-                            output_path.file_name().unwrap_or_default()
+                        tracing::info!(
+                            output = ?output_path.file_name().unwrap_or_default(),
+                            "Saved generated implant"
                         );
                         success_count += 1;
                     }
                 }
             }
 
-            println!(
-                "Batch generation complete! Success: {}, Failed: {}",
-                success_count, fail_count
+            tracing::info!(
+                success = success_count,
+                failed = fail_count,
+                "Batch generation complete"
             );
 
             // Exit non-zero if nothing was generated, or if any individual case
@@ -561,7 +578,7 @@ fn main() -> Result<()> {
             pumpbin::utils::atomic_write(output, &data)
                 .with_context(|| format!("failed to write output .b1n: {}", output.display()))?;
 
-            println!("Created .b1n plugin pack: {}", output.display());
+            tracing::info!(output = %output.display(), "Created .b1n plugin pack");
             Ok(())
         }
         Commands::Verify { binary } => verify_binary(binary),
