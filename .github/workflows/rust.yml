@@ -33,7 +33,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: |
           sudo apt-get update
-          sudo apt-get install -y libwayland-dev libxkbcommon-dev libgtk-3-dev libssl-dev libudev-dev
+          sudo apt-get install -y libwayland-dev libxkbcommon-dev libgtk-3-dev libssl-dev libudev-dev capnproto
       - run: cargo clippy --all-targets -- -D warnings
 
   test-linux:
@@ -45,7 +45,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: |
           sudo apt-get update
-          sudo apt-get install -y libwayland-dev libxkbcommon-dev libgtk-3-dev libssl-dev libudev-dev
+          sudo apt-get install -y libwayland-dev libxkbcommon-dev libgtk-3-dev libssl-dev libudev-dev capnproto
       - run: cargo test --lib --tests --no-fail-fast
 
   test-macos:
@@ -55,6 +55,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - run: brew install capnp
       - run: cargo test --lib --tests --no-fail-fast
 
   test-windows:
@@ -64,6 +65,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - run: choco install capnproto -y --no-progress
       - run: cargo test --lib --tests --no-fail-fast
 
   deny:
@@ -84,7 +86,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: |
           sudo apt-get update
-          sudo apt-get install -y libwayland-dev libxkbcommon-dev libgtk-3-dev libssl-dev libudev-dev
+          sudo apt-get install -y libwayland-dev libxkbcommon-dev libgtk-3-dev libssl-dev libudev-dev capnproto
       - run: cargo build --release --bin pumpbin
 
   cli-smoke-linux:
@@ -95,6 +97,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y capnproto
       - run: cargo build --release --bin pumpbin-cli
       - run: |
           ./target/release/pumpbin-cli --version
@@ -103,6 +106,9 @@ jobs:
           ./target/release/pumpbin-cli batch --help
           ./target/release/pumpbin-cli create-b1n --help
           ./target/release/pumpbin-cli verify --help
+          ./target/release/pumpbin-cli build --help
+          ./target/release/pumpbin-cli inspect --help
+          ./target/release/pumpbin-cli convert --help
 
   cli-smoke-macos:
     name: CLI smoke (macos)
@@ -112,6 +118,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - run: brew install capnp
       - run: cargo build --release --bin pumpbin-cli
       - run: |
           ./target/release/pumpbin-cli --version
@@ -125,6 +132,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - run: choco install capnproto -y --no-progress
       - run: cargo build --release --bin pumpbin-cli
       - shell: pwsh
         run: |

@@ -1,5 +1,43 @@
 # CHANGELOG
 
+## v1.4.2
+
+**CI fix release.** Every v1.x release since the v1.1.11 CI matrix
+landed has shown red on the `clippy` and `test-*` jobs because
+`build.rs` calls `capnpc` (which requires the `capnp` binary) and
+the CI workflow never installed it. v1.4.2 adds the install step to
+every job that runs `cargo build`/`test`/`clippy`.
+
+### Fixed
+- **Install `capnproto`** on Linux via `apt-get` (already had this
+  for the GUI build deps; just added `capnproto` to the list),
+  macOS via `brew install capnp`, and Windows via
+  `choco install capnproto -y`. Applied to: `clippy`, `test-linux`,
+  `test-macos`, `test-windows`, `gui-build`, `cli-smoke-{linux,
+  macos,windows}`.
+- **Added new subcommand `--help` smoke** to `cli-smoke-linux`:
+  `build --help`, `inspect --help`, `convert --help` (covering
+  v1.3.x + v1.4.0 additions).
+
+### Why this matters
+
+Without `capnp`, every CI run since v1.1.11 hit:
+```
+schema compiler command: Error { kind: Failed, extra:
+  "Failed to execute `capnp --version`: No such file or directory ...
+   Please verify that version 0.5.2 or higher of the capnp executable
+   is installed on your system." }
+```
+This made the CI badge meaningless. v1.4.2 makes it real.
+
+### Verification
+
+This is a CI-only change. Local `cargo test --all-targets`,
+`cargo fmt --check`, and `cargo clippy --all-targets -- -D warnings`
+all unchanged from v1.4.1 (71/71 + 1 wine-gated ignored, clean).
+The real verification is the CI run on the `v1.4.2` tag, which is
+what this release exists to make green.
+
 ## v1.4.1
 
 Documentation chip. README rewritten end-to-end to reflect the v1.4.x
