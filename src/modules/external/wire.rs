@@ -226,7 +226,10 @@ pub fn write_frame<W: std::io::Write>(w: &mut W, payload: &[u8]) -> std::io::Res
     let len = u32::try_from(payload.len()).map_err(|_| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            format!("write_frame: payload too large ({} > u32::MAX)", payload.len()),
+            format!(
+                "write_frame: payload too large ({} > u32::MAX)",
+                payload.len()
+            ),
         )
     })?;
     w.write_all(&len.to_le_bytes())?;

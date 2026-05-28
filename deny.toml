@@ -24,6 +24,17 @@ ignore = [
     # follow-up. Re-check when an actively-maintained drop-in appears
     # or by 2026-12-31.
     { id = "RUSTSEC-2025-0141", reason = "bincode 2.x unmaintained; no safe alternative; migration deferred (re-check 2026-12-31)" },
+    # 2026-05-28: paste is unmaintained (dtolnay archived the repo).
+    # Reaches us only via iced -> wgpu -> metal (GUI-only feature). The
+    # CLI binary doesn't pull it in. Wgpu pins it transitively; upgrading
+    # would mean waiting for wgpu/metal to switch to `pastey` or
+    # `with_builtin_macros`. Re-check when wgpu 0.20+ propagates through
+    # iced or by 2026-12-31.
+    { id = "RUSTSEC-2024-0436", reason = "paste unmaintained; GUI-only via iced/wgpu/metal; upstream pinned (re-check 2026-12-31)" },
+    # 2026-05-28: instant is unmaintained, replaced by web-time. Reaches
+    # us only via iced -> parking_lot 0.11 (GUI-only). Cannot upgrade
+    # without an iced patch. Same re-check window as paste.
+    { id = "RUSTSEC-2024-0384", reason = "instant unmaintained; GUI-only via iced/parking_lot 0.11; upstream pinned (re-check 2026-12-31)" },
 ]
 
 [licenses]

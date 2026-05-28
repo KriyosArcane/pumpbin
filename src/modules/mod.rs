@@ -164,7 +164,10 @@ mod tests {
 
         let post: Vec<_> = post_build_modules().iter().map(|m| m.id()).collect();
         assert!(post.contains(&"pe-version-info"));
-        assert!(!post.contains(&"cert-blob-steal"), "cert-blob-steal removed; use trustmebro external module");
+        assert!(
+            !post.contains(&"cert-blob-steal"),
+            "cert-blob-steal removed; use trustmebro external module"
+        );
 
         assert!(format_encrypted_modules().is_empty());
         assert!(upload_remote_modules().is_empty());

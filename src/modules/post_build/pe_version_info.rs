@@ -45,12 +45,16 @@ impl PostBuildModule for PeVersionInfo {
                 "Path to a donor PE. All its VS_VERSION_INFO entries are cloned; \
                  explicit key=value args override individual fields.",
             ),
-            ArgSpec::new("CompanyName", "string").described("Replace the CompanyName VS_VERSION_INFO entry"),
-            ArgSpec::new("FileDescription", "string").described("Replace the FileDescription entry"),
-            ArgSpec::new("FileVersion", "string").described("Replace the FileVersion entry (e.g. '6.1.7600.16385')"),
+            ArgSpec::new("CompanyName", "string")
+                .described("Replace the CompanyName VS_VERSION_INFO entry"),
+            ArgSpec::new("FileDescription", "string")
+                .described("Replace the FileDescription entry"),
+            ArgSpec::new("FileVersion", "string")
+                .described("Replace the FileVersion entry (e.g. '6.1.7600.16385')"),
             ArgSpec::new("InternalName", "string").described("Replace the InternalName entry"),
             ArgSpec::new("LegalCopyright", "string").described("Replace the LegalCopyright entry"),
-            ArgSpec::new("OriginalFilename", "string").described("Replace the OriginalFilename entry"),
+            ArgSpec::new("OriginalFilename", "string")
+                .described("Replace the OriginalFilename entry"),
             ArgSpec::new("ProductName", "string").described("Replace the ProductName entry"),
             ArgSpec::new("ProductVersion", "string").described("Replace the ProductVersion entry"),
         ]

@@ -87,7 +87,7 @@ jobs:
       - run: |
           sudo apt-get update
           sudo apt-get install -y libwayland-dev libxkbcommon-dev libgtk-3-dev libssl-dev libudev-dev capnproto
-      - run: cargo build --release --bin pumpbin
+      - run: cargo build --release --bin pumpbin --features gui
 
   cli-smoke-linux:
     name: CLI smoke (linux)

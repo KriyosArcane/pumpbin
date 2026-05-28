@@ -10,10 +10,10 @@ pub mod opsec;
 pub mod pack;
 pub mod pe;
 pub mod plugin;
-pub mod scaffold;
 pub mod plugin_system;
 pub mod profile;
 pub mod sbom;
+pub mod scaffold;
 pub mod secret;
 #[cfg(feature = "gui")]
 pub mod style;

@@ -52,11 +52,11 @@ pub struct LoaderOpts {
     /// Empty = no pre-loading.
     pub pre_load_libs: Vec<String>,
     /// Windows-only: instead of `VirtualAlloc(PAGE_EXECUTE_READWRITE)`,
-    /// emit the safer two-step pattern: `VirtualAlloc(PAGE_READWRITE)`
-    /// + copy shellcode + `VirtualProtect(PAGE_EXECUTE_READ)`. Avoids
-    /// the "writable + executable in one region" heuristic some EDRs
-    /// (and YARA rules) flag. Slightly louder on the VirtualProtect
-    /// transition itself, so this is a deliberate tradeoff.
+    /// emit the safer two-step pattern — `VirtualAlloc(PAGE_READWRITE)`,
+    /// copy shellcode, `VirtualProtect(PAGE_EXECUTE_READ)`. Avoids the
+    /// "writable + executable in one region" heuristic some EDRs and
+    /// YARA rules flag. Slightly louder on the VirtualProtect transition
+    /// itself, so this is a deliberate tradeoff.
     pub no_rwx: bool,
 }
 
@@ -108,8 +108,7 @@ impl Markers {
     /// Prefix is always 13 bytes; size-holder is 4 bytes in
     /// binary-mode and 9 bytes in decimal mode.
     fn randomized(binary_size_holder: bool) -> Self {
-        const ALPHABET: &[u8] =
-            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
         let mut rng = rand::thread_rng();
         let mut mk = |len: usize| -> String {
             (0..len)
@@ -151,18 +150,20 @@ pub fn write_loader_scaffold(
         ));
     }
     if !matches!(platform, Platform::Windows) && opts.no_rwx {
-        return Err(anyhow!("--no-rwx is Windows-only (current target: {platform})"));
+        return Err(anyhow!(
+            "--no-rwx is Windows-only (current target: {platform})"
+        ));
     }
 
     fs::write(
         dest.join("Cargo.toml"),
         cargo_toml(name, platform, &markers, &opts),
     )?;
-    fs::write(dest.join("build.rs"), build_rs(&markers, opts.padding_bytes))?;
     fs::write(
-        dest.join("src/main.rs"),
-        main_rs(platform, &markers, &opts),
+        dest.join("build.rs"),
+        build_rs(&markers, opts.padding_bytes),
     )?;
+    fs::write(dest.join("src/main.rs"), main_rs(platform, &markers, &opts))?;
     Ok(())
 }
 
@@ -388,9 +389,7 @@ fn windows_main_rs(markers: &Markers, opts: &LoaderOpts) -> String {
                 } else {
                     format!("{lib}.dll")
                 };
-                format!(
-                    "        let _ = LoadLibraryA(b\"{name}\\0\".as_ptr() as *const u8);\n",
-                )
+                format!("        let _ = LoadLibraryA(b\"{name}\\0\".as_ptr() as *const u8);\n",)
             })
             .collect();
         (
@@ -484,9 +483,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let dest = dir.path().join("scaffold");
         write_loader_scaffold(&dest, "scaffold", Platform::Linux, LoaderOpts::default()).unwrap();
-        let err =
-            write_loader_scaffold(&dest, "scaffold", Platform::Linux, LoaderOpts::default())
-                .unwrap_err();
+        let err = write_loader_scaffold(&dest, "scaffold", Platform::Linux, LoaderOpts::default())
+            .unwrap_err();
         assert!(err.to_string().contains("already exists"));
     }
 

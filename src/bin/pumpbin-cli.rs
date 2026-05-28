@@ -573,9 +573,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
             let mut runtime_config = parse_module_config(module_config)?;
             for entry in post_arg {
                 let (id, rest) = entry.split_once('=').ok_or_else(|| {
-                    anyhow!(
-                        "--post-arg expects <id>=<k=v[;k=v...]>; got: {entry}"
-                    )
+                    anyhow!("--post-arg expects <id>=<k=v[;k=v...]>; got: {entry}")
                 })?;
                 runtime_config.insert(format!("post:{id}"), rest.to_string());
             }
@@ -952,9 +950,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
             }
             Ok(())
         }
-        Commands::ListModules { options, id } => {
-            list_modules(*options, id.as_deref())
-        }
+        Commands::ListModules { options, id } => list_modules(*options, id.as_deref()),
         Commands::ModuleTest {
             id,
             input,
@@ -984,7 +980,10 @@ fn dispatch(cli: &Cli) -> Result<()> {
             // hit wins (built-ins don't overlap).
             let kind = if let Some(ext) = registry().get(id) {
                 Some(ext.kind())
-            } else if pumpbin::modules::encrypt_modules().iter().any(|m| m.id() == id) {
+            } else if pumpbin::modules::encrypt_modules()
+                .iter()
+                .any(|m| m.id() == id)
+            {
                 Some(WireKind::Encrypt)
             } else if pumpbin::modules::format_encrypted_modules()
                 .iter()
@@ -1479,10 +1478,7 @@ fn list_donors(dir: &std::path::Path, recursive: bool, embedded_only: bool) -> R
                 catalog_only += 1;
             }
             Ok((off, sz)) => {
-                println!(
-                    "  embedded ({sz:>7} B at 0x{off:08X})  {}",
-                    path.display()
-                );
+                println!("  embedded ({sz:>7} B at 0x{off:08X})  {}", path.display());
                 embedded += 1;
             }
             Err(_) => {

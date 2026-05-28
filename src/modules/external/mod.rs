@@ -169,8 +169,8 @@ fn user_config_modules_dir() -> Option<PathBuf> {
 fn load_one(manifest_path: &Path) -> Result<ExternalModule> {
     let raw = std::fs::read_to_string(manifest_path)
         .with_context(|| format!("read {}", manifest_path.display()))?;
-    let manifest: Manifest = toml::from_str(&raw)
-        .with_context(|| format!("parse {}", manifest_path.display()))?;
+    let manifest: Manifest =
+        toml::from_str(&raw).with_context(|| format!("parse {}", manifest_path.display()))?;
 
     if manifest.protocol > PROTOCOL_VERSION {
         anyhow::bail!(
@@ -327,7 +327,11 @@ pub fn invoke(
         );
         let stderr = String::from_utf8_lossy(&out.stderr);
         if !stderr.trim().is_empty() {
-            eprintln!("[pumpbin-debug] ← {} stderr: {}", module.id(), stderr.trim());
+            eprintln!(
+                "[pumpbin-debug] ← {} stderr: {}",
+                module.id(),
+                stderr.trim()
+            );
         }
     }
 

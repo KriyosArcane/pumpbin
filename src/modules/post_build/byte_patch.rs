@@ -32,9 +32,9 @@ impl PostBuildModule for BytePatch {
 
     fn args(&self) -> Vec<ArgSpec> {
         vec![
-            ArgSpec::new("patches", "string")
-                .required()
-                .described("Comma-separated <hex_from>:<hex_to> pairs; each pair must be equal length"),
+            ArgSpec::new("patches", "string").required().described(
+                "Comma-separated <hex_from>:<hex_to> pairs; each pair must be equal length",
+            ),
             ArgSpec::new("mode", "string")
                 .default_val("all")
                 .described("`all` (replace every occurrence) or `first` (replace only first)"),
@@ -47,7 +47,9 @@ impl PostBuildModule for BytePatch {
             .iter()
             .find(|(k, _)| k == "patches")
             .map(|(_, v)| v.as_str())
-            .ok_or_else(|| anyhow!("byte-patch: missing required arg 'patches=<from>:<to>[,...]'"))?;
+            .ok_or_else(|| {
+                anyhow!("byte-patch: missing required arg 'patches=<from>:<to>[,...]'")
+            })?;
         let mode = kv
             .iter()
             .find(|(k, _)| k == "mode")
@@ -141,7 +143,8 @@ mod tests {
     fn replaces_all_occurrences_by_default() {
         let m = BytePatch;
         let mut buf = vec![0x48, 0x31, 0xd2, 0xaa, 0x48, 0x31, 0xd2, 0xbb];
-        m.apply(&["patches=4831d2:4833d2".into()], &mut buf).unwrap();
+        m.apply(&["patches=4831d2:4833d2".into()], &mut buf)
+            .unwrap();
         assert_eq!(buf, vec![0x48, 0x33, 0xd2, 0xaa, 0x48, 0x33, 0xd2, 0xbb]);
     }
 
@@ -161,11 +164,8 @@ mod tests {
     fn multiple_pairs_applied_in_order() {
         let m = BytePatch;
         let mut buf = vec![0x48, 0x31, 0xd2, 0x48, 0x31, 0xc0];
-        m.apply(
-            &["patches=4831d2:4833d2,4831c0:4833c0".into()],
-            &mut buf,
-        )
-        .unwrap();
+        m.apply(&["patches=4831d2:4833d2,4831c0:4833c0".into()], &mut buf)
+            .unwrap();
         assert_eq!(buf, vec![0x48, 0x33, 0xd2, 0x48, 0x33, 0xc0]);
     }
 
@@ -191,7 +191,8 @@ mod tests {
     fn no_match_is_noop() {
         let m = BytePatch;
         let mut buf = vec![0u8; 8];
-        m.apply(&["patches=4831d2:4833d2".into()], &mut buf).unwrap();
+        m.apply(&["patches=4831d2:4833d2".into()], &mut buf)
+            .unwrap();
         assert_eq!(buf, vec![0u8; 8]);
     }
 }

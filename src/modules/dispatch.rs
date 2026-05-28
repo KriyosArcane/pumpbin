@@ -22,8 +22,7 @@ pub fn encrypt(id: &str, shellcode: &[u8]) -> Result<EncryptShellcodeOutput> {
     }
     if let Some(ext) = external::registry().get(id) {
         if ext.kind() == WireKind::Encrypt {
-            let (resp, body) =
-                external::invoke(ext, WireKind::Encrypt, &[], shellcode)?;
+            let (resp, body) = external::invoke(ext, WireKind::Encrypt, &[], shellcode)?;
             let pass = resp
                 .pass
                 .iter()
@@ -47,8 +46,7 @@ pub fn format_encrypted(id: &str, encrypted: &[u8]) -> Result<FormatEncryptedOut
     }
     if let Some(ext) = external::registry().get(id) {
         if ext.kind() == WireKind::FormatEncrypted {
-            let (resp, body) =
-                external::invoke(ext, WireKind::FormatEncrypted, &[], encrypted)?;
+            let (resp, body) = external::invoke(ext, WireKind::FormatEncrypted, &[], encrypted)?;
             let pass = resp
                 .pass
                 .iter()
@@ -72,11 +70,10 @@ pub fn format_url(id: &str, url: &str) -> Result<String> {
     }
     if let Some(ext) = external::registry().get(id) {
         if ext.kind() == WireKind::FormatUrl {
-            let (resp, _body) =
-                external::invoke(ext, WireKind::FormatUrl, &[], url.as_bytes())?;
-            return resp.string.ok_or_else(|| {
-                anyhow!("format_url module '{id}' returned no string in response")
-            });
+            let (resp, _body) = external::invoke(ext, WireKind::FormatUrl, &[], url.as_bytes())?;
+            return resp
+                .string
+                .ok_or_else(|| anyhow!("format_url module '{id}' returned no string in response"));
         }
     }
     Err(anyhow!(
@@ -91,11 +88,10 @@ pub fn upload_remote(id: &str, shellcode: &[u8]) -> Result<String> {
     }
     if let Some(ext) = external::registry().get(id) {
         if ext.kind() == WireKind::UploadRemote {
-            let (resp, _body) =
-                external::invoke(ext, WireKind::UploadRemote, &[], shellcode)?;
-            return resp.string.ok_or_else(|| {
-                anyhow!("upload_remote module '{id}' returned no string")
-            });
+            let (resp, _body) = external::invoke(ext, WireKind::UploadRemote, &[], shellcode)?;
+            return resp
+                .string
+                .ok_or_else(|| anyhow!("upload_remote module '{id}' returned no string"));
         }
     }
     Err(anyhow!(
@@ -110,8 +106,7 @@ pub fn post_build(id: &str, args: &[String], implant: &mut Vec<u8>) -> Result<()
     }
     if let Some(ext) = external::registry().get(id) {
         if ext.kind() == WireKind::PostBuild {
-            let (_resp, body) =
-                external::invoke(ext, WireKind::PostBuild, args, implant)?;
+            let (_resp, body) = external::invoke(ext, WireKind::PostBuild, args, implant)?;
             *implant = body;
             return Ok(());
         }
@@ -124,7 +119,10 @@ pub fn post_build(id: &str, args: &[String], implant: &mut Vec<u8>) -> Result<()
 
 fn available_ids_for(kind: WireKind) -> Vec<String> {
     let mut out: Vec<String> = match kind {
-        WireKind::Encrypt => encrypt_modules().iter().map(|m| m.id().to_string()).collect(),
+        WireKind::Encrypt => encrypt_modules()
+            .iter()
+            .map(|m| m.id().to_string())
+            .collect(),
         WireKind::FormatEncrypted => format_encrypted_modules()
             .iter()
             .map(|m| m.id().to_string())

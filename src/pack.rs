@@ -149,7 +149,7 @@ impl B1nBuilder {
         }
         *plugin.plugins.plugin_config_mut() = module_config.into_iter().collect();
 
-        plugin.encode_to_vec().map_err(anyhow::Error::from)
+        plugin.encode_to_vec()
     }
 }
 
@@ -246,9 +246,8 @@ pub fn read_loader_metadata(crate_dir: &Path) -> Result<(String, LoaderMetadata)
             cargo_toml_path.display()
         )
     })?;
-    let parsed: CargoToml = toml::from_str(&raw).with_context(|| {
-        format!("failed to parse {} as TOML", cargo_toml_path.display())
-    })?;
+    let parsed: CargoToml = toml::from_str(&raw)
+        .with_context(|| format!("failed to parse {} as TOML", cargo_toml_path.display()))?;
     let metadata = parsed
         .package
         .metadata
@@ -329,19 +328,43 @@ platform = "windows"
     fn artifact_paths_match_cargo_layout() {
         let root = Path::new("/x");
         assert_eq!(
-            expected_artifact_path(root, "ldr", Platform::Windows, BinaryType::Executable, "release"),
+            expected_artifact_path(
+                root,
+                "ldr",
+                Platform::Windows,
+                BinaryType::Executable,
+                "release"
+            ),
             PathBuf::from("/x/target/release/ldr.exe"),
         );
         assert_eq!(
-            expected_artifact_path(root, "ldr", Platform::Linux, BinaryType::Executable, "release"),
+            expected_artifact_path(
+                root,
+                "ldr",
+                Platform::Linux,
+                BinaryType::Executable,
+                "release"
+            ),
             PathBuf::from("/x/target/release/ldr"),
         );
         assert_eq!(
-            expected_artifact_path(root, "ldr", Platform::Linux, BinaryType::DynamicLibrary, "release"),
+            expected_artifact_path(
+                root,
+                "ldr",
+                Platform::Linux,
+                BinaryType::DynamicLibrary,
+                "release"
+            ),
             PathBuf::from("/x/target/release/libldr.so"),
         );
         assert_eq!(
-            expected_artifact_path(root, "ldr", Platform::Darwin, BinaryType::DynamicLibrary, "release"),
+            expected_artifact_path(
+                root,
+                "ldr",
+                Platform::Darwin,
+                BinaryType::DynamicLibrary,
+                "release"
+            ),
             PathBuf::from("/x/target/release/libldr.dylib"),
         );
     }

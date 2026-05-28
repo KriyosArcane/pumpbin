@@ -319,7 +319,12 @@ impl PluginPlugins {
         for id in self.modules() {
             let args: Vec<String> = runtime_config
                 .and_then(|cfg| cfg.get(&format!("post:{id}")))
-                .map(|s| s.split(';').filter(|p| !p.is_empty()).map(String::from).collect())
+                .map(|s| {
+                    s.split(';')
+                        .filter(|p| !p.is_empty())
+                        .map(String::from)
+                        .collect()
+                })
                 .unwrap_or_default();
             crate::modules::dispatch::post_build(id, &args, &mut out)?;
         }

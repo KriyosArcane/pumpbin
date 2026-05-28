@@ -29,6 +29,9 @@ mod tests {
     #[test]
     fn identity() {
         let m = PassThrough;
-        assert_eq!(m.format("https://example.com/x").unwrap(), "https://example.com/x");
+        assert_eq!(
+            m.format("https://example.com/x").unwrap(),
+            "https://example.com/x"
+        );
     }
 }
