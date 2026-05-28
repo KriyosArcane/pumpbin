@@ -22,20 +22,39 @@ generator — fits between them.
 ## Quick start
 
 ```bash
-# Scaffold + build a Windows loader
-pumpbin-cli new-loader myloader --platform windows --padding-bytes 8192
-cd myloader && cargo build --release && ./pumpbin-pack.sh myloader.b1n
+# 1. Scaffold a Windows loader (a buildable Rust crate)
+pumpbin-cli new-loader myloader --platform windows
 
-# Stamp shellcode into it
+# 2. Build it and pack it as a .b1n
+cd myloader
+cargo build --release
+./pumpbin-pack.sh
+
+# 3. Stamp your shellcode into the loader
 pumpbin-cli generate \
     --plugin myloader.b1n --shellcode payload.bin \
-    --platform windows --type exe --output implant.exe \
-    --post cert-graft  --post-arg cert-graft=donor=/tmp/MRT.exe \
-    --post byte-patch  --post-arg byte-patch=patches=4831d2:4833d2
-
-# Static-scan before deploy
-pumpbin-cli check implant.exe --yara-rules /path/to/rules/
+    --platform windows --type exe --output implant.exe
 ```
+
+You now have `implant.exe`. That's the whole loop.
+
+### Going further
+
+Run transforms over the implant at build time — sign with a stolen
+cert, patch out YARA-matched bytes, clone version info from a donor PE,
+etc. Each transform is a `--post <module> --post-arg <module>=k=v`
+pair:
+
+```bash
+pumpbin-cli generate ... \
+    --post cert-graft --post-arg cert-graft=donor=/path/to/signed.exe
+```
+
+`pumpbin-cli list-modules` shows what's installed.
+[MODULES.md](MODULES.md) explains how to write your own.
+
+`pumpbin-cli check implant.exe --yara-rules <dir>` does a pre-flight
+local YARA scan so you don't burn a sandbox round-trip on a static hit.
 
 ## CLI
 
