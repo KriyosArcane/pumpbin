@@ -251,6 +251,21 @@ pub fn invoke(
     let header_json = serde_json::to_vec(&header)
         .with_context(|| format!("encode request header for '{}'", module.id()))?;
 
+    let debug = std::env::var("PUMPBIN_MODULE_DEBUG").is_ok_and(|v| !v.is_empty() && v != "0");
+    if debug {
+        eprintln!(
+            "[pumpbin-debug] → {} request header ({} B): {}",
+            module.id(),
+            header_json.len(),
+            String::from_utf8_lossy(&header_json)
+        );
+        eprintln!(
+            "[pumpbin-debug] → {} request payload: {} B",
+            module.id(),
+            payload.len()
+        );
+    }
+
     let mut child = Command::new(&module.executable)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -297,6 +312,24 @@ pub fn invoke(
     let resp_body = read_frame(&mut cursor)
         .with_context(|| format!("read response body from '{}'", module.id()))?
         .unwrap_or_default();
+
+    if debug {
+        eprintln!(
+            "[pumpbin-debug] ← {} response header ({} B): {}",
+            module.id(),
+            resp_header_bytes.len(),
+            String::from_utf8_lossy(&resp_header_bytes)
+        );
+        eprintln!(
+            "[pumpbin-debug] ← {} response payload: {} B",
+            module.id(),
+            resp_body.len()
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if !stderr.trim().is_empty() {
+            eprintln!("[pumpbin-debug] ← {} stderr: {}", module.id(), stderr.trim());
+        }
+    }
 
     if let Some(err) = &resp_header.error {
         let stderr = String::from_utf8_lossy(&out.stderr);

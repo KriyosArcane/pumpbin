@@ -39,6 +39,22 @@ def write_error(message):
     sys.stdout.buffer.flush()
 
 
+def parse_args(header):
+    """Convert the request header's args list into a plain dict.
+
+    PumpBin sends args as a JSON array of "key=value" strings:
+        {"args": ["donor=/tmp/mrt.exe", "clone=true"]}
+    This helper turns that into {"donor": "/tmp/mrt.exe", "clone": "true"}.
+    Values containing "=" are handled correctly (only the first "=" splits).
+    """
+    args = {}
+    for item in header.get("args", []):
+        key, sep, val = item.partition("=")
+        if sep:
+            args[key] = val
+    return args
+
+
 def main():
     try:
         header = json.loads(read_frame(sys.stdin.buffer))
@@ -46,6 +62,8 @@ def main():
             write_error(f"this module speaks protocol 1 only, host sent {header['protocol']}")
             sys.exit(1)
         payload = read_frame(sys.stdin.buffer)
+
+        args = parse_args(header)  # {"key": "value", ...} — use args.get("key", default)
 
         # ── your transformation goes here ──────────────────────────────
         mutated = bytes(b - 32 if 0x61 <= b <= 0x7A else b for b in payload)

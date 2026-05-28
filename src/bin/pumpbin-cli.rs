@@ -352,6 +352,12 @@ enum Commands {
         /// stdout. Defaults to `-`.
         #[arg(short, long, default_value = "-")]
         output: String,
+
+        /// Dump the wire frames (request header, payload sizes, response
+        /// header) to stderr. For external modules. Sets the env var
+        /// `PUMPBIN_MODULE_DEBUG=1` for the dispatch call.
+        #[arg(long)]
+        debug: bool,
     },
 
     /// Scaffold a new PumpBin-ready loader crate. Writes a Cargo crate
@@ -400,6 +406,58 @@ enum Commands {
         /// parsing. Saves 5 bytes in the placeholder slot.
         #[arg(long)]
         binary_size_holder: bool,
+
+        /// Windows-only: comma-separated DLL names to `LoadLibraryA`
+        /// from main() BEFORE the shellcode runs. The DLL load event
+        /// is then attributed to this loader's signed `.text` instead
+        /// of the anonymous RWX shellcode region. Names without `.dll`
+        /// get it auto-appended. Example: `ws2_32,kernel32`.
+        #[arg(long, value_delimiter = ',', value_name = "DLL[,DLL...]")]
+        pre_load_libs: Vec<String>,
+
+        /// Windows-only: emit `VirtualAlloc(PAGE_READWRITE)` +
+        /// `VirtualProtect(PAGE_EXECUTE_READ)` instead of single-step
+        /// `PAGE_EXECUTE_READWRITE`. Trades RWX-in-one-region heuristic
+        /// avoidance for a VirtualProtect transition event.
+        #[arg(long)]
+        no_rwx: bool,
+    },
+
+    /// Pre-flight YARA scan of a generated artifact. Shells out to the
+    /// `yara` binary; install via your package manager (`apt install
+    /// yara`, `brew install yara`, `pacman -S yara`). Exits 0 if clean,
+    /// non-zero with matched rule names if any hits. Use this before
+    /// deploying to a sandbox/lab to avoid round-trips for static hits.
+    Check {
+        /// Path to the artifact (PE, ELF, or any binary).
+        artifact: std::path::PathBuf,
+
+        /// Path to a YARA rule file or directory of rules. Directories
+        /// are scanned recursively (passes `-r` to yara).
+        #[arg(long, value_name = "PATH")]
+        yara_rules: std::path::PathBuf,
+
+        /// Override the path to the `yara` binary (default: search PATH).
+        #[arg(long, value_name = "PATH")]
+        yara_bin: Option<std::path::PathBuf>,
+    },
+
+    /// Scan a directory of PE files (.exe, .dll, .sys) and report
+    /// which carry an embedded Authenticode signature (suitable as a
+    /// `trustmebro` / `pe-version-info from_donor=` source) versus
+    /// catalog-signed-only (the signature lives in a separate `.cat`
+    /// file and cannot be grafted onto another PE).
+    ListDonors {
+        /// Directory to scan (non-recursive by default).
+        path: std::path::PathBuf,
+
+        /// Recurse into subdirectories.
+        #[arg(short, long)]
+        recursive: bool,
+
+        /// Print only files with an embedded signature.
+        #[arg(long)]
+        embedded_only: bool,
     },
 
     /// Print shell completion script to stdout
@@ -952,9 +1010,16 @@ fn dispatch(cli: &Cli) -> Result<()> {
             input,
             args,
             output,
+            debug,
         } => {
             use pumpbin::modules::external::{registry, wire::WireKind};
             use std::io::{Read, Write};
+
+            if *debug {
+                // SAFETY: single-threaded CLI; env var is read only inside
+                // external::invoke() on this same thread.
+                unsafe { std::env::set_var("PUMPBIN_MODULE_DEBUG", "1") };
+            }
 
             let payload: Vec<u8> = if input == "-" {
                 let mut buf = Vec::new();
@@ -1064,6 +1129,8 @@ fn dispatch(cli: &Cli) -> Result<()> {
             padding_bytes,
             randomize_markers,
             binary_size_holder,
+            pre_load_libs,
+            no_rwx,
         } => {
             let dest = dest.as_path();
             let crate_name = name.clone().unwrap_or_else(|| {
@@ -1082,6 +1149,8 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 padding_bytes: *padding_bytes,
                 randomize_markers: *randomize_markers,
                 binary_size_holder: *binary_size_holder,
+                pre_load_libs: pre_load_libs.clone(),
+                no_rwx: *no_rwx,
             };
             pumpbin::scaffold::write_loader_scaffold(dest, &crate_name, parsed_platform, opts)?;
             tracing::info!(
@@ -1098,6 +1167,19 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 dest.display(),
                 dest.display(),
             );
+            Ok(())
+        }
+        Commands::Check {
+            artifact,
+            yara_rules,
+            yara_bin,
+        } => yara_check(artifact, yara_rules, yara_bin.as_deref()),
+        Commands::ListDonors {
+            path,
+            recursive,
+            embedded_only,
+        } => {
+            list_donors(path, *recursive, *embedded_only)?;
             Ok(())
         }
         Commands::Completions {
@@ -1341,6 +1423,162 @@ fn bytes_short(b: &[u8]) -> String {
         out.push_str(&format!("... ({} bytes)", b.len()));
     }
     out
+}
+
+fn yara_check(
+    artifact: &std::path::Path,
+    rules: &std::path::Path,
+    yara_bin_override: Option<&std::path::Path>,
+) -> Result<()> {
+    if !artifact.exists() {
+        return Err(anyhow!("artifact not found: {}", artifact.display()));
+    }
+    if !rules.exists() {
+        return Err(anyhow!("yara rules path not found: {}", rules.display()));
+    }
+
+    let yara_bin: std::path::PathBuf = match yara_bin_override {
+        Some(p) => p.to_path_buf(),
+        None => match which("yara") {
+            Some(p) => p,
+            None => {
+                return Err(anyhow!(
+                    "`yara` binary not found in PATH. Install it:\n  apt install yara       (Debian/Ubuntu)\n  brew install yara      (macOS)\n  pacman -S yara         (Arch)\nOr pass --yara-bin <path>."
+                ));
+            }
+        },
+    };
+
+    let mut cmd = std::process::Command::new(&yara_bin);
+    // -r recurses into rule directories (no-op for single files).
+    // -w suppresses YARA's own warnings so output is just matches.
+    cmd.arg("-r").arg("-w").arg(rules).arg(artifact);
+    let out = cmd
+        .output()
+        .map_err(|e| anyhow!("failed to spawn yara ({}): {e}", yara_bin.display()))?;
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    if !out.status.success() {
+        return Err(anyhow!(
+            "yara exited with {}: {}",
+            out.status,
+            stderr.trim()
+        ));
+    }
+
+    let matches: Vec<&str> = stdout.lines().filter(|l| !l.trim().is_empty()).collect();
+    if matches.is_empty() {
+        println!(
+            "clean — no YARA matches in {} against {}",
+            artifact.display(),
+            rules.display()
+        );
+        Ok(())
+    } else {
+        println!(
+            "{} YARA match(es) against {}:",
+            matches.len(),
+            artifact.display()
+        );
+        for m in &matches {
+            println!("  {m}");
+        }
+        Err(anyhow!("{} YARA rule(s) matched", matches.len()))
+    }
+}
+
+fn which(name: &str) -> Option<std::path::PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        let cand = dir.join(name);
+        if cand.is_file() {
+            return Some(cand);
+        }
+    }
+    None
+}
+
+fn list_donors(dir: &std::path::Path, recursive: bool, embedded_only: bool) -> Result<()> {
+    let mut files: Vec<std::path::PathBuf> = Vec::new();
+    collect_pe_paths(dir, recursive, &mut files)?;
+    files.sort();
+
+    if files.is_empty() {
+        eprintln!("no PE files found under {}", dir.display());
+        return Ok(());
+    }
+
+    let mut embedded = 0usize;
+    let mut catalog_only = 0usize;
+    let mut errored = 0usize;
+    for path in &files {
+        let bytes = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("  ! {}: read error: {e}", path.display());
+                errored += 1;
+                continue;
+            }
+        };
+        match pumpbin::pe::read_security_dir(&bytes) {
+            Ok((0, 0)) => {
+                if !embedded_only {
+                    println!("  catalog-only  {}", path.display());
+                }
+                catalog_only += 1;
+            }
+            Ok((off, sz)) => {
+                println!(
+                    "  embedded ({sz:>7} B at 0x{off:08X})  {}",
+                    path.display()
+                );
+                embedded += 1;
+            }
+            Err(_) => {
+                // Not a PE, skip silently — directory may mix file types.
+            }
+        }
+    }
+    eprintln!(
+        "\n{} embedded, {} catalog-only, {} errored ({} files scanned under {})",
+        embedded,
+        catalog_only,
+        errored,
+        files.len(),
+        dir.display()
+    );
+    Ok(())
+}
+
+fn collect_pe_paths(
+    dir: &std::path::Path,
+    recursive: bool,
+    out: &mut Vec<std::path::PathBuf>,
+) -> Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let ft = entry.file_type()?;
+        if ft.is_dir() {
+            if recursive {
+                let _ = collect_pe_paths(&path, true, out);
+            }
+            continue;
+        }
+        if !ft.is_file() {
+            continue;
+        }
+        let ext = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_ascii_lowercase());
+        if matches!(ext.as_deref(), Some("exe" | "dll" | "sys")) {
+            out.push(path);
+        }
+    }
+    Ok(())
 }
 
 fn default_scaffold_platform() -> String {

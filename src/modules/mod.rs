@@ -138,7 +138,8 @@ pub fn upload_remote_modules() -> &'static [&'static dyn UploadRemoteModule] {
 pub fn post_build_modules() -> &'static [&'static dyn PostBuildModule] {
     &[
         &post_build::pe_version_info::PeVersionInfo,
-        &post_build::cert_blob_steal::CertBlobSteal,
+        &post_build::byte_patch::BytePatch,
+        &post_build::cert_graft::CertGraft,
     ]
 }
 
@@ -163,7 +164,7 @@ mod tests {
 
         let post: Vec<_> = post_build_modules().iter().map(|m| m.id()).collect();
         assert!(post.contains(&"pe-version-info"));
-        assert!(post.contains(&"cert-blob-steal"));
+        assert!(!post.contains(&"cert-blob-steal"), "cert-blob-steal removed; use trustmebro external module");
 
         assert!(format_encrypted_modules().is_empty());
         assert!(upload_remote_modules().is_empty());

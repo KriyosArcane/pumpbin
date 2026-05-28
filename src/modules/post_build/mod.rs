@@ -1,4 +1,5 @@
-pub mod cert_blob_steal;
+pub mod byte_patch;
+pub mod cert_graft;
 pub mod pe_version_info;
 
 /// Parse a slice of `key=value` strings into `(key, value)` pairs.

@@ -109,6 +109,23 @@ Exit code: `0` = success; non-zero = failure.
 }
 ```
 
+`args` is always a **flat array of `"key=value"` strings** — not a dict,
+not a list of objects. To consume it in Python:
+
+```python
+def parse_args(header):
+    args = {}
+    for item in header.get("args", []):
+        key, sep, val = item.partition("=")
+        if sep:
+            args[key] = val
+    return args
+# args["deep"] == "true", args["keep_export"] == "false"
+```
+
+The same pattern in any language: split each string on the **first** `=`.
+Values that themselves contain `=` (e.g. base64) are preserved correctly.
+
 If `args` is set, each entry is a free-form `key=value` string the
 operator passed via `--post-arg`. Modules SHOULD treat unknown keys
 as errors and missing required keys as errors.
@@ -226,6 +243,28 @@ pumpbin-cli generate -p loader.b1n -s sc.bin --platform linux -t exe \
     -o implant --post my-module --post-arg my-module=key=value
 ```
 
+### Baking a default post-chain into the `.b1n`
+
+If a `.b1n` always needs the same post-build modules (e.g. always sign
+with a stolen cert + clone version info from a donor), bake them in at
+`create-b1n` time so the operator doesn't have to remember `--post`
+on every `generate`:
+
+```
+pumpbin-cli create-b1n \
+    --template loader.exe --output loader.b1n \
+    --name myloader --platform windows --type exe \
+    --prefix '$$SHELLCODE$$' --size-holder '$$99999$$' \
+    --post-module cert-graft \
+    --post-module-config 0:donor=/tmp/mrt.exe \
+    --post-module pe-version-info \
+    --post-module-config 1:from_donor=/tmp/mrt.exe
+```
+
+Now `pumpbin-cli generate -p loader.b1n -s sc.bin -t exe --platform windows`
+runs both modules automatically. Explicit `--post`/`--post-arg` on
+`generate` **append** to this chain rather than replacing it.
+
 ## Discovering options
 
 Mirrors NetExec's `--options` flag:
@@ -240,8 +279,7 @@ Modules surface their args from two sources:
 
 - **Built-ins**: declared via `Module::args() -> Vec<ArgSpec>` in the
   trait impl. See `pumpbin/src/modules/post_build/pe_version_info.rs`
-  for an 8-arg example or `cert_blob_steal.rs` for a single
-  required-arg example.
+  for an 8-arg example.
 - **External (drop-in)**: declared via `[[args]]` blocks in
   `pumpbin-module.toml`. Each block has `key`, `type`, optional
   `description`, optional `required`, optional `default`. Add as
