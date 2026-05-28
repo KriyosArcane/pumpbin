@@ -101,7 +101,7 @@ impl Markers {
 
     /// Generate a unique-per-build pair. Uses A-Z a-z 0-9 only —
     /// printable, shell-safe, no quoting hazard in the
-    /// pumpbin-pack.sh that wraps these in `--prefix` flags.
+    /// pumpbin-pack.sh that wraps these in `--src-prefix` flags.
     ///
     /// Prefix is always 13 bytes; size-holder is 4 bytes in
     /// binary-mode and 9 bytes in decimal mode.
@@ -326,7 +326,7 @@ pumpbin-cli create-b1n \
     --name     "{name}" \
     --platform {platform_str} \
     --type     exe \
-    --prefix       '{prefix}' \
+    --src-prefix   '{prefix}' \
     --size-holder  '{size_holder}' \
     --max-len      {padding_bytes}
 
@@ -562,7 +562,7 @@ mod tests {
             "randomized scaffold leaked default $$99999$$"
         );
         // Extract the prefix the scaffold actually chose, then
-        // confirm pack.sh wraps that exact string in --prefix.
+        // confirm pack.sh wraps that exact string in --src-prefix.
         let prefix_line = build_rs
             .lines()
             .find(|l| l.contains("b\""))
@@ -572,7 +572,7 @@ mod tests {
             .nth(1)
             .expect("could not locate prefix string literal in build.rs");
         assert_eq!(prefix.len(), 13);
-        assert!(pack.contains(&format!("--prefix       '{prefix}'")));
+        assert!(pack.contains(&format!("--src-prefix   '{prefix}'")));
     }
 
     #[test]
