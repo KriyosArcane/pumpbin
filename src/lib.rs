@@ -7,6 +7,7 @@ pub mod logging;
 pub mod maker;
 pub mod modules;
 pub mod opsec;
+pub mod pack;
 pub mod pe;
 pub mod plugin;
 pub mod scaffold;

@@ -25,14 +25,12 @@ generator — fits between them.
 # 1. Scaffold a Windows loader (a buildable Rust crate)
 pumpbin-cli new-loader myloader --platform windows
 
-# 2. Build it and pack it as a .b1n
-cd myloader
-cargo build --release
-./pumpbin-pack.sh
+# 2. Build + assemble .b1n in one step
+pumpbin-cli pack myloader
 
 # 3. Stamp your shellcode into the loader
 pumpbin-cli generate \
-    --plugin myloader.b1n --shellcode payload.bin \
+    --plugin myloader/myloader.b1n --shellcode payload.bin \
     --platform windows --type exe --output implant.exe
 ```
 
@@ -60,8 +58,8 @@ local YARA scan so you don't burn a sandbox round-trip on a static hit.
 
 ```
 generate / batch / build       stamp shellcode into a loader
-new-loader                     scaffold a Cargo crate (Rust loader)
-create-b1n / inspect / verify  pack + audit .b1n plugin packs
+new-loader / pack              scaffold + build + assemble a .b1n
+create-b1n / inspect / verify  ad-hoc pack + audit .b1n plugin packs
 list-modules / module-test     list and exercise modules
 list-donors                    find PEs with embedded signatures
 check                          pre-flight YARA scan

@@ -261,6 +261,34 @@ enum Commands {
         module_config: Vec<String>,
     },
 
+    /// Build a scaffolded loader crate and pack the resulting binary
+    /// into a .b1n in one step. Reads `[package.metadata.pumpbin]`
+    /// from `<crate-dir>/Cargo.toml` for the loader config. The
+    /// modern replacement for the generated `pumpbin-pack.sh` —
+    /// cross-platform (no bash), one command instead of two.
+    Pack {
+        /// Path to the scaffolded loader crate. Defaults to the current
+        /// directory.
+        #[arg(default_value = ".", value_hint = clap::ValueHint::DirPath)]
+        crate_dir: PathBuf,
+
+        /// Cargo profile to build with. Default `release` matches what
+        /// `new-loader` recommends.
+        #[arg(long, default_value = "release")]
+        profile: String,
+
+        /// Output .b1n path. Defaults to `<crate-dir>/<name>.b1n` where
+        /// `<name>` is the metadata's `name` field.
+        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
+        output: Option<PathBuf>,
+
+        /// Skip `cargo build` — assume the artifact is already on disk.
+        /// Useful for repacking after a manual rebuild or when the build
+        /// happens in CI.
+        #[arg(long)]
+        skip_build: bool,
+    },
+
     /// Verify a generated binary for authenticode/checksum/module markers
     Verify {
         /// Binary to verify
@@ -361,9 +389,11 @@ enum Commands {
     },
 
     /// Scaffold a new PumpBin-ready loader crate. Writes a Cargo crate
-    /// at <dest> with `build.rs` + `src/main.rs` + `pumpbin-pack.sh`
-    /// pre-wired to the placeholder markers the CLI expects. No
-    /// magic-string copy-paste from the author.
+    /// at <dest> with `Cargo.toml` (carrying a
+    /// `[package.metadata.pumpbin]` block), `build.rs`, and
+    /// `src/main.rs` pre-wired to the placeholder markers. Then run
+    /// `pumpbin-cli pack <dest>` to build the crate and assemble the
+    /// `.b1n` in one step.
     ///
     /// `--padding-bytes` sets the shellcode placeholder capacity
     /// (default 1 MiB; PIC loaders typically want 4 KiB - 64 KiB).
@@ -794,123 +824,43 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 format!("failed to read template binary: {}", template.display())
             })?;
 
-            // Build the replace config with a temporary max_len so we can
-            // call preflight_template; the real value gets stamped in below
-            // after we either auto-detect it or honor the user's override.
-            let mut plugin = Plugin {
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                info: PluginInfo {
-                    plugin_name: name.clone(),
-                    author: author.clone(),
-                    version: plugin_version.clone(),
-                    desc: desc.clone(),
-                },
-                replace: PluginReplace {
-                    src_prefix: src_prefix.as_bytes().to_vec(),
-                    size_holder: match parsed_save_type {
-                        ShellcodeSaveType::Local => Some(size_holder.as_bytes().to_vec()),
-                        ShellcodeSaveType::Remote => None,
-                    },
-                    max_len: 0,
-                },
-                ..Default::default()
-            };
-
-            // Preflight the template using the same check the Maker GUI runs.
-            // Without this, pumpbin-cli create-b1n silently produced .b1n
-            // files that failed at generate-time with "Holder '...' not
-            // found in binary" (the repo's own hello.b1n was an example).
-            plugin
-                .replace
-                .preflight_template(&template_bytes)
-                .with_context(|| format!("Template at '{}'", template.display()))?;
-
-            // Auto-detect placeholder capacity (the contiguous padding run
-            // after src_prefix). Used as the default when --max-len is
-            // omitted; if --max-len is set and exceeds the detected
-            // capacity, refuse — that combination silently produces .b1n
-            // files that fail at generate-time with PB-E0012.
-            let detected_capacity = plugin
-                .replace
-                .measure_placeholder_capacity(&template_bytes)
-                .unwrap_or(0);
-            plugin.replace.max_len = match max_len {
-                Some(explicit) => {
-                    if *explicit > detected_capacity as u64 && detected_capacity > 0 {
-                        anyhow::bail!(
-                            "--max-len {} exceeds the {} bytes of padding measured \
-                             after `{}` in the template. Stamped shellcodes larger \
-                             than the padding run would overflow into adjacent \
-                             template bytes and corrupt the loader.",
-                            explicit,
-                            detected_capacity,
-                            src_prefix,
-                        );
-                    }
-                    *explicit
-                }
-                None => {
-                    if detected_capacity == 0 {
-                        anyhow::bail!(
-                            "could not auto-detect placeholder capacity (no padding \
-                             after `{}` in template). Pass --max-len <bytes> \
-                             explicitly.",
-                            src_prefix,
-                        );
-                    }
-                    tracing::info!(
-                        detected_capacity,
-                        "auto-detected placeholder capacity from template"
-                    );
-                    detected_capacity as u64
-                }
-            };
-
-            match (parsed_platform, parsed_binary_type) {
-                (Platform::Windows, BinaryType::Executable) => {
-                    *plugin.bins.windows.executable_mut() = Some(template_bytes);
-                }
-                (Platform::Windows, BinaryType::DynamicLibrary) => {
-                    *plugin.bins.windows.dynamic_library_mut() = Some(template_bytes);
-                }
-                (Platform::Linux, BinaryType::Executable) => {
-                    *plugin.bins.linux.executable_mut() = Some(template_bytes);
-                }
-                (Platform::Linux, BinaryType::DynamicLibrary) => {
-                    *plugin.bins.linux.dynamic_library_mut() = Some(template_bytes);
-                }
-                (Platform::Darwin, BinaryType::Executable) => {
-                    *plugin.bins.darwin.executable_mut() = Some(template_bytes);
-                }
-                (Platform::Darwin, BinaryType::DynamicLibrary) => {
-                    *plugin.bins.darwin.dynamic_library_mut() = Some(template_bytes);
-                }
-            }
-
-            if let Some(module_id) = module {
-                plugin.plugins.modules_mut().push(module_id.clone());
-            }
-
             let mut cfg = parse_module_config(module_config)?;
-
-            for id in post_modules {
-                plugin.plugins.modules_mut().push(id.clone());
-            }
-
             for entry in post_module_config {
                 let (idx, key, value) = parse_post_module_config_entry(entry)?;
                 cfg.insert(format!("post_chain.{}.config.{}", idx, key), value);
             }
 
-            *plugin.plugins.plugin_config_mut() = cfg.into_iter().collect();
+            let data = pumpbin::pack::B1nBuilder {
+                template_bytes,
+                name: name.clone(),
+                author: author.clone(),
+                plugin_version: plugin_version.clone(),
+                desc: desc.clone(),
+                platform: parsed_platform,
+                binary_type: parsed_binary_type,
+                save_type: parsed_save_type,
+                src_prefix: src_prefix.clone(),
+                size_holder: size_holder.clone(),
+                max_len_override: *max_len,
+                primary_module: module.clone(),
+                post_modules: post_modules.clone(),
+                module_config: cfg,
+            }
+            .assemble()
+            .with_context(|| format!("template at '{}'", template.display()))?;
 
-            let data = plugin.encode_to_vec()?;
             pumpbin::utils::atomic_write(output, &data)
                 .with_context(|| format!("failed to write output .b1n: {}", output.display()))?;
 
             tracing::info!(output = %output.display(), "Created .b1n plugin pack");
             Ok(())
         }
+        Commands::Pack {
+            crate_dir,
+            profile,
+            output,
+            skip_build,
+        } => pack_crate(crate_dir, profile, output.as_deref(), *skip_build),
         Commands::Verify { binary } => verify_binary(binary),
         Commands::Inspect { binary, diff } => {
             let left = pumpbin::inspect::inspect(binary)?;
@@ -1163,8 +1113,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 "Scaffolded loader crate",
             );
             println!(
-                "Scaffolded loader crate at {}.\n  cd {} && cargo build --release\n  ./pumpbin-pack.sh    # wraps pumpbin-cli create-b1n with the right flags",
-                dest.display(),
+                "Scaffolded loader crate at {0}.\n  pumpbin-cli pack {0}    # build + assemble .b1n in one step",
                 dest.display(),
             );
             Ok(())
@@ -1591,6 +1540,111 @@ fn default_scaffold_platform() -> String {
     } else {
         "linux".to_string()
     }
+}
+
+fn pack_crate(
+    crate_dir: &Path,
+    profile: &str,
+    output_override: Option<&Path>,
+    skip_build: bool,
+) -> Result<()> {
+    let (cargo_pkg_name, md) = pumpbin::pack::read_loader_metadata(crate_dir)?;
+    let platform = parse_platform(&md.platform)?;
+    let binary_type = parse_binary_type(&md.binary_type)?;
+    let save_type = parse_save_type(&md.save_type)?;
+
+    // 1. Build the crate (unless --skip-build).
+    if !skip_build {
+        tracing::info!(crate_dir = %crate_dir.display(), profile, "cargo build");
+        let cargo_args: &[&str] = if profile == "release" {
+            &["build", "--release"]
+        } else if profile == "dev" || profile == "debug" {
+            &["build"]
+        } else {
+            // Custom Cargo profiles: pass --profile <name>.
+            &["build", "--profile"]
+        };
+        let mut cmd = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+        cmd.current_dir(crate_dir);
+        for a in cargo_args {
+            cmd.arg(a);
+        }
+        if cargo_args.last() == Some(&"--profile") {
+            cmd.arg(profile);
+        }
+        let status = cmd
+            .status()
+            .with_context(|| format!("failed to invoke cargo in {}", crate_dir.display()))?;
+        if !status.success() {
+            bail!(
+                "cargo build (profile `{}`) failed in {} with status {}",
+                profile,
+                crate_dir.display(),
+                status
+            );
+        }
+    }
+
+    // 2. Locate the built artifact.
+    // Cargo's `dev`/`debug` profile writes to target/debug, not target/dev.
+    let artifact_subdir = if profile == "dev" { "debug" } else { profile };
+    let template_path = pumpbin::pack::expected_artifact_path(
+        crate_dir,
+        &cargo_pkg_name,
+        platform,
+        binary_type,
+        artifact_subdir,
+    );
+    let template_bytes = std::fs::read(&template_path).with_context(|| {
+        format!(
+            "no built artifact at {} — did `cargo build --{}` succeed?",
+            template_path.display(),
+            profile
+        )
+    })?;
+
+    // 3. Assemble baseline module config + bake in the metadata's
+    // default post chain.
+    let mut cfg = BTreeMap::new();
+    let mut post_modules = Vec::new();
+    for (idx, post) in md.post.iter().enumerate() {
+        post_modules.push(post.id.clone());
+        for (k, v) in &post.config {
+            cfg.insert(format!("post_chain.{}.config.{}", idx, k), v.clone());
+        }
+    }
+
+    let data = pumpbin::pack::B1nBuilder {
+        template_bytes,
+        name: md.name.clone(),
+        author: md.author,
+        plugin_version: md.plugin_version,
+        desc: md.description,
+        platform,
+        binary_type,
+        save_type,
+        src_prefix: md.src_prefix,
+        size_holder: md.size_holder,
+        max_len_override: md.max_len,
+        primary_module: None,
+        post_modules,
+        module_config: cfg,
+    }
+    .assemble()
+    .with_context(|| format!("assembling .b1n from {}", template_path.display()))?;
+
+    // 4. Resolve output path: explicit > <crate>/<name>.b1n.
+    let output_path = match output_override {
+        Some(p) => p.to_path_buf(),
+        None => crate_dir.join(format!("{}.b1n", md.name)),
+    };
+
+    pumpbin::utils::atomic_write(&output_path, &data)
+        .with_context(|| format!("writing {}", output_path.display()))?;
+
+    tracing::info!(output = %output_path.display(), "Packed .b1n");
+    println!("wrote {}", output_path.display());
+    Ok(())
 }
 
 fn parse_platform(s: &str) -> Result<Platform> {

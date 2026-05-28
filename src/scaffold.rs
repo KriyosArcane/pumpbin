@@ -3,12 +3,13 @@
 //! to copy-paste `$$SHELLCODE$$` / `$$99999$$` magic strings by hand.
 //!
 //! Output of `pumpbin-cli new-loader <name>` is:
-//!   <name>/Cargo.toml
+//!   <name>/Cargo.toml      (includes [package.metadata.pumpbin])
 //!   <name>/build.rs
 //!   <name>/src/main.rs
 //!
-//! `cargo build --release` inside the new crate produces a binary
-//! that `pumpbin-cli create-b1n` packs without further tweaking.
+//! After scaffolding, `pumpbin-cli pack <name>` builds the crate and
+//! writes the `.b1n` in one step, reading the marker bytes, platform,
+//! and binary type from the metadata block in Cargo.toml.
 
 use anyhow::{anyhow, Result};
 use rand::Rng;
@@ -73,8 +74,8 @@ impl Default for LoaderOpts {
 
 /// Concrete marker bytes for one scaffolded crate. Held in the
 /// scaffold so the same values get woven into `build.rs`,
-/// `src/main.rs`, and the `pumpbin-pack.sh` helper script
-/// consistently.
+/// `src/main.rs`, and the Cargo.toml `[package.metadata.pumpbin]`
+/// block consistently.
 #[derive(Debug, Clone)]
 struct Markers {
     /// Where PumpBin's `memmem` finds the shellcode region.
@@ -101,7 +102,8 @@ impl Markers {
 
     /// Generate a unique-per-build pair. Uses A-Z a-z 0-9 only —
     /// printable, shell-safe, no quoting hazard in the
-    /// pumpbin-pack.sh that wraps these in `--src-prefix` flags.
+    /// Cargo.toml [package.metadata.pumpbin] block so `pumpbin-cli pack`
+    /// finds them.
     ///
     /// Prefix is always 13 bytes; size-holder is 4 bytes in
     /// binary-mode and 9 bytes in decimal mode.
@@ -152,32 +154,19 @@ pub fn write_loader_scaffold(
         return Err(anyhow!("--no-rwx is Windows-only (current target: {platform})"));
     }
 
-    fs::write(dest.join("Cargo.toml"), cargo_toml(name, platform, &opts))?;
+    fs::write(
+        dest.join("Cargo.toml"),
+        cargo_toml(name, platform, &markers, &opts),
+    )?;
     fs::write(dest.join("build.rs"), build_rs(&markers, opts.padding_bytes))?;
     fs::write(
         dest.join("src/main.rs"),
         main_rs(platform, &markers, &opts),
     )?;
-    fs::write(
-        dest.join("pumpbin-pack.sh"),
-        pack_script(name, platform, &markers, opts.padding_bytes),
-    )?;
-    // Make the pack script executable on unix. Best-effort; we
-    // ignore platforms where chmod is irrelevant.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let path = dest.join("pumpbin-pack.sh");
-        if let Ok(meta) = fs::metadata(&path) {
-            let mut perm = meta.permissions();
-            perm.set_mode(0o755);
-            let _ = fs::set_permissions(&path, perm);
-        }
-    }
     Ok(())
 }
 
-fn cargo_toml(name: &str, platform: Platform, opts: &LoaderOpts) -> String {
+fn cargo_toml(name: &str, platform: Platform, markers: &Markers, opts: &LoaderOpts) -> String {
     let deps = match platform {
         Platform::Linux => "libc = \"0.2\"".to_string(),
         // No Win32_System_Threading — the Windows scaffold runs shellcode
@@ -196,6 +185,11 @@ fn cargo_toml(name: &str, platform: Platform, opts: &LoaderOpts) -> String {
         }
         Platform::Darwin => "libc = \"0.2\"".to_string(),
     };
+    let platform_str = match platform {
+        Platform::Windows => "windows",
+        Platform::Linux => "linux",
+        Platform::Darwin => "darwin",
+    };
     format!(
         r#"[package]
 name = "{name}"
@@ -210,16 +204,33 @@ opt-level = 3
 lto = true
 strip = true
 codegen-units = 1
-"#
+
+# Read by `pumpbin-cli pack`. Operators don't edit this by hand — the
+# `new-loader` scaffold writes it. Optional fields you can add:
+#   author, description, plugin_version, max_len (omit = auto-measure)
+# To bake a default post-build chain into every .b1n built from this
+# crate:
+#   [[package.metadata.pumpbin.post]]
+#   id = "cert-graft"
+#   config = {{ donor = "/path/to/signed.exe" }}
+[package.metadata.pumpbin]
+name = "{name}"
+platform = "{platform_str}"
+binary_type = "exe"
+src_prefix = "{prefix}"
+size_holder = "{size_holder}"
+"#,
+        prefix = markers.prefix,
+        size_holder = markers.size_holder,
     )
 }
 
 fn build_rs(markers: &Markers, padding_bytes: usize) -> String {
     format!(
-        r##"// Generates a shellcode placeholder file that PumpBin patches at
-// stamp-time. The prefix and padding length are baked in by the
-// scaffolder so this build.rs and the pumpbin-pack.sh script that
-// wraps `pumpbin-cli create-b1n` always agree.
+        r##"// Generates a shellcode placeholder file PumpBin's stamper patches
+// at generate-time. The prefix and padding length are baked in by the
+// scaffolder so this build.rs and Cargo.toml's
+// [package.metadata.pumpbin] always agree on the marker bytes.
 use std::{{fs, iter}};
 
 fn main() {{
@@ -286,59 +297,6 @@ fn shellcode_len() -> usize {{
             size_holder = markers.size_holder,
         )
     }
-}
-
-fn pack_script(
-    name: &str,
-    platform: Platform,
-    markers: &Markers,
-    padding_bytes: usize,
-) -> String {
-    let platform_str = match platform {
-        Platform::Windows => "windows",
-        Platform::Linux => "linux",
-        Platform::Darwin => "darwin",
-    };
-    let template_path = match platform {
-        Platform::Windows => format!("target/release/{name}.exe"),
-        _ => format!("target/release/{name}"),
-    };
-    format!(
-        r##"#!/usr/bin/env bash
-# pumpbin-pack.sh — pack this loader crate into a .b1n with the right
-# marker bytes baked in. Run after `cargo build --release`.
-#
-# Usage:  ./pumpbin-pack.sh [OUTPUT.b1n]
-#         (default OUTPUT.b1n = {name}.b1n)
-set -euo pipefail
-
-OUT="${{1:-{name}.b1n}}"
-TEMPLATE="{template_path}"
-
-if [[ ! -f "$TEMPLATE" ]]; then
-    echo "error: $TEMPLATE not built — run 'cargo build --release' first" >&2
-    exit 1
-fi
-
-pumpbin-cli create-b1n \
-    --template "$TEMPLATE" \
-    --output   "$OUT" \
-    --name     "{name}" \
-    --platform {platform_str} \
-    --type     exe \
-    --src-prefix   '{prefix}' \
-    --size-holder  '{size_holder}' \
-    --max-len      {padding_bytes}
-
-echo "wrote $OUT"
-"##,
-        name = name,
-        template_path = template_path,
-        platform_str = platform_str,
-        prefix = markers.prefix,
-        size_holder = markers.size_holder,
-        padding_bytes = padding_bytes,
-    )
 }
 
 fn linux_main_rs(markers: &Markers, binary_size_holder: bool) -> String {
@@ -493,14 +451,32 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn linux_scaffold_writes_four_files() {
+    fn linux_scaffold_writes_three_files() {
         let dir = tempdir().unwrap();
         let dest = dir.path().join("scaffold");
         write_loader_scaffold(&dest, "scaffold", Platform::Linux, LoaderOpts::default()).unwrap();
         assert!(dest.join("Cargo.toml").is_file());
         assert!(dest.join("build.rs").is_file());
         assert!(dest.join("src/main.rs").is_file());
-        assert!(dest.join("pumpbin-pack.sh").is_file());
+        // pumpbin-pack.sh is gone — `pumpbin-cli pack` reads
+        // [package.metadata.pumpbin] from Cargo.toml directly.
+        assert!(!dest.join("pumpbin-pack.sh").exists());
+    }
+
+    #[test]
+    fn scaffold_emits_pumpbin_metadata_block() {
+        let dir = tempdir().unwrap();
+        let dest = dir.path().join("scaffold");
+        write_loader_scaffold(&dest, "myloader", Platform::Linux, LoaderOpts::default()).unwrap();
+        let cargo_toml = std::fs::read_to_string(dest.join("Cargo.toml")).unwrap();
+        assert!(
+            cargo_toml.contains("[package.metadata.pumpbin]"),
+            "scaffolded Cargo.toml missing metadata block:\n{cargo_toml}"
+        );
+        assert!(cargo_toml.contains("name = \"myloader\""));
+        assert!(cargo_toml.contains("platform = \"linux\""));
+        assert!(cargo_toml.contains(&format!("src_prefix = \"{DEFAULT_PREFIX}\"")));
+        assert!(cargo_toml.contains(&format!("size_holder = \"{DEFAULT_SIZE_HOLDER}\"")));
     }
 
     #[test]
@@ -526,7 +502,7 @@ mod tests {
     }
 
     #[test]
-    fn padding_bytes_flows_into_build_rs_and_pack_script() {
+    fn padding_bytes_flows_into_build_rs() {
         let dir = tempdir().unwrap();
         let dest = dir.path().join("scaffold");
         let opts = LoaderOpts {
@@ -537,12 +513,10 @@ mod tests {
         let build_rs = std::fs::read_to_string(dest.join("build.rs")).unwrap();
         assert!(build_rs.contains("8192"));
         assert!(!build_rs.contains("1024 * 1024"));
-        let pack = std::fs::read_to_string(dest.join("pumpbin-pack.sh")).unwrap();
-        assert!(pack.contains("--max-len      8192"));
     }
 
     #[test]
-    fn randomized_markers_differ_from_static_and_match_pack_script() {
+    fn randomized_markers_match_cargo_metadata_block() {
         let dir = tempdir().unwrap();
         let dest = dir.path().join("scaffold");
         let opts = LoaderOpts {
@@ -552,7 +526,7 @@ mod tests {
         write_loader_scaffold(&dest, "scaffold", Platform::Linux, opts).unwrap();
         let build_rs = std::fs::read_to_string(dest.join("build.rs")).unwrap();
         let main_rs = std::fs::read_to_string(dest.join("src/main.rs")).unwrap();
-        let pack = std::fs::read_to_string(dest.join("pumpbin-pack.sh")).unwrap();
+        let cargo_toml = std::fs::read_to_string(dest.join("Cargo.toml")).unwrap();
         assert!(
             !build_rs.contains(DEFAULT_PREFIX),
             "randomized scaffold leaked default $$SHELLCODE$$"
@@ -561,8 +535,9 @@ mod tests {
             !main_rs.contains(DEFAULT_SIZE_HOLDER),
             "randomized scaffold leaked default $$99999$$"
         );
-        // Extract the prefix the scaffold actually chose, then
-        // confirm pack.sh wraps that exact string in --src-prefix.
+        // Extract the random prefix from build.rs, then confirm
+        // Cargo.toml's metadata block carries the same value so
+        // `pumpbin-cli pack` sees a consistent picture.
         let prefix_line = build_rs
             .lines()
             .find(|l| l.contains("b\""))
@@ -572,7 +547,7 @@ mod tests {
             .nth(1)
             .expect("could not locate prefix string literal in build.rs");
         assert_eq!(prefix.len(), 13);
-        assert!(pack.contains(&format!("--src-prefix   '{prefix}'")));
+        assert!(cargo_toml.contains(&format!("src_prefix = \"{prefix}\"")));
     }
 
     #[test]

@@ -246,24 +246,45 @@ pumpbin-cli generate -p loader.b1n -s sc.bin --platform linux -t exe \
 ### Baking a default post-chain into the `.b1n`
 
 If a `.b1n` always needs the same post-build modules (e.g. always sign
-with a stolen cert + clone version info from a donor), bake them in at
-`create-b1n` time so the operator doesn't have to remember `--post`
-on every `generate`:
+with a stolen cert + clone version info from a donor), bake them in
+once so the operator doesn't have to remember `--post` on every
+`generate`.
+
+The cleanest path is the metadata block in your loader crate's
+`Cargo.toml` — `pumpbin-cli pack` picks it up automatically:
+
+```toml
+[package.metadata.pumpbin]
+name = "myloader"
+platform = "windows"
+
+[[package.metadata.pumpbin.post]]
+id = "cert-graft"
+config = { donor = "/tmp/mrt.exe" }
+
+[[package.metadata.pumpbin.post]]
+id = "pe-version-info"
+config = { from_donor = "/tmp/mrt.exe" }
+```
+
+For ad-hoc loaders that aren't scaffolded, `create-b1n` takes the
+chain via flags instead:
 
 ```
 pumpbin-cli create-b1n \
     --template loader.exe --output loader.b1n \
     --name myloader --platform windows --type exe \
-    --prefix '$$SHELLCODE$$' --size-holder '$$99999$$' \
+    --src-prefix '$$SHELLCODE$$' --size-holder '$$99999$$' \
     --post-module cert-graft \
     --post-module-config 0:donor=/tmp/mrt.exe \
     --post-module pe-version-info \
     --post-module-config 1:from_donor=/tmp/mrt.exe
 ```
 
-Now `pumpbin-cli generate -p loader.b1n -s sc.bin -t exe --platform windows`
-runs both modules automatically. Explicit `--post`/`--post-arg` on
-`generate` **append** to this chain rather than replacing it.
+Either way, `pumpbin-cli generate -p loader.b1n -s sc.bin -t exe
+--platform windows` runs the baked-in chain automatically.
+Explicit `--post`/`--post-arg` on `generate` **append** to it rather
+than replacing it.
 
 ## Discovering options
 
