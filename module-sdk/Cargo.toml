@@ -1,0 +1,12 @@
+[package]
+name = "pumpbin-module-sdk"
+version = "0.1.0"
+authors = ["pumpbin contributors"]
+edition = "2021"
+description = "Tiny helper for writing PumpBin modules in Rust (wire protocol v1)."
+license = "MIT"
+repository = "https://github.com/pumpbin/pumpbin"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

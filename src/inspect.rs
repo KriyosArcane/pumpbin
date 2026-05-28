@@ -11,11 +11,8 @@
 //! follow-up chip alongside the generic `--json` CLI flag.
 
 use crate::plugin::Plugin;
-use crate::plugin_system::{
-    get_plugin_config_schema, PluginConfigField, ResolvedPolicy, RuntimeConfig,
-};
+use crate::plugin_system::{PluginConfigField, RuntimeConfig};
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 /// One inspected `.b1n` file's worth of metadata.
@@ -62,16 +59,12 @@ pub struct PlatformReport {
 #[derive(Debug, Clone, Serialize)]
 pub struct ModuleReport {
     pub index: usize,
-    pub size: usize,
-    pub sha256: String,
-    /// Parsed runtime policy (if the module exports `plugin_schema`).
+    /// Module id (post-2.0). Pre-2.0 this was a sha256 of the wasm bytes.
+    pub id: String,
+    /// Always `None` in v2.0; native modules don't yet declare per-module
+    /// runtime policies. Kept on the wire for backwards-compat consumers.
     pub runtime: Option<RuntimeConfig>,
-    /// Resolved policy after host validation (None if defaults applied).
-    /// Not serialized — duplicate of `runtime` semantically; included
-    /// in struct for downstream consumers using the rust API.
-    #[serde(skip)]
-    pub resolved_policy: Option<ResolvedPolicy>,
-    /// Config schema fields the module declares.
+    /// Always empty in v2.0; module config schema discovery TBD post-Step 7.
     pub config_fields: Vec<PluginConfigField>,
 }
 
@@ -138,35 +131,18 @@ fn inspect_platforms(plugin: &Plugin) -> Vec<PlatformReport> {
 }
 
 fn inspect_modules(plugin: &Plugin) -> Vec<ModuleReport> {
-    let mut out = Vec::new();
-    for (idx, wasm) in plugin.plugins().modules().iter().enumerate() {
-        let mut hasher = Sha256::new();
-        hasher.update(wasm);
-        let sha256 = format!("{:x}", hasher.finalize());
-
-        // Try to read the module's schema. Modules without one get None
-        // (host applies safe defaults at runtime).
-        let (runtime, resolved_policy, config_fields) = match get_plugin_config_schema(wasm) {
-            Ok(Some(schema)) => {
-                let resolved = schema.runtime.as_ref().and_then(|rt| {
-                    crate::plugin_system::ResolvedPolicy::from_runtime(format!("module#{idx}"), rt)
-                        .ok()
-                });
-                (schema.runtime, resolved, schema.fields)
-            }
-            _ => (None, None, Vec::new()),
-        };
-
-        out.push(ModuleReport {
+    plugin
+        .plugins()
+        .modules()
+        .iter()
+        .enumerate()
+        .map(|(idx, id)| ModuleReport {
             index: idx,
-            size: wasm.len(),
-            sha256,
-            runtime,
-            resolved_policy,
-            config_fields,
-        });
-    }
-    out
+            id: id.clone(),
+            runtime: None,
+            config_fields: Vec::new(),
+        })
+        .collect()
 }
 
 /// Render an `InspectReport` to a human-readable plain-text string.
@@ -204,7 +180,7 @@ pub fn render_text(report: &InspectReport) -> String {
 
     let _ = writeln!(s, "\nModules ({}):", report.modules.len());
     for m in &report.modules {
-        let _ = writeln!(s, "  [{}] {} bytes  sha256={}", m.index, m.size, m.sha256);
+        let _ = writeln!(s, "  [{}] id={}", m.index, m.id);
         if let Some(rt) = &m.runtime {
             let _ = writeln!(
                 s,
@@ -284,20 +260,20 @@ pub fn render_diff(left: &InspectReport, right: &InspectReport) -> String {
         let _ = writeln!(s, "save_type: {} -> {}", left.save_type, right.save_type);
     }
 
-    // Module diff by sha256.
-    let l_shas: std::collections::HashSet<&str> =
-        left.modules.iter().map(|m| m.sha256.as_str()).collect();
-    let r_shas: std::collections::HashSet<&str> =
-        right.modules.iter().map(|m| m.sha256.as_str()).collect();
-    let added: Vec<&&str> = r_shas.difference(&l_shas).collect();
-    let removed: Vec<&&str> = l_shas.difference(&r_shas).collect();
+    // Module diff by id.
+    let l_ids: std::collections::HashSet<&str> =
+        left.modules.iter().map(|m| m.id.as_str()).collect();
+    let r_ids: std::collections::HashSet<&str> =
+        right.modules.iter().map(|m| m.id.as_str()).collect();
+    let added: Vec<&&str> = r_ids.difference(&l_ids).collect();
+    let removed: Vec<&&str> = l_ids.difference(&r_ids).collect();
     if !added.is_empty() || !removed.is_empty() {
         let _ = writeln!(s, "modules:");
-        for sha in &removed {
-            let _ = writeln!(s, "  - {sha}");
+        for id in &removed {
+            let _ = writeln!(s, "  - {id}");
         }
-        for sha in &added {
-            let _ = writeln!(s, "  + {sha}");
+        for id in &added {
+            let _ = writeln!(s, "  + {id}");
         }
     }
 

@@ -188,9 +188,11 @@ impl Maker {
 
     fn load_schema_task(path: String) -> Task<MakerMessage> {
         let load_schema = async move {
-            let wasm =
-                fs::read(&path).map_err(|e| format!("Failed to read wasm '{}': {}", path, e))?;
-            let schema = get_plugin_config_schema(&wasm)
+            // v2.0.0: WASM schema loading was removed with the Extism
+            // runtime. The maker GUI is frozen until the CLI rewrite
+            // lands; this stub keeps the code path compilable.
+            let _ = fs::read(&path);
+            let schema = get_plugin_config_schema("")
                 .map_err(|e| format!("Failed to parse plugin_schema: {}", e))?
                 .unwrap_or_default();
             let defaults = schema
@@ -823,7 +825,13 @@ impl Maker {
                                     *plugin.bins.darwin.dynamic_library_mut() = Some(data)
                                 }
                                 ChooseFileType::MegaPluginWasm => {
-                                    plugin.plugins.modules_mut().push(data);
+                                    // v2.0.0: the slot now stores a
+                                    // native module id, not WASM bytes.
+                                    // The maker GUI is frozen pending
+                                    // CLI rewrite; this stub preserves
+                                    // the historical behavior shape.
+                                    let id = String::from_utf8_lossy(&data).to_string();
+                                    plugin.plugins.modules_mut().push(id);
                                 }
                             }
                         }

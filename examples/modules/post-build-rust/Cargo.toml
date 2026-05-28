@@ -1,0 +1,16 @@
+[package]
+name = "marker-append"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# In-repo path for the example. Replace with a registry or git ref
+# when you publish your module outside this tree:
+#   pumpbin-module-sdk = { git = "https://github.com/pumpbin/pumpbin.git", subpath = "module-sdk" }
+pumpbin-module-sdk = { path = "../../../module-sdk" }
+
+[profile.release]
+opt-level = 3
+strip = true
+lto = true
+codegen-units = 1

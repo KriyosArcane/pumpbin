@@ -212,146 +212,83 @@ impl PluginBins {
     }
 }
 
+/// Native module references. Each `Option<String>` is the id of a
+/// module registered in `crate::modules::*_modules()`. Field types
+/// were `Option<Vec<u8>>` (raw .wasm bytes) before v2.0.0; the on-wire
+/// capnp `Data` field is reinterpreted as UTF-8 module-id bytes for
+/// backward-schema-compat. Old wasm-bearing .b1n files are rejected on
+/// decode (non-UTF-8 → clear error).
 #[derive(Debug, Default, Clone)]
 pub struct PluginPlugins {
-    pub encrypt_shellcode: Option<Vec<u8>>,
-    pub format_encrypted_shellcode: Option<Vec<u8>>,
-    pub format_url_remote: Option<Vec<u8>>,
-    pub upload_final_shellcode_remote: Option<Vec<u8>>,
+    pub encrypt_shellcode: Option<String>,
+    pub format_encrypted_shellcode: Option<String>,
+    pub format_url_remote: Option<String>,
+    pub upload_final_shellcode_remote: Option<String>,
     pub plugin_config: Vec<(String, String)>,
-    pub modules: Vec<Vec<u8>>,
+    pub modules: Vec<String>,
 }
 
 impl PluginPlugins {
-    #[tracing::instrument(skip(self, runtime_config), fields(path = %path.display(), modules_count = self.modules().len()))]
+    #[tracing::instrument(skip(self, _runtime_config), fields(path = %path.display(), module = ?self.encrypt_shellcode()))]
     pub fn run_encrypt_shellcode(
         &self,
         path: &Path,
-        runtime_config: Option<&std::collections::BTreeMap<String, String>>,
+        _runtime_config: Option<&std::collections::BTreeMap<String, String>>,
     ) -> anyhow::Result<crate::plugin_system::EncryptShellcodeOutput> {
         let shellcode = fs::read(path)?;
-        let input = crate::plugin_system::EncryptShellcodeInput {
-            shellcode: shellcode.clone(),
-        };
-
-        if let Some(res) = crate::plugin_system::EventManager::fire(
-            self.modules(),
-            "encrypt_shellcode",
-            &input,
-            runtime_config,
-        )? {
-            return Ok(res);
+        if let Some(id) = self.encrypt_shellcode() {
+            return crate::modules::dispatch::encrypt(id, &shellcode);
         }
-
-        // Backwards compatibility with single WASM field
-        if let Some(wasm) = self.encrypt_shellcode() {
-            if let Some(res) =
-                crate::plugin_system::run_plugin(wasm, "encrypt_shellcode", &input, runtime_config)?
-            {
-                return Ok(serde_json::from_slice(res.as_slice())?);
-            }
-        }
-
         Ok(crate::plugin_system::EncryptShellcodeOutput {
             encrypted: shellcode,
             ..Default::default()
         })
     }
 
-    #[tracing::instrument(skip(self, shellcode, runtime_config), fields(shellcode_len = shellcode.len()))]
+    #[tracing::instrument(skip(self, shellcode, _runtime_config), fields(shellcode_len = shellcode.len(), module = ?self.format_encrypted_shellcode()))]
     pub fn run_format_encrypted_shellcode(
         &self,
         shellcode: &[u8],
-        runtime_config: Option<&std::collections::BTreeMap<String, String>>,
+        _runtime_config: Option<&std::collections::BTreeMap<String, String>>,
     ) -> anyhow::Result<crate::plugin_system::FormatEncryptedShellcodeOutput> {
-        let shellcode = shellcode.to_owned();
-        let input = crate::plugin_system::FormatEncryptedShellcodeInput {
-            shellcode: shellcode.clone(),
-        };
-
-        if let Some(res) = crate::plugin_system::EventManager::fire(
-            self.modules(),
-            "format_encrypted_shellcode",
-            &input,
-            runtime_config,
-        )? {
-            return Ok(res);
+        if let Some(id) = self.format_encrypted_shellcode() {
+            let out = crate::modules::dispatch::format_encrypted(id, shellcode)?;
+            return Ok(crate::plugin_system::FormatEncryptedShellcodeOutput {
+                formatted_shellcode: out.formatted,
+            });
         }
-
-        if let Some(wasm) = self.format_encrypted_shellcode() {
-            if let Some(res) = crate::plugin_system::run_plugin(
-                wasm,
-                "format_encrypted_shellcode",
-                &input,
-                runtime_config,
-            )? {
-                return Ok(serde_json::from_slice(res.as_slice())?);
-            }
-        }
-
         Ok(crate::plugin_system::FormatEncryptedShellcodeOutput {
-            formatted_shellcode: shellcode,
+            formatted_shellcode: shellcode.to_vec(),
         })
     }
 
     pub fn run_format_url_remote(
         &self,
         url: &str,
-        runtime_config: Option<&std::collections::BTreeMap<String, String>>,
+        _runtime_config: Option<&std::collections::BTreeMap<String, String>>,
     ) -> anyhow::Result<crate::plugin_system::FormatUrlRemoteOutput> {
-        let url = url.to_owned();
-        let input = crate::plugin_system::FormatUrlRemoteInput { url: url.clone() };
-
-        if let Some(res) = crate::plugin_system::EventManager::fire(
-            self.modules(),
-            "format_url_remote",
-            &input,
-            runtime_config,
-        )? {
-            return Ok(res);
+        if let Some(id) = self.format_url_remote() {
+            let formatted = crate::modules::dispatch::format_url(id, url)?;
+            return Ok(crate::plugin_system::FormatUrlRemoteOutput {
+                formatted_url: formatted,
+            });
         }
-
-        if let Some(wasm) = self.format_url_remote() {
-            if let Some(res) =
-                crate::plugin_system::run_plugin(wasm, "format_url_remote", &input, runtime_config)?
-            {
-                return Ok(serde_json::from_slice(res.as_slice())?);
-            }
-        }
-
-        Ok(crate::plugin_system::FormatUrlRemoteOutput { formatted_url: url })
+        Ok(crate::plugin_system::FormatUrlRemoteOutput {
+            formatted_url: url.to_string(),
+        })
     }
 
     pub fn run_upload_final_shellcode_remote(
         &self,
         final_shellcode: &[u8],
-        runtime_config: Option<&std::collections::BTreeMap<String, String>>,
+        _runtime_config: Option<&std::collections::BTreeMap<String, String>>,
     ) -> anyhow::Result<crate::plugin_system::UploadFinalShellcodeRemoteOutput> {
-        let final_shellcode = final_shellcode.to_owned();
-        let input = crate::plugin_system::UploadFinalShellcodeRemoteInput {
-            final_shellcode: final_shellcode.clone(),
-        };
-
-        if let Some(res) = crate::plugin_system::EventManager::fire(
-            self.modules(),
-            "upload_final_shellcode_remote",
-            &input,
-            runtime_config,
-        )? {
-            return Ok(res);
+        if let Some(id) = self.upload_final_shellcode_remote() {
+            let url = crate::modules::dispatch::upload_remote(id, final_shellcode)?;
+            return Ok(crate::plugin_system::UploadFinalShellcodeRemoteOutput {
+                final_shellcode_url: url,
+            });
         }
-
-        if let Some(wasm) = self.upload_final_shellcode_remote() {
-            if let Some(res) = crate::plugin_system::run_plugin(
-                wasm,
-                "upload_final_shellcode_remote",
-                &input,
-                runtime_config,
-            )? {
-                return Ok(serde_json::from_slice(res.as_slice())?);
-            }
-        }
-
         Ok(crate::plugin_system::UploadFinalShellcodeRemoteOutput::default())
     }
 
@@ -367,31 +304,44 @@ impl PluginPlugins {
     /// `openssl`/`osslsigncode` as hard host dependencies. Signing now lives in
     /// dedicated post_binary plugins (osslsigncode, signtool, blob-steal)
     /// shipped under `plugin-examples/signers/` from v1.2.0.
+    /// Run every module id listed in `self.modules()` as a `PostBuildModule`
+    /// in order. Each step mutates `binary` in place; the per-module
+    /// argument vector is taken from `runtime_config["post:<id>"]`
+    /// when present (semicolon-separated `key=value` list); otherwise
+    /// the module gets zero args.
     #[tracing::instrument(skip(self, binary, runtime_config), fields(binary_len = binary.len(), modules_count = self.modules().len()))]
     pub fn run_post_binary(
         &self,
         binary: Vec<u8>,
         runtime_config: Option<&std::collections::BTreeMap<String, String>>,
     ) -> anyhow::Result<Vec<u8>> {
-        crate::plugin_system::EventManager::fire_post_binary(self.modules(), binary, runtime_config)
+        let mut out = binary;
+        for id in self.modules() {
+            let args: Vec<String> = runtime_config
+                .and_then(|cfg| cfg.get(&format!("post:{id}")))
+                .map(|s| s.split(';').filter(|p| !p.is_empty()).map(String::from).collect())
+                .unwrap_or_default();
+            crate::modules::dispatch::post_build(id, &args, &mut out)?;
+        }
+        Ok(out)
     }
 }
 
 impl PluginPlugins {
-    pub fn encrypt_shellcode(&self) -> Option<&Vec<u8>> {
-        self.encrypt_shellcode.as_ref()
+    pub fn encrypt_shellcode(&self) -> Option<&str> {
+        self.encrypt_shellcode.as_deref()
     }
 
-    pub fn format_encrypted_shellcode(&self) -> Option<&Vec<u8>> {
-        self.format_encrypted_shellcode.as_ref()
+    pub fn format_encrypted_shellcode(&self) -> Option<&str> {
+        self.format_encrypted_shellcode.as_deref()
     }
 
-    pub fn format_url_remote(&self) -> Option<&Vec<u8>> {
-        self.format_url_remote.as_ref()
+    pub fn format_url_remote(&self) -> Option<&str> {
+        self.format_url_remote.as_deref()
     }
 
-    pub fn upload_final_shellcode_remote(&self) -> Option<&Vec<u8>> {
-        self.upload_final_shellcode_remote.as_ref()
+    pub fn upload_final_shellcode_remote(&self) -> Option<&str> {
+        self.upload_final_shellcode_remote.as_deref()
     }
 
     pub fn plugin_config(&self) -> &[(String, String)] {
@@ -402,27 +352,27 @@ impl PluginPlugins {
         &mut self.plugin_config
     }
 
-    pub fn encrypt_shellcode_mut(&mut self) -> &mut Option<Vec<u8>> {
+    pub fn encrypt_shellcode_mut(&mut self) -> &mut Option<String> {
         &mut self.encrypt_shellcode
     }
 
-    pub fn format_encrypted_shellcode_mut(&mut self) -> &mut Option<Vec<u8>> {
+    pub fn format_encrypted_shellcode_mut(&mut self) -> &mut Option<String> {
         &mut self.format_encrypted_shellcode
     }
 
-    pub fn format_url_remote_mut(&mut self) -> &mut Option<Vec<u8>> {
+    pub fn format_url_remote_mut(&mut self) -> &mut Option<String> {
         &mut self.format_url_remote
     }
 
-    pub fn upload_final_shellcode_remote_mut(&mut self) -> &mut Option<Vec<u8>> {
+    pub fn upload_final_shellcode_remote_mut(&mut self) -> &mut Option<String> {
         &mut self.upload_final_shellcode_remote
     }
 
-    pub fn modules(&self) -> &[Vec<u8>] {
+    pub fn modules(&self) -> &[String] {
         &self.modules
     }
 
-    pub fn modules_mut(&mut self) -> &mut Vec<Vec<u8>> {
+    pub fn modules_mut(&mut self) -> &mut Vec<String> {
         &mut self.modules
     }
 }
@@ -458,6 +408,19 @@ impl Plugin {
                 Some(bin.to_vec())
             }
         };
+
+        fn bytes_to_module_id(bin: &[u8], slot: &str) -> anyhow::Result<Option<String>> {
+            if bin.is_empty() {
+                return Ok(None);
+            }
+            let id = std::str::from_utf8(bin).map_err(|_| {
+                anyhow::anyhow!(
+                    "plugin slot '{slot}' is not a valid UTF-8 module id. \
+                     Pre-2.0 .b1n files with embedded WASM are not supported."
+                )
+            })?;
+            Ok(Some(id.to_string()))
+        }
 
         Ok(Self {
             version: plugin.get_version()?.to_string()?,
@@ -496,12 +459,22 @@ impl Plugin {
                 },
             },
             plugins: PluginPlugins {
-                encrypt_shellcode: check_empty(plugins.get_encrypt_shellcode()?),
-                format_encrypted_shellcode: check_empty(plugins.get_format_encrypted_shellcode()?),
-                format_url_remote: check_empty(plugins.get_format_url_remote()?),
-                upload_final_shellcode_remote: check_empty(
+                encrypt_shellcode: bytes_to_module_id(
+                    plugins.get_encrypt_shellcode()?,
+                    "encrypt_shellcode",
+                )?,
+                format_encrypted_shellcode: bytes_to_module_id(
+                    plugins.get_format_encrypted_shellcode()?,
+                    "format_encrypted_shellcode",
+                )?,
+                format_url_remote: bytes_to_module_id(
+                    plugins.get_format_url_remote()?,
+                    "format_url_remote",
+                )?,
+                upload_final_shellcode_remote: bytes_to_module_id(
                     plugins.get_upload_final_shellcode_remote()?,
-                ),
+                    "upload_final_shellcode_remote",
+                )?,
                 plugin_config: {
                     let entries = plugins.get_config_entries()?;
                     let mut config = Vec::new();
@@ -516,8 +489,14 @@ impl Plugin {
                 modules: {
                     let mods = plugins.get_modules()?;
                     let mut decoded = Vec::new();
-                    for m in mods {
-                        decoded.push(m?.to_vec());
+                    for (idx, m) in mods.into_iter().enumerate() {
+                        let raw = m?;
+                        let id = std::str::from_utf8(raw).map_err(|_| {
+                            anyhow::anyhow!(
+                                "modules[{idx}] is not a valid UTF-8 module id. Pre-2.0 .b1n files with embedded WASM are not supported."
+                            )
+                        })?;
+                        decoded.push(id.to_string());
                     }
                     decoded
                 },
@@ -582,17 +561,17 @@ impl Plugin {
 
         let mut plugins = plugin.reborrow().init_plugins();
         let plugin_plugins = self.plugins();
-        if let Some(plugin) = plugin_plugins.encrypt_shellcode() {
-            plugins.set_encrypt_shellcode(plugin);
+        if let Some(id) = plugin_plugins.encrypt_shellcode() {
+            plugins.set_encrypt_shellcode(id.as_bytes());
         }
-        if let Some(plugin) = plugin_plugins.format_encrypted_shellcode() {
-            plugins.set_format_encrypted_shellcode(plugin);
+        if let Some(id) = plugin_plugins.format_encrypted_shellcode() {
+            plugins.set_format_encrypted_shellcode(id.as_bytes());
         }
-        if let Some(plugin) = plugin_plugins.format_url_remote() {
-            plugins.set_format_url_remote(plugin);
+        if let Some(id) = plugin_plugins.format_url_remote() {
+            plugins.set_format_url_remote(id.as_bytes());
         }
-        if let Some(plugin) = plugin_plugins.upload_final_shellcode_remote() {
-            plugins.set_upload_final_shellcode_remote(plugin);
+        if let Some(id) = plugin_plugins.upload_final_shellcode_remote() {
+            plugins.set_upload_final_shellcode_remote(id.as_bytes());
         }
 
         let config = plugin_plugins.plugin_config();
@@ -609,7 +588,7 @@ impl Plugin {
         if !mods.is_empty() {
             let mut modules_list = plugins.reborrow().init_modules(mods.len() as u32);
             for (i, m) in mods.iter().enumerate() {
-                modules_list.set(i as u32, m);
+                modules_list.set(i as u32, m.as_bytes());
             }
         }
 
@@ -826,23 +805,44 @@ impl Plugin {
             utils::replace(&mut bin, p.holder(), p.replace_by(), p.holder().len())?;
         }
 
-        // Embed shellcode byte-count for local loaders
+        // Embed shellcode byte-count for local loaders.
+        //
+        // Two encoding modes, distinguished implicitly by the holder
+        // length:
+        //   - 4-byte holder: binary u32 little-endian length. Used by
+        //     scaffolded PIC loaders to skip the decimal-parse code
+        //     path (no core::fmt drag-in). Caps at u32::MAX shellcode
+        //     bytes — way past PumpBin's max_len limits anyway.
+        //   - any other length: ASCII decimal, left-padded with '0' to
+        //     fill the holder slot (e.g. "000000158" in a 9-byte
+        //     holder). The historical mode; matches the
+        //     `$$99999$$` default and what every existing loader
+        //     template parses.
         if save_type == ShellcodeSaveType::Local {
             let size_holder = self.replace().size_holder().unwrap();
-            let len_str = shellcode_bytes.len().to_string();
-            let len_bytes = len_str.as_bytes();
-
-            if len_bytes.len() > size_holder.len() {
-                return Err(crate::error::PumpBinError::SizeStringTooLong {
-                    got: len_bytes.len(),
-                    holder_len: size_holder.len(),
+            let size_bytes: Vec<u8> = if size_holder.len() == 4 {
+                let len = u32::try_from(shellcode_bytes.len()).map_err(|_| {
+                    crate::error::PumpBinError::SizeStringTooLong {
+                        got: 5,
+                        holder_len: 4,
+                    }
+                })?;
+                len.to_le_bytes().to_vec()
+            } else {
+                let len_str = shellcode_bytes.len().to_string();
+                let len_bytes = len_str.as_bytes();
+                if len_bytes.len() > size_holder.len() {
+                    return Err(crate::error::PumpBinError::SizeStringTooLong {
+                        got: len_bytes.len(),
+                        holder_len: size_holder.len(),
+                    }
+                    .into());
                 }
-                .into());
-            }
-
-            let mut size_bytes: Vec<u8> =
-                iter::repeat_n(b'0', size_holder.len() - len_bytes.len()).collect();
-            size_bytes.extend_from_slice(len_bytes);
+                let mut v: Vec<u8> =
+                    iter::repeat_n(b'0', size_holder.len() - len_bytes.len()).collect();
+                v.extend_from_slice(len_bytes);
+                v
+            };
 
             utils::replace(
                 &mut bin,

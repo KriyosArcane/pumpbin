@@ -12,12 +12,12 @@ pub mod plugin {
   impl ::capnp::traits::Pipelined for Owned { type Pipeline = Pipeline; }
 
   pub struct Reader<'a> { reader: ::capnp::private::layout::StructReader<'a> }
-  impl <'a,> ::core::marker::Copy for Reader<'a,>  {}
-  impl <'a,> ::core::clone::Clone for Reader<'a,>  {
+  impl <> ::core::marker::Copy for Reader<'_,>  {}
+  impl <> ::core::clone::Clone for Reader<'_,>  {
     fn clone(&self) -> Self { *self }
   }
 
-  impl <'a,> ::capnp::traits::HasTypeId for Reader<'a,>  {
+  impl <> ::capnp::traits::HasTypeId for Reader<'_,>  {
     const TYPE_ID: u64 = _private::TYPE_ID;
   }
   impl <'a,> ::core::convert::From<::capnp::private::layout::StructReader<'a>> for Reader<'a,>  {
@@ -32,7 +32,7 @@ pub mod plugin {
     }
   }
 
-  impl <'a,> ::core::fmt::Debug for Reader<'a,>  {
+  impl <> ::core::fmt::Debug for Reader<'_,>  {
     fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::result::Result<(), ::core::fmt::Error> {
       core::fmt::Debug::fmt(&::core::convert::Into::<::capnp::dynamic_value::Reader<'_>>::into(*self), f)
     }
@@ -107,10 +107,10 @@ pub mod plugin {
   }
 
   pub struct Builder<'a> { builder: ::capnp::private::layout::StructBuilder<'a> }
-  impl <'a,> ::capnp::traits::HasStructSize for Builder<'a,>  {
+  impl <> ::capnp::traits::HasStructSize for Builder<'_,>  {
     const STRUCT_SIZE: ::capnp::private::layout::StructSize = ::capnp::private::layout::StructSize { data: 0, pointers: 5 };
   }
-  impl <'a,> ::capnp::traits::HasTypeId for Builder<'a,>  {
+  impl <> ::capnp::traits::HasTypeId for Builder<'_,>  {
     const TYPE_ID: u64 = _private::TYPE_ID;
   }
   impl <'a,> ::core::convert::From<::capnp::private::layout::StructBuilder<'a>> for Builder<'a,>  {
@@ -140,7 +140,7 @@ pub mod plugin {
     }
   }
 
-  impl <'a,> ::capnp::traits::SetterInput<Owned<>> for Reader<'a,>  {
+  impl <> ::capnp::traits::SetterInput<Owned<>> for Reader<'_,>  {
     fn set_pointer_builder(mut pointer: ::capnp::private::layout::PointerBuilder<'_>, value: Self, canonicalize: bool) -> ::capnp::Result<()> { pointer.set_struct(&value.reader, canonicalize) }
   }
 
@@ -379,18 +379,19 @@ pub mod plugin {
         2 => <crate::plugin_capnp::plugin::plugin_replace::Owned as ::capnp::introspect::Introspect>::introspect(),
         3 => <crate::plugin_capnp::plugin::plugin_bins::Owned as ::capnp::introspect::Introspect>::introspect(),
         4 => <crate::plugin_capnp::plugin::plugin_plugins::Owned as ::capnp::introspect::Introspect>::introspect(),
-        _ => panic!("invalid field index {}", index),
+        _ => ::capnp::introspect::panic_invalid_field_index(index),
       }
     }
     pub fn get_annotation_types(child_index: Option<u16>, index: u32) -> ::capnp::introspect::Type {
-      panic!("invalid annotation indices ({:?}, {}) ", child_index, index)
+      ::capnp::introspect::panic_invalid_annotation_indices(child_index, index)
     }
-    pub static RAW_SCHEMA: ::capnp::introspect::RawStructSchema = ::capnp::introspect::RawStructSchema {
-      encoded_node: &ENCODED_NODE,
-      nonunion_members: NONUNION_MEMBERS,
-      members_by_discriminant: MEMBERS_BY_DISCRIMINANT,
-      members_by_name: MEMBERS_BY_NAME,
-    };
+    #[allow(unsafe_code)]
+    pub static RAW_SCHEMA: ::capnp::introspect::RawStructSchema = unsafe {::capnp::introspect::RawStructSchema::new(
+      &ENCODED_NODE,
+      NONUNION_MEMBERS,
+      MEMBERS_BY_DISCRIMINANT,
+      MEMBERS_BY_NAME
+    )};
     pub static NONUNION_MEMBERS : &[u16] = &[0,1,2,3,4];
     pub static MEMBERS_BY_DISCRIMINANT : &[u16] = &[];
     pub static MEMBERS_BY_NAME : &[u16] = &[3,1,4,2,0];
@@ -406,12 +407,12 @@ pub mod plugin {
     impl ::capnp::traits::Pipelined for Owned { type Pipeline = Pipeline; }
 
     pub struct Reader<'a> { reader: ::capnp::private::layout::StructReader<'a> }
-    impl <'a,> ::core::marker::Copy for Reader<'a,>  {}
-    impl <'a,> ::core::clone::Clone for Reader<'a,>  {
+    impl <> ::core::marker::Copy for Reader<'_,>  {}
+    impl <> ::core::clone::Clone for Reader<'_,>  {
       fn clone(&self) -> Self { *self }
     }
 
-    impl <'a,> ::capnp::traits::HasTypeId for Reader<'a,>  {
+    impl <> ::capnp::traits::HasTypeId for Reader<'_,>  {
       const TYPE_ID: u64 = _private::TYPE_ID;
     }
     impl <'a,> ::core::convert::From<::capnp::private::layout::StructReader<'a>> for Reader<'a,>  {
@@ -426,7 +427,7 @@ pub mod plugin {
       }
     }
 
-    impl <'a,> ::core::fmt::Debug for Reader<'a,>  {
+    impl <> ::core::fmt::Debug for Reader<'_,>  {
       fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::result::Result<(), ::core::fmt::Error> {
         core::fmt::Debug::fmt(&::core::convert::Into::<::capnp::dynamic_value::Reader<'_>>::into(*self), f)
       }
@@ -493,10 +494,10 @@ pub mod plugin {
     }
 
     pub struct Builder<'a> { builder: ::capnp::private::layout::StructBuilder<'a> }
-    impl <'a,> ::capnp::traits::HasStructSize for Builder<'a,>  {
+    impl <> ::capnp::traits::HasStructSize for Builder<'_,>  {
       const STRUCT_SIZE: ::capnp::private::layout::StructSize = ::capnp::private::layout::StructSize { data: 0, pointers: 4 };
     }
-    impl <'a,> ::capnp::traits::HasTypeId for Builder<'a,>  {
+    impl <> ::capnp::traits::HasTypeId for Builder<'_,>  {
       const TYPE_ID: u64 = _private::TYPE_ID;
     }
     impl <'a,> ::core::convert::From<::capnp::private::layout::StructBuilder<'a>> for Builder<'a,>  {
@@ -526,7 +527,7 @@ pub mod plugin {
       }
     }
 
-    impl <'a,> ::capnp::traits::SetterInput<Owned<>> for Reader<'a,>  {
+    impl <> ::capnp::traits::SetterInput<Owned<>> for Reader<'_,>  {
       fn set_pointer_builder(mut pointer: ::capnp::private::layout::PointerBuilder<'_>, value: Self, canonicalize: bool) -> ::capnp::Result<()> { pointer.set_struct(&value.reader, canonicalize) }
     }
 
@@ -707,18 +708,19 @@ pub mod plugin {
           1 => <::capnp::text::Owned as ::capnp::introspect::Introspect>::introspect(),
           2 => <::capnp::text::Owned as ::capnp::introspect::Introspect>::introspect(),
           3 => <::capnp::text::Owned as ::capnp::introspect::Introspect>::introspect(),
-          _ => panic!("invalid field index {}", index),
+          _ => ::capnp::introspect::panic_invalid_field_index(index),
         }
       }
       pub fn get_annotation_types(child_index: Option<u16>, index: u32) -> ::capnp::introspect::Type {
-        panic!("invalid annotation indices ({:?}, {}) ", child_index, index)
+        ::capnp::introspect::panic_invalid_annotation_indices(child_index, index)
       }
-      pub static RAW_SCHEMA: ::capnp::introspect::RawStructSchema = ::capnp::introspect::RawStructSchema {
-        encoded_node: &ENCODED_NODE,
-        nonunion_members: NONUNION_MEMBERS,
-        members_by_discriminant: MEMBERS_BY_DISCRIMINANT,
-        members_by_name: MEMBERS_BY_NAME,
-      };
+      #[allow(unsafe_code)]
+      pub static RAW_SCHEMA: ::capnp::introspect::RawStructSchema = unsafe {::capnp::introspect::RawStructSchema::new(
+        &ENCODED_NODE,
+        NONUNION_MEMBERS,
+        MEMBERS_BY_DISCRIMINANT,
+        MEMBERS_BY_NAME
+      )};
       pub static NONUNION_MEMBERS : &[u16] = &[0,1,2,3];
       pub static MEMBERS_BY_DISCRIMINANT : &[u16] = &[];
       pub static MEMBERS_BY_NAME : &[u16] = &[1,3,0,2];
@@ -735,12 +737,12 @@ pub mod plugin {
     impl ::capnp::traits::Pipelined for Owned { type Pipeline = Pipeline; }
 
     pub struct Reader<'a> { reader: ::capnp::private::layout::StructReader<'a> }
-    impl <'a,> ::core::marker::Copy for Reader<'a,>  {}
-    impl <'a,> ::core::clone::Clone for Reader<'a,>  {
+    impl <> ::core::marker::Copy for Reader<'_,>  {}
+    impl <> ::core::clone::Clone for Reader<'_,>  {
       fn clone(&self) -> Self { *self }
     }
 
-    impl <'a,> ::capnp::traits::HasTypeId for Reader<'a,>  {
+    impl <> ::capnp::traits::HasTypeId for Reader<'_,>  {
       const TYPE_ID: u64 = _private::TYPE_ID;
     }
     impl <'a,> ::core::convert::From<::capnp::private::layout::StructReader<'a>> for Reader<'a,>  {
@@ -755,7 +757,7 @@ pub mod plugin {
       }
     }
 
-    impl <'a,> ::core::fmt::Debug for Reader<'a,>  {
+    impl <> ::core::fmt::Debug for Reader<'_,>  {
       fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::result::Result<(), ::core::fmt::Error> {
         core::fmt::Debug::fmt(&::core::convert::Into::<::capnp::dynamic_value::Reader<'_>>::into(*self), f)
       }
@@ -810,10 +812,10 @@ pub mod plugin {
     }
 
     pub struct Builder<'a> { builder: ::capnp::private::layout::StructBuilder<'a> }
-    impl <'a,> ::capnp::traits::HasStructSize for Builder<'a,>  {
+    impl <> ::capnp::traits::HasStructSize for Builder<'_,>  {
       const STRUCT_SIZE: ::capnp::private::layout::StructSize = ::capnp::private::layout::StructSize { data: 1, pointers: 2 };
     }
-    impl <'a,> ::capnp::traits::HasTypeId for Builder<'a,>  {
+    impl <> ::capnp::traits::HasTypeId for Builder<'_,>  {
       const TYPE_ID: u64 = _private::TYPE_ID;
     }
     impl <'a,> ::core::convert::From<::capnp::private::layout::StructBuilder<'a>> for Builder<'a,>  {
@@ -843,7 +845,7 @@ pub mod plugin {
       }
     }
 
-    impl <'a,> ::capnp::traits::SetterInput<Owned<>> for Reader<'a,>  {
+    impl <> ::capnp::traits::SetterInput<Owned<>> for Reader<'_,>  {
       fn set_pointer_builder(mut pointer: ::capnp::private::layout::PointerBuilder<'_>, value: Self, canonicalize: bool) -> ::capnp::Result<()> { pointer.set_struct(&value.reader, canonicalize) }
     }
 
@@ -986,18 +988,19 @@ pub mod plugin {
           0 => <::capnp::data::Owned as ::capnp::introspect::Introspect>::introspect(),
           1 => <::capnp::data::Owned as ::capnp::introspect::Introspect>::introspect(),
           2 => <u64 as ::capnp::introspect::Introspect>::introspect(),
-          _ => panic!("invalid field index {}", index),
+          _ => ::capnp::introspect::panic_invalid_field_index(index),
         }
       }
       pub fn get_annotation_types(child_index: Option<u16>, index: u32) -> ::capnp::introspect::Type {
-        panic!("invalid annotation indices ({:?}, {}) ", child_index, index)
+        ::capnp::introspect::panic_invalid_annotation_indices(child_index, index)
       }
-      pub static RAW_SCHEMA: ::capnp::introspect::RawStructSchema = ::capnp::introspect::RawStructSchema {
-        encoded_node: &ENCODED_NODE,
-        nonunion_members: NONUNION_MEMBERS,
-        members_by_discriminant: MEMBERS_BY_DISCRIMINANT,
-        members_by_name: MEMBERS_BY_NAME,
-      };
+      #[allow(unsafe_code)]
+      pub static RAW_SCHEMA: ::capnp::introspect::RawStructSchema = unsafe {::capnp::introspect::RawStructSchema::new(
+        &ENCODED_NODE,
+        NONUNION_MEMBERS,
+        MEMBERS_BY_DISCRIMINANT,
+        MEMBERS_BY_NAME
+      )};
       pub static NONUNION_MEMBERS : &[u16] = &[0,1,2];
       pub static MEMBERS_BY_DISCRIMINANT : &[u16] = &[];
       pub static MEMBERS_BY_NAME : &[u16] = &[2,1,0];
@@ -1014,12 +1017,12 @@ pub mod plugin {
     impl ::capnp::traits::Pipelined for Owned { type Pipeline = Pipeline; }
 
     pub struct Reader<'a> { reader: ::capnp::private::layout::StructReader<'a> }
-    impl <'a,> ::core::marker::Copy for Reader<'a,>  {}
-    impl <'a,> ::core::clone::Clone for Reader<'a,>  {
+    impl <> ::core::marker::Copy for Reader<'_,>  {}
+    impl <> ::core::clone::Clone for Reader<'_,>  {
       fn clone(&self) -> Self { *self }
     }
 
-    impl <'a,> ::capnp::traits::HasTypeId for Reader<'a,>  {
+    impl <> ::capnp::traits::HasTypeId for Reader<'_,>  {
       const TYPE_ID: u64 = _private::TYPE_ID;
     }
     impl <'a,> ::core::convert::From<::capnp::private::layout::StructReader<'a>> for Reader<'a,>  {
@@ -1034,7 +1037,7 @@ pub mod plugin {
       }
     }
 
-    impl <'a,> ::core::fmt::Debug for Reader<'a,>  {
+    impl <> ::core::fmt::Debug for Reader<'_,>  {
       fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::result::Result<(), ::core::fmt::Error> {
         core::fmt::Debug::fmt(&::core::convert::Into::<::capnp::dynamic_value::Reader<'_>>::into(*self), f)
       }
@@ -1093,10 +1096,10 @@ pub mod plugin {
     }
 
     pub struct Builder<'a> { builder: ::capnp::private::layout::StructBuilder<'a> }
-    impl <'a,> ::capnp::traits::HasStructSize for Builder<'a,>  {
+    impl <> ::capnp::traits::HasStructSize for Builder<'_,>  {
       const STRUCT_SIZE: ::capnp::private::layout::StructSize = ::capnp::private::layout::StructSize { data: 0, pointers: 3 };
     }
-    impl <'a,> ::capnp::traits::HasTypeId for Builder<'a,>  {
+    impl <> ::capnp::traits::HasTypeId for Builder<'_,>  {
       const TYPE_ID: u64 = _private::TYPE_ID;
     }
     impl <'a,> ::core::convert::From<::capnp::private::layout::StructBuilder<'a>> for Builder<'a,>  {
@@ -1126,7 +1129,7 @@ pub mod plugin {
       }
     }
 
-    impl <'a,> ::capnp::traits::SetterInput<Owned<>> for Reader<'a,>  {
+    impl <> ::capnp::traits::SetterInput<Owned<>> for Reader<'_,>  {
       fn set_pointer_builder(mut pointer: ::capnp::private::layout::PointerBuilder<'_>, value: Self, canonicalize: bool) -> ::capnp::Result<()> { pointer.set_struct(&value.reader, canonicalize) }
     }
 
@@ -1286,18 +1289,19 @@ pub mod plugin {
           0 => <crate::plugin_capnp::plugin::plugin_bins::bins::Owned as ::capnp::introspect::Introspect>::introspect(),
           1 => <crate::plugin_capnp::plugin::plugin_bins::bins::Owned as ::capnp::introspect::Introspect>::introspect(),
           2 => <crate::plugin_capnp::plugin::plugin_bins::bins::Owned as ::capnp::introspect::Introspect>::introspect(),
-          _ => panic!("invalid field index {}", index),
+          _ => ::capnp::introspect::panic_invalid_field_index(index),
         }
       }
       pub fn get_annotation_types(child_index: Option<u16>, index: u32) -> ::capnp::introspect::Type {
-        panic!("invalid annotation indices ({:?}, {}) ", child_index, index)
+        ::capnp::introspect::panic_invalid_annotation_indices(child_index, index)
       }
-      pub static RAW_SCHEMA: ::capnp::introspect::RawStructSchema = ::capnp::introspect::RawStructSchema {
-        encoded_node: &ENCODED_NODE,
-        nonunion_members: NONUNION_MEMBERS,
-        members_by_discriminant: MEMBERS_BY_DISCRIMINANT,
-        members_by_name: MEMBERS_BY_NAME,
-      };
+      #[allow(unsafe_code)]
+      pub static RAW_SCHEMA: ::capnp::introspect::RawStructSchema = unsafe {::capnp::introspect::RawStructSchema::new(
+        &ENCODED_NODE,
+        NONUNION_MEMBERS,
+        MEMBERS_BY_DISCRIMINANT,
+        MEMBERS_BY_NAME
+      )};
       pub static NONUNION_MEMBERS : &[u16] = &[0,1,2];
       pub static MEMBERS_BY_DISCRIMINANT : &[u16] = &[];
       pub static MEMBERS_BY_NAME : &[u16] = &[2,1,0];
@@ -1313,12 +1317,12 @@ pub mod plugin {
       impl ::capnp::traits::Pipelined for Owned { type Pipeline = Pipeline; }
 
       pub struct Reader<'a> { reader: ::capnp::private::layout::StructReader<'a> }
-      impl <'a,> ::core::marker::Copy for Reader<'a,>  {}
-      impl <'a,> ::core::clone::Clone for Reader<'a,>  {
+      impl <> ::core::marker::Copy for Reader<'_,>  {}
+      impl <> ::core::clone::Clone for Reader<'_,>  {
         fn clone(&self) -> Self { *self }
       }
 
-      impl <'a,> ::capnp::traits::HasTypeId for Reader<'a,>  {
+      impl <> ::capnp::traits::HasTypeId for Reader<'_,>  {
         const TYPE_ID: u64 = _private::TYPE_ID;
       }
       impl <'a,> ::core::convert::From<::capnp::private::layout::StructReader<'a>> for Reader<'a,>  {
@@ -1333,7 +1337,7 @@ pub mod plugin {
         }
       }
 
-      impl <'a,> ::core::fmt::Debug for Reader<'a,>  {
+      impl <> ::core::fmt::Debug for Reader<'_,>  {
         fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::result::Result<(), ::core::fmt::Error> {
           core::fmt::Debug::fmt(&::core::convert::Into::<::capnp::dynamic_value::Reader<'_>>::into(*self), f)
         }
@@ -1384,10 +1388,10 @@ pub mod plugin {
       }
 
       pub struct Builder<'a> { builder: ::capnp::private::layout::StructBuilder<'a> }
-      impl <'a,> ::capnp::traits::HasStructSize for Builder<'a,>  {
+      impl <> ::capnp::traits::HasStructSize for Builder<'_,>  {
         const STRUCT_SIZE: ::capnp::private::layout::StructSize = ::capnp::private::layout::StructSize { data: 0, pointers: 2 };
       }
-      impl <'a,> ::capnp::traits::HasTypeId for Builder<'a,>  {
+      impl <> ::capnp::traits::HasTypeId for Builder<'_,>  {
         const TYPE_ID: u64 = _private::TYPE_ID;
       }
       impl <'a,> ::core::convert::From<::capnp::private::layout::StructBuilder<'a>> for Builder<'a,>  {
@@ -1417,7 +1421,7 @@ pub mod plugin {
         }
       }
 
-      impl <'a,> ::capnp::traits::SetterInput<Owned<>> for Reader<'a,>  {
+      impl <> ::capnp::traits::SetterInput<Owned<>> for Reader<'_,>  {
         fn set_pointer_builder(mut pointer: ::capnp::private::layout::PointerBuilder<'_>, value: Self, canonicalize: bool) -> ::capnp::Result<()> { pointer.set_struct(&value.reader, canonicalize) }
       }
 
@@ -1536,18 +1540,19 @@ pub mod plugin {
           match index {
             0 => <::capnp::data::Owned as ::capnp::introspect::Introspect>::introspect(),
             1 => <::capnp::data::Owned as ::capnp::introspect::Introspect>::introspect(),
-            _ => panic!("invalid field index {}", index),
+            _ => ::capnp::introspect::panic_invalid_field_index(index),
           }
         }
         pub fn get_annotation_types(child_index: Option<u16>, index: u32) -> ::capnp::introspect::Type {
-          panic!("invalid annotation indices ({:?}, {}) ", child_index, index)
+          ::capnp::introspect::panic_invalid_annotation_indices(child_index, index)
         }
-        pub static RAW_SCHEMA: ::capnp::introspect::RawStructSchema = ::capnp::introspect::RawStructSchema {
-          encoded_node: &ENCODED_NODE,
-          nonunion_members: NONUNION_MEMBERS,
-          members_by_discriminant: MEMBERS_BY_DISCRIMINANT,
-          members_by_name: MEMBERS_BY_NAME,
-        };
+        #[allow(unsafe_code)]
+        pub static RAW_SCHEMA: ::capnp::introspect::RawStructSchema = unsafe {::capnp::introspect::RawStructSchema::new(
+          &ENCODED_NODE,
+          NONUNION_MEMBERS,
+          MEMBERS_BY_DISCRIMINANT,
+          MEMBERS_BY_NAME
+        )};
         pub static NONUNION_MEMBERS : &[u16] = &[0,1];
         pub static MEMBERS_BY_DISCRIMINANT : &[u16] = &[];
         pub static MEMBERS_BY_NAME : &[u16] = &[1,0];
@@ -1565,12 +1570,12 @@ pub mod plugin {
     impl ::capnp::traits::Pipelined for Owned { type Pipeline = Pipeline; }
 
     pub struct Reader<'a> { reader: ::capnp::private::layout::StructReader<'a> }
-    impl <'a,> ::core::marker::Copy for Reader<'a,>  {}
-    impl <'a,> ::core::clone::Clone for Reader<'a,>  {
+    impl <> ::core::marker::Copy for Reader<'_,>  {}
+    impl <> ::core::clone::Clone for Reader<'_,>  {
       fn clone(&self) -> Self { *self }
     }
 
-    impl <'a,> ::capnp::traits::HasTypeId for Reader<'a,>  {
+    impl <> ::capnp::traits::HasTypeId for Reader<'_,>  {
       const TYPE_ID: u64 = _private::TYPE_ID;
     }
     impl <'a,> ::core::convert::From<::capnp::private::layout::StructReader<'a>> for Reader<'a,>  {
@@ -1585,7 +1590,7 @@ pub mod plugin {
       }
     }
 
-    impl <'a,> ::core::fmt::Debug for Reader<'a,>  {
+    impl <> ::core::fmt::Debug for Reader<'_,>  {
       fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::result::Result<(), ::core::fmt::Error> {
         core::fmt::Debug::fmt(&::core::convert::Into::<::capnp::dynamic_value::Reader<'_>>::into(*self), f)
       }
@@ -1684,10 +1689,10 @@ pub mod plugin {
     }
 
     pub struct Builder<'a> { builder: ::capnp::private::layout::StructBuilder<'a> }
-    impl <'a,> ::capnp::traits::HasStructSize for Builder<'a,>  {
+    impl <> ::capnp::traits::HasStructSize for Builder<'_,>  {
       const STRUCT_SIZE: ::capnp::private::layout::StructSize = ::capnp::private::layout::StructSize { data: 0, pointers: 8 };
     }
-    impl <'a,> ::capnp::traits::HasTypeId for Builder<'a,>  {
+    impl <> ::capnp::traits::HasTypeId for Builder<'_,>  {
       const TYPE_ID: u64 = _private::TYPE_ID;
     }
     impl <'a,> ::core::convert::From<::capnp::private::layout::StructBuilder<'a>> for Builder<'a,>  {
@@ -1717,7 +1722,7 @@ pub mod plugin {
       }
     }
 
-    impl <'a,> ::capnp::traits::SetterInput<Owned<>> for Reader<'a,>  {
+    impl <> ::capnp::traits::SetterInput<Owned<>> for Reader<'_,>  {
       fn set_pointer_builder(mut pointer: ::capnp::private::layout::PointerBuilder<'_>, value: Self, canonicalize: bool) -> ::capnp::Result<()> { pointer.set_struct(&value.reader, canonicalize) }
     }
 
@@ -2050,18 +2055,19 @@ pub mod plugin {
           5 => <::capnp::data::Owned as ::capnp::introspect::Introspect>::introspect(),
           6 => <::capnp::struct_list::Owned<crate::plugin_capnp::plugin::plugin_plugins::config_entry::Owned> as ::capnp::introspect::Introspect>::introspect(),
           7 => <::capnp::data_list::Owned as ::capnp::introspect::Introspect>::introspect(),
-          _ => panic!("invalid field index {}", index),
+          _ => ::capnp::introspect::panic_invalid_field_index(index),
         }
       }
       pub fn get_annotation_types(child_index: Option<u16>, index: u32) -> ::capnp::introspect::Type {
-        panic!("invalid annotation indices ({:?}, {}) ", child_index, index)
+        ::capnp::introspect::panic_invalid_annotation_indices(child_index, index)
       }
-      pub static RAW_SCHEMA: ::capnp::introspect::RawStructSchema = ::capnp::introspect::RawStructSchema {
-        encoded_node: &ENCODED_NODE,
-        nonunion_members: NONUNION_MEMBERS,
-        members_by_discriminant: MEMBERS_BY_DISCRIMINANT,
-        members_by_name: MEMBERS_BY_NAME,
-      };
+      #[allow(unsafe_code)]
+      pub static RAW_SCHEMA: ::capnp::introspect::RawStructSchema = unsafe {::capnp::introspect::RawStructSchema::new(
+        &ENCODED_NODE,
+        NONUNION_MEMBERS,
+        MEMBERS_BY_DISCRIMINANT,
+        MEMBERS_BY_NAME
+      )};
       pub static NONUNION_MEMBERS : &[u16] = &[0,1,2,3,4,5,6,7];
       pub static MEMBERS_BY_DISCRIMINANT : &[u16] = &[];
       pub static MEMBERS_BY_NAME : &[u16] = &[6,0,1,2,5,7,4,3];
@@ -2077,12 +2083,12 @@ pub mod plugin {
       impl ::capnp::traits::Pipelined for Owned { type Pipeline = Pipeline; }
 
       pub struct Reader<'a> { reader: ::capnp::private::layout::StructReader<'a> }
-      impl <'a,> ::core::marker::Copy for Reader<'a,>  {}
-      impl <'a,> ::core::clone::Clone for Reader<'a,>  {
+      impl <> ::core::marker::Copy for Reader<'_,>  {}
+      impl <> ::core::clone::Clone for Reader<'_,>  {
         fn clone(&self) -> Self { *self }
       }
 
-      impl <'a,> ::capnp::traits::HasTypeId for Reader<'a,>  {
+      impl <> ::capnp::traits::HasTypeId for Reader<'_,>  {
         const TYPE_ID: u64 = _private::TYPE_ID;
       }
       impl <'a,> ::core::convert::From<::capnp::private::layout::StructReader<'a>> for Reader<'a,>  {
@@ -2097,7 +2103,7 @@ pub mod plugin {
         }
       }
 
-      impl <'a,> ::core::fmt::Debug for Reader<'a,>  {
+      impl <> ::core::fmt::Debug for Reader<'_,>  {
         fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::result::Result<(), ::core::fmt::Error> {
           core::fmt::Debug::fmt(&::core::convert::Into::<::capnp::dynamic_value::Reader<'_>>::into(*self), f)
         }
@@ -2148,10 +2154,10 @@ pub mod plugin {
       }
 
       pub struct Builder<'a> { builder: ::capnp::private::layout::StructBuilder<'a> }
-      impl <'a,> ::capnp::traits::HasStructSize for Builder<'a,>  {
+      impl <> ::capnp::traits::HasStructSize for Builder<'_,>  {
         const STRUCT_SIZE: ::capnp::private::layout::StructSize = ::capnp::private::layout::StructSize { data: 0, pointers: 2 };
       }
-      impl <'a,> ::capnp::traits::HasTypeId for Builder<'a,>  {
+      impl <> ::capnp::traits::HasTypeId for Builder<'_,>  {
         const TYPE_ID: u64 = _private::TYPE_ID;
       }
       impl <'a,> ::core::convert::From<::capnp::private::layout::StructBuilder<'a>> for Builder<'a,>  {
@@ -2181,7 +2187,7 @@ pub mod plugin {
         }
       }
 
-      impl <'a,> ::capnp::traits::SetterInput<Owned<>> for Reader<'a,>  {
+      impl <> ::capnp::traits::SetterInput<Owned<>> for Reader<'_,>  {
         fn set_pointer_builder(mut pointer: ::capnp::private::layout::PointerBuilder<'_>, value: Self, canonicalize: bool) -> ::capnp::Result<()> { pointer.set_struct(&value.reader, canonicalize) }
       }
 
@@ -2299,18 +2305,19 @@ pub mod plugin {
           match index {
             0 => <::capnp::text::Owned as ::capnp::introspect::Introspect>::introspect(),
             1 => <::capnp::text::Owned as ::capnp::introspect::Introspect>::introspect(),
-            _ => panic!("invalid field index {}", index),
+            _ => ::capnp::introspect::panic_invalid_field_index(index),
           }
         }
         pub fn get_annotation_types(child_index: Option<u16>, index: u32) -> ::capnp::introspect::Type {
-          panic!("invalid annotation indices ({:?}, {}) ", child_index, index)
+          ::capnp::introspect::panic_invalid_annotation_indices(child_index, index)
         }
-        pub static RAW_SCHEMA: ::capnp::introspect::RawStructSchema = ::capnp::introspect::RawStructSchema {
-          encoded_node: &ENCODED_NODE,
-          nonunion_members: NONUNION_MEMBERS,
-          members_by_discriminant: MEMBERS_BY_DISCRIMINANT,
-          members_by_name: MEMBERS_BY_NAME,
-        };
+        #[allow(unsafe_code)]
+        pub static RAW_SCHEMA: ::capnp::introspect::RawStructSchema = unsafe {::capnp::introspect::RawStructSchema::new(
+          &ENCODED_NODE,
+          NONUNION_MEMBERS,
+          MEMBERS_BY_DISCRIMINANT,
+          MEMBERS_BY_NAME
+        )};
         pub static NONUNION_MEMBERS : &[u16] = &[0,1];
         pub static MEMBERS_BY_DISCRIMINANT : &[u16] = &[];
         pub static MEMBERS_BY_NAME : &[u16] = &[0,1];

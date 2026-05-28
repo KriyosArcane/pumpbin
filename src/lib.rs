@@ -1,22 +1,27 @@
 pub mod config_utils;
 pub mod convert;
 pub mod error;
-pub mod host_helpers;
 pub mod inspect;
 pub mod logging;
+#[cfg(feature = "gui")]
 pub mod maker;
+pub mod modules;
 pub mod opsec;
+pub mod pe;
 pub mod plugin;
+pub mod scaffold;
 pub mod plugin_system;
 pub mod profile;
 pub mod sbom;
 pub mod secret;
+#[cfg(feature = "gui")]
 pub mod style;
 pub mod utils;
 pub mod plugin_capnp {
     include!("../capnp/plugin_capnp.rs");
 }
 
+#[cfg(feature = "gui")]
 use anyhow::anyhow;
 pub use convert::OutputFormat;
 pub use error::{PumpBinError, PumpBinResult};
@@ -33,11 +38,17 @@ pub use secret::SecretBuf;
 /// Bumped from the pre-v1.1.10 value of 10 to match the v2.0 plan target.
 pub const RECENT_FILES_CAP: usize = 20;
 
-use std::{collections::BTreeMap, fmt::Display, fs, path::PathBuf};
+use std::fmt::Display;
+#[cfg(feature = "gui")]
+use std::{collections::BTreeMap, fs, path::PathBuf};
 
+#[cfg(feature = "gui")]
 use base64::{engine::general_purpose, Engine as _};
+#[cfg(feature = "gui")]
 use chrono::Local;
+#[cfg(feature = "gui")]
 use dirs::{desktop_dir, home_dir};
+#[cfg(feature = "gui")]
 use iced::{
     alignment::{Horizontal, Vertical},
     event,
@@ -50,17 +61,22 @@ use iced::{
     },
     Background, Border, Element, Event, Length, Subscription, Task, Theme,
 };
+#[cfg(feature = "gui")]
 use plugin::{Plugin, Plugins};
+#[cfg(feature = "gui")]
 use rfd::{AsyncFileDialog, MessageDialogResult, MessageLevel};
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "gui")]
 use utils::{confirm_dialog, message_dialog, JETBRAINS_MONO_FONT};
 
+#[cfg(feature = "gui")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Workspace {
     Generator,
     Maker,
 }
 
+#[cfg(feature = "gui")]
 #[derive(Debug, Clone)]
 pub enum Message {
     ShellcodeSrcChanged(String),
@@ -100,6 +116,7 @@ pub enum Message {
     MakerMsg(crate::maker::MakerMessage),
 }
 
+#[cfg(feature = "gui")]
 #[derive(Debug, Clone)]
 pub enum KeyboardShortcut {
     AddPlugin,
@@ -156,6 +173,7 @@ impl Display for Platform {
     }
 }
 
+#[cfg(feature = "gui")]
 #[derive(Debug)]
 pub struct Pumpbin {
     shellcode_src: String,
@@ -180,6 +198,7 @@ pub struct Pumpbin {
     maker_state: crate::maker::Maker,
 }
 
+#[cfg(feature = "gui")]
 impl Default for Pumpbin {
     fn default() -> Self {
         Self {
@@ -207,6 +226,7 @@ impl Default for Pumpbin {
     }
 }
 
+#[cfg(feature = "gui")]
 impl Pumpbin {
     fn field_mode(field: Option<&PluginConfigField>, key: &str) -> &'static str {
         if let Some(field) = field {
@@ -371,6 +391,7 @@ impl Pumpbin {
     }
 }
 
+#[cfg(feature = "gui")]
 impl Pumpbin {
     pub fn shellcode_src(&self) -> &str {
         &self.shellcode_src
@@ -454,6 +475,7 @@ impl Pumpbin {
     }
 }
 
+#[cfg(feature = "gui")]
 impl Pumpbin {
     pub fn update(&mut self, message: Message) -> iced::Task<Message> {
         match message {
@@ -535,7 +557,7 @@ impl Pumpbin {
                             final_shellcode.formatted_shellcode(),
                             runtime_config.as_ref(),
                         )?
-                        .url()
+                        .final_shellcode_url()
                         .to_string();
 
                     if url.is_empty() {

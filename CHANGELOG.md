@@ -1,5 +1,73 @@
 # CHANGELOG
 
+## v2.0.0 — Extism removed, native Rust modules
+
+**Breaking.** The Extism WASM plugin runtime is gone, replaced by
+statically-linked native Rust `Module` traits. PumpBin now ships as a
+single binary with the modules it cares about compiled in. The `.b1n`
+schema is unchanged on the wire (capnp `Data` fields reinterpreted as
+UTF-8 module-id bytes), but `.b1n` files produced before v2.0 that
+embedded WASM bytes are **refused on load with a clear error** —
+re-pack them with `pumpbin-cli create-b1n --module <id>` referring to
+the native module id.
+
+### Removed
+
+- `extism` crate dependency (and its `wasmtime` / `cranelift` /
+  `wasi-common` / `wiggle` transitive cone). `cargo tree -p pumpbin`
+  no longer mentions any of them.
+- `pumpbin-plugin-sdk` path dep + the `plugin-sdk/` crate itself.
+- `pumpbin/src/host_helpers/` — the `pumpbin:host/v1` host-function
+  ABI is gone. The pure-Rust `patch_version_info` walker lifted out
+  to `pumpbin/src/pe.rs`.
+- `pumpbin/plugin-examples/` (aes-gcm-encrypt, xor-encrypt,
+  url-format, pe-version-info, signers/cert-blob-steal) and
+  `pumpbin/wasms/` — all five wasm modules have native equivalents
+  in `pumpbin/src/modules/`.
+- `tests/wasm_policy.rs` (11 tests on the dead wasm runtime policy).
+- `tests/on_error_skip.rs` (tested `EventManager::fire_post_binary`,
+  which no longer exists).
+- 15 wasmtime + bincode-1.x ignore entries from `deny.toml`. The
+  remaining 2 entries (`instant`, `paste`) are dated 2026-05-28
+  with re-check window.
+- `goblin` direct dep (only used by the deleted host_helpers PE
+  parsing path).
+
+### Added
+
+- `pumpbin/src/modules/` — native module surface:
+  - `EncryptModule` (AES-256-GCM, single-byte XOR)
+  - `FormatEncryptedModule` (no built-ins yet)
+  - `FormatUrlModule` (pass-through)
+  - `UploadRemoteModule` (no built-ins yet)
+  - `PostBuildModule` (PE version-info patch, cert-blob-steal)
+- `pumpbin/src/modules/dispatch.rs` — string-id lookup that replaces
+  every `extism::Plugin::call` site. Unknown id → clear error listing
+  available ids.
+- `aes-gcm = "0.10"` crate dep, for the native AES-256-GCM module.
+
+### Changed
+
+- `Plugin.plugins.{encrypt_shellcode, format_encrypted_shellcode,
+  format_url_remote, upload_final_shellcode_remote}` field types from
+  `Option<Vec<u8>>` (raw WASM bytes) to `Option<String>` (native module id).
+- `Plugin.plugins.modules` from `Vec<Vec<u8>>` (WASM byte sequences)
+  to `Vec<String>` (post-build chain of module ids).
+- `pumpbin-cli create-b1n --module <PATH>` → `--module <ID>` (and
+  same for `--post-module`).
+- `Plugin::decode_from_slice` rejects pre-v2.0 `.b1n` files whose
+  module slots contain non-UTF-8 (i.e. WASM) bytes with the message:
+  *"plugin slot 'X' is not a valid UTF-8 module id. Pre-2.0 .b1n
+  files with embedded WASM are not supported."*
+
+### Performance
+
+- `target/debug` after `cargo test --no-run` shrinks from ~5 GB
+  (post-v1.5.0 line-tables-only band-aid) to ~600 MB. Cold build
+  drops from ~80s to ~25s on a 4-core laptop.
+
+---
+
 ## v1.5.0 — PE + log host helpers (Phase A of v1.5.x → v2.0 modularity overhaul)
 
 First cut of the **SDK v2 host-import ABI**. Plugins now call into

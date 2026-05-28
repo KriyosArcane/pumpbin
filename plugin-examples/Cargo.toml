@@ -1,9 +1,0 @@
-[workspace]
-resolver = "2"
-members = [
-    "aes-gcm-encrypt",
-    "xor-encrypt",
-    "url-format",
-    "pe-version-info",
-    "signers/cert-blob-steal",
-]

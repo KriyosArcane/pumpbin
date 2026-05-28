@@ -142,6 +142,20 @@ enum Commands {
             value_name = "KEY=VALUE"
         )]
         module_config: Vec<String>,
+
+        /// Append a post-build module id to the chain. Order matters
+        /// — modules run in the order given. Repeat the flag to chain
+        /// multiple. Use `pumpbin-cli list-modules` to see the
+        /// available ids.
+        #[arg(long = "post", value_name = "ID")]
+        post: Vec<String>,
+
+        /// Per-module args for the post chain, formatted as
+        /// `<id>=<k=v[;k=v...]>`. The right-hand side is forwarded
+        /// to the module's `apply(args, ...)`. Repeat the flag if
+        /// you need args for several modules.
+        #[arg(long = "post-arg", value_name = "ID=K=V")]
+        post_arg: Vec<String>,
     },
 
     /// Generate multiple implants from a directory of shellcodes
@@ -229,13 +243,14 @@ enum Commands {
         #[arg(long)]
         max_len: Option<u64>,
 
-        /// Unified module wasm path (optional)
-        #[arg(long, value_hint = clap::ValueHint::FilePath)]
-        module: Option<PathBuf>,
+        /// Native module id to attach as the primary hook. Use
+        /// `pumpbin-cli list-modules` to see available ids.
+        #[arg(long)]
+        module: Option<String>,
 
-        /// Additional post-binary modules to chain in order
-        #[arg(long = "post-module", value_hint = clap::ValueHint::FilePath)]
-        post_modules: Vec<PathBuf>,
+        /// Additional post-build module ids to chain in order.
+        #[arg(long = "post-module")]
+        post_modules: Vec<String>,
 
         /// Per-module config block entries formatted as <index>:KEY=VALUE
         #[arg(long = "post-module-config", value_name = "IDX:KEY=VALUE")]
@@ -297,6 +312,96 @@ enum Commands {
         profile: PathBuf,
     },
 
+    /// List all registered modules — both shipped built-ins and
+    /// external (drop-in) modules discovered under
+    /// `$XDG_CONFIG_HOME/pumpbin/modules/` (and other roots).
+    /// Discovery warnings (malformed manifests etc.) print to stderr.
+    ListModules {
+        /// Show each module's argument schema (key, type, required,
+        /// default, description). Modules with no documented args
+        /// show "(no documented args)". Mirrors `nxc --options`.
+        #[arg(long)]
+        options: bool,
+
+        /// Limit output to one module id. Useful with `--options`
+        /// to focus on a single module's help.
+        #[arg(long, value_name = "ID")]
+        id: Option<String>,
+    },
+
+    /// Invoke a single module on a sample input — the development
+    /// loop for module authors. Reads payload from `--input` (or
+    /// stdin if `-`), forwards `--args` as the module's CLI args,
+    /// writes the module's response payload to `--output` (or stdout
+    /// if `-`). Surfaces module stderr verbatim on failure.
+    ModuleTest {
+        /// Module id. Looks up both built-in and external registries.
+        id: String,
+
+        /// Input payload path. Use `-` for stdin. For `post-build`
+        /// modules this is the implant bytes; for `encrypt`, the
+        /// shellcode; for `format-url`, the URL as UTF-8 bytes.
+        #[arg(short, long)]
+        input: String,
+
+        /// Repeatable `key=value` args forwarded to the module.
+        #[arg(short = 'a', long = "arg", value_name = "KEY=VALUE")]
+        args: Vec<String>,
+
+        /// Where to write the module's response payload. Use `-` for
+        /// stdout. Defaults to `-`.
+        #[arg(short, long, default_value = "-")]
+        output: String,
+    },
+
+    /// Scaffold a new PumpBin-ready loader crate. Writes a Cargo crate
+    /// at <dest> with `build.rs` + `src/main.rs` + `pumpbin-pack.sh`
+    /// pre-wired to the placeholder markers the CLI expects. No
+    /// magic-string copy-paste from the author.
+    ///
+    /// `--padding-bytes` sets the shellcode placeholder capacity
+    /// (default 1 MiB; PIC loaders typically want 4 KiB - 64 KiB).
+    /// `--randomize-markers` swaps the default `$$SHELLCODE$$` /
+    /// `$$99999$$` ASCII markers for a unique-per-build pair so the
+    /// pre-stamp template binary doesn't carry stable static
+    /// signatures across operator builds.
+    NewLoader {
+        /// Path to write the new crate to. Must not exist.
+        dest: PathBuf,
+
+        /// Crate name. Defaults to the basename of <dest>.
+        #[arg(long)]
+        name: Option<String>,
+
+        /// Target platform: linux | windows | darwin. Defaults to
+        /// the current host's platform.
+        #[arg(long, default_value_t = default_scaffold_platform())]
+        platform: String,
+
+        /// Shellcode placeholder capacity. PIC loaders want this
+        /// tight; the 1 MiB default is sized for fat PE wrappers.
+        /// Minimum 64 bytes (one cache line of slack for any
+        /// shellcode the operator might stamp).
+        #[arg(long, default_value_t = pumpbin::scaffold::DEFAULT_PAD_BYTES, value_name = "BYTES")]
+        padding_bytes: usize,
+
+        /// Replace the default `$$SHELLCODE$$` / `$$99999$$` markers
+        /// with a unique-per-scaffold random pair (13 ASCII chars +
+        /// 9-or-4 ASCII chars). Kills the cross-build static
+        /// signature for any operator shipping templates.
+        #[arg(long)]
+        randomize_markers: bool,
+
+        /// Use a 4-byte u32 little-endian size holder instead of the
+        /// 9-byte decimal ASCII default. PumpBin's patcher writes
+        /// `len.to_le_bytes()` into the slot and the loader parses
+        /// it with `u32::from_le_bytes(...)`. Useful for PIC loaders
+        /// that want to avoid dragging `core::fmt` for decimal
+        /// parsing. Saves 5 bytes in the placeholder slot.
+        #[arg(long)]
+        binary_size_holder: bool,
+    },
+
     /// Print shell completion script to stdout
     Completions {
         /// Target shell
@@ -346,6 +451,8 @@ fn dispatch(cli: &Cli) -> Result<()> {
             binary_type,
             output,
             module_config,
+            post,
+            post_arg,
         } => {
             tracing::info!("Starting automated CLI generation...");
 
@@ -354,7 +461,14 @@ fn dispatch(cli: &Cli) -> Result<()> {
 
             tracing::info!(plugin = ?plugin, "Loading plugin");
             let plugin_buf = std::fs::read(plugin)?;
-            let plugin_obj = Plugin::decode_from_slice(&plugin_buf)?;
+            let mut plugin_obj = Plugin::decode_from_slice(&plugin_buf)?;
+
+            // Append CLI-supplied post-build modules to the .b1n's chain
+            // in operator-given order. The .b1n's own modules run first,
+            // then CLI additions.
+            for id in post {
+                plugin_obj.plugins.modules_mut().push(id.clone());
+            }
 
             tracing::info!(%platform, %binary_type, "Validating plugin for target");
             plugin_obj.validate_for_generation(parsed_platform, parsed_binary_type)?;
@@ -368,7 +482,15 @@ fn dispatch(cli: &Cli) -> Result<()> {
 
             plugin_obj.validate_shellcode_source(shellcode)?;
             let final_shellcode_src = shellcode.clone();
-            let runtime_config = parse_module_config(module_config)?;
+            let mut runtime_config = parse_module_config(module_config)?;
+            for entry in post_arg {
+                let (id, rest) = entry.split_once('=').ok_or_else(|| {
+                    anyhow!(
+                        "--post-arg expects <id>=<k=v[;k=v...]>; got: {entry}"
+                    )
+                })?;
+                runtime_config.insert(format!("post:{id}"), rest.to_string());
+            }
             let schema_fields = plugin_schema_fields(&plugin_obj);
             let runtime_config =
                 normalize_runtime_config_for_schema(runtime_config, &schema_fields)?;
@@ -707,26 +829,14 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 }
             }
 
-            if let Some(module_path) = module {
-                let wasm = std::fs::read(module_path)
-                    .with_context(|| format!("failed to read module: {}", module_path.display()))?;
-                plugin.plugins.modules_mut().push(wasm);
+            if let Some(module_id) = module {
+                plugin.plugins.modules_mut().push(module_id.clone());
             }
 
             let mut cfg = parse_module_config(module_config)?;
 
-            for (idx, module_path) in post_modules.iter().enumerate() {
-                let wasm = std::fs::read(module_path).with_context(|| {
-                    format!(
-                        "failed to read post-module {}: {}",
-                        idx,
-                        module_path.display()
-                    )
-                })?;
-                cfg.insert(
-                    format!("post_chain.{}.module_b64", idx),
-                    general_purpose::STANDARD.encode(wasm),
-                );
+            for id in post_modules {
+                plugin.plugins.modules_mut().push(id.clone());
             }
 
             for entry in post_module_config {
@@ -834,6 +944,162 @@ fn dispatch(cli: &Cli) -> Result<()> {
             }
             Ok(())
         }
+        Commands::ListModules { options, id } => {
+            list_modules(*options, id.as_deref())
+        }
+        Commands::ModuleTest {
+            id,
+            input,
+            args,
+            output,
+        } => {
+            use pumpbin::modules::external::{registry, wire::WireKind};
+            use std::io::{Read, Write};
+
+            let payload: Vec<u8> = if input == "-" {
+                let mut buf = Vec::new();
+                std::io::stdin().read_to_end(&mut buf)?;
+                buf
+            } else {
+                std::fs::read(input)?
+            };
+
+            // Resolve kind: external registry tells us explicitly;
+            // for built-ins we probe each kind by id and the first
+            // hit wins (built-ins don't overlap).
+            let kind = if let Some(ext) = registry().get(id) {
+                Some(ext.kind())
+            } else if pumpbin::modules::encrypt_modules().iter().any(|m| m.id() == id) {
+                Some(WireKind::Encrypt)
+            } else if pumpbin::modules::format_encrypted_modules()
+                .iter()
+                .any(|m| m.id() == id)
+            {
+                Some(WireKind::FormatEncrypted)
+            } else if pumpbin::modules::format_url_modules()
+                .iter()
+                .any(|m| m.id() == id)
+            {
+                Some(WireKind::FormatUrl)
+            } else if pumpbin::modules::upload_remote_modules()
+                .iter()
+                .any(|m| m.id() == id)
+            {
+                Some(WireKind::UploadRemote)
+            } else if pumpbin::modules::post_build_modules()
+                .iter()
+                .any(|m| m.id() == id)
+            {
+                Some(WireKind::PostBuild)
+            } else {
+                None
+            };
+            let kind = kind.ok_or_else(|| {
+                anyhow!(
+                    "module-test: id '{id}' not registered. Run `pumpbin-cli list-modules` to see what's installed."
+                )
+            })?;
+
+            let result: Vec<u8> = match kind {
+                WireKind::Encrypt => {
+                    let out = pumpbin::modules::dispatch::encrypt(id, &payload)?;
+                    eprintln!(
+                        "module '{id}' encrypted {} → {} bytes; {} pass entries:",
+                        payload.len(),
+                        out.encrypted.len(),
+                        out.pass.len(),
+                    );
+                    for p in &out.pass {
+                        eprintln!(
+                            "  holder={}  replace_by={}",
+                            String::from_utf8_lossy(&p.holder),
+                            bytes_short(&p.replace_by)
+                        );
+                    }
+                    out.encrypted
+                }
+                WireKind::FormatEncrypted => {
+                    let out = pumpbin::modules::dispatch::format_encrypted(id, &payload)?;
+                    eprintln!(
+                        "module '{id}' reformatted {} → {} bytes; {} pass entries:",
+                        payload.len(),
+                        out.formatted.len(),
+                        out.pass.len(),
+                    );
+                    for p in &out.pass {
+                        eprintln!(
+                            "  holder={}  replace_by={}",
+                            String::from_utf8_lossy(&p.holder),
+                            bytes_short(&p.replace_by)
+                        );
+                    }
+                    out.formatted
+                }
+                WireKind::FormatUrl => {
+                    let url = std::str::from_utf8(&payload)
+                        .map_err(|e| anyhow!("format-url payload must be UTF-8: {e}"))?;
+                    pumpbin::modules::dispatch::format_url(id, url)?.into_bytes()
+                }
+                WireKind::UploadRemote => {
+                    pumpbin::modules::dispatch::upload_remote(id, &payload)?.into_bytes()
+                }
+                WireKind::PostBuild => {
+                    let mut buf = payload;
+                    pumpbin::modules::dispatch::post_build(id, args, &mut buf)?;
+                    buf
+                }
+            };
+
+            if output == "-" {
+                std::io::stdout().write_all(&result)?;
+            } else {
+                std::fs::write(output, &result)?;
+            }
+            Ok(())
+        }
+        Commands::NewLoader {
+            dest,
+            name,
+            platform,
+            padding_bytes,
+            randomize_markers,
+            binary_size_holder,
+        } => {
+            let dest = dest.as_path();
+            let crate_name = name.clone().unwrap_or_else(|| {
+                dest.file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("loader")
+                    .to_string()
+            });
+            let parsed_platform = parse_platform(platform)?;
+            if *padding_bytes < 64 {
+                return Err(anyhow!(
+                    "--padding-bytes must be at least 64 (got {padding_bytes}); the placeholder needs enough room for any shellcode the operator will stamp"
+                ));
+            }
+            let opts = pumpbin::scaffold::LoaderOpts {
+                padding_bytes: *padding_bytes,
+                randomize_markers: *randomize_markers,
+                binary_size_holder: *binary_size_holder,
+            };
+            pumpbin::scaffold::write_loader_scaffold(dest, &crate_name, parsed_platform, opts)?;
+            tracing::info!(
+                dest = %dest.display(),
+                name = %crate_name,
+                platform = %parsed_platform,
+                padding_bytes = padding_bytes,
+                randomized = randomize_markers,
+                binary_size = binary_size_holder,
+                "Scaffolded loader crate",
+            );
+            println!(
+                "Scaffolded loader crate at {}.\n  cd {} && cargo build --release\n  ./pumpbin-pack.sh    # wraps pumpbin-cli create-b1n with the right flags",
+                dest.display(),
+                dest.display(),
+            );
+            Ok(())
+        }
         Commands::Completions {
             shell,
             command_name,
@@ -843,6 +1109,249 @@ fn dispatch(cli: &Cli) -> Result<()> {
             generate(generator, &mut cmd, command_name, &mut std::io::stdout());
             Ok(())
         }
+    }
+}
+
+/// One row of `list-modules` output. Owned so we can build it
+/// uniformly for built-ins (static-string traits) and externals
+/// (owned manifest fields).
+struct ModuleRow {
+    id: String,
+    source: String,
+    description: String,
+    /// `(key, type, required, default, description)` for every arg.
+    args: Vec<ArgRow>,
+}
+
+struct ArgRow {
+    key: String,
+    arg_type: String,
+    required: bool,
+    default: Option<String>,
+    description: String,
+}
+
+fn list_modules(show_options: bool, only_id: Option<&str>) -> Result<()> {
+    use pumpbin::modules::external::{registry, wire::WireKind};
+    use pumpbin::modules::{
+        encrypt_modules, format_encrypted_modules, format_url_modules, post_build_modules,
+        upload_remote_modules,
+    };
+
+    let ext = registry();
+
+    let print_section = |title: &str, rows: Vec<ModuleRow>| {
+        let filtered: Vec<&ModuleRow> = rows
+            .iter()
+            .filter(|r| only_id.is_none_or(|want| r.id == want))
+            .collect();
+        if filtered.is_empty() {
+            return;
+        }
+        println!("{title}:");
+        for r in filtered {
+            println!("  {} ({}) - {}", r.id, r.source, r.description);
+            if show_options {
+                if r.args.is_empty() {
+                    println!("    (no documented args)");
+                } else {
+                    for a in &r.args {
+                        let req = if a.required { " (required)" } else { "" };
+                        let dflt = a
+                            .default
+                            .as_deref()
+                            .map(|d| format!(" [default: {d}]"))
+                            .unwrap_or_default();
+                        println!(
+                            "    {key}: {ty}{req}{dflt}",
+                            key = a.key,
+                            ty = a.arg_type,
+                            req = req,
+                            dflt = dflt,
+                        );
+                        if !a.description.is_empty() {
+                            println!("        {}", a.description);
+                        }
+                    }
+                }
+            }
+        }
+    };
+
+    let mut found_any = false;
+
+    let mut encrypt_rows: Vec<ModuleRow> = encrypt_modules()
+        .iter()
+        .map(|m| ModuleRow {
+            id: m.id().to_string(),
+            source: "built-in".to_string(),
+            description: m.description().to_string(),
+            args: m.args().into_iter().map(arg_from_spec).collect(),
+        })
+        .collect();
+    for m in ext.all().filter(|m| m.kind() == WireKind::Encrypt) {
+        encrypt_rows.push(external_row(m));
+    }
+    if let Some(want) = only_id {
+        if encrypt_rows.iter().any(|r| r.id == want) {
+            found_any = true;
+        }
+    } else if !encrypt_rows.is_empty() {
+        found_any = true;
+    }
+    print_section("encrypt", encrypt_rows);
+
+    let mut fe_rows: Vec<ModuleRow> = format_encrypted_modules()
+        .iter()
+        .map(|m| ModuleRow {
+            id: m.id().to_string(),
+            source: "built-in".to_string(),
+            description: m.description().to_string(),
+            args: m.args().into_iter().map(arg_from_spec).collect(),
+        })
+        .collect();
+    for m in ext.all().filter(|m| m.kind() == WireKind::FormatEncrypted) {
+        fe_rows.push(external_row(m));
+    }
+    if let Some(want) = only_id {
+        if fe_rows.iter().any(|r| r.id == want) {
+            found_any = true;
+        }
+    }
+    print_section("format_encrypted", fe_rows);
+
+    let mut url_rows: Vec<ModuleRow> = format_url_modules()
+        .iter()
+        .map(|m| ModuleRow {
+            id: m.id().to_string(),
+            source: "built-in".to_string(),
+            description: m.description().to_string(),
+            args: m.args().into_iter().map(arg_from_spec).collect(),
+        })
+        .collect();
+    for m in ext.all().filter(|m| m.kind() == WireKind::FormatUrl) {
+        url_rows.push(external_row(m));
+    }
+    if let Some(want) = only_id {
+        if url_rows.iter().any(|r| r.id == want) {
+            found_any = true;
+        }
+    }
+    print_section("format_url", url_rows);
+
+    let mut ur_rows: Vec<ModuleRow> = upload_remote_modules()
+        .iter()
+        .map(|m| ModuleRow {
+            id: m.id().to_string(),
+            source: "built-in".to_string(),
+            description: m.description().to_string(),
+            args: m.args().into_iter().map(arg_from_spec).collect(),
+        })
+        .collect();
+    for m in ext.all().filter(|m| m.kind() == WireKind::UploadRemote) {
+        ur_rows.push(external_row(m));
+    }
+    if let Some(want) = only_id {
+        if ur_rows.iter().any(|r| r.id == want) {
+            found_any = true;
+        }
+    }
+    print_section("upload_remote", ur_rows);
+
+    let mut pb_rows: Vec<ModuleRow> = post_build_modules()
+        .iter()
+        .map(|m| ModuleRow {
+            id: m.id().to_string(),
+            source: "built-in".to_string(),
+            description: m.description().to_string(),
+            args: m.args().into_iter().map(arg_from_spec).collect(),
+        })
+        .collect();
+    for m in ext.all().filter(|m| m.kind() == WireKind::PostBuild) {
+        pb_rows.push(external_row(m));
+    }
+    if let Some(want) = only_id {
+        if pb_rows.iter().any(|r| r.id == want) {
+            found_any = true;
+        }
+    }
+    print_section("post_build", pb_rows);
+
+    if let Some(want) = only_id {
+        if !found_any {
+            return Err(anyhow!(
+                "list-modules: no module with id '{want}'. Drop --id to see what's installed."
+            ));
+        }
+    }
+
+    for w in ext.warnings() {
+        eprintln!("warning: {w}");
+    }
+    Ok(())
+}
+
+fn arg_from_spec(s: pumpbin::modules::ArgSpec) -> ArgRow {
+    ArgRow {
+        key: s.key.to_string(),
+        arg_type: s.arg_type.to_string(),
+        required: s.required,
+        default: s.default.map(|d| d.to_string()),
+        description: s.description.to_string(),
+    }
+}
+
+fn external_row(m: &pumpbin::modules::external::ExternalModule) -> ModuleRow {
+    ModuleRow {
+        id: m.id().to_string(),
+        source: format!("external: {}", m.manifest_path.display()),
+        description: m.description().to_string(),
+        args: m
+            .manifest
+            .args
+            .iter()
+            .map(|a| ArgRow {
+                key: a.key.clone(),
+                arg_type: if a.arg_type.is_empty() {
+                    "string".to_string()
+                } else {
+                    a.arg_type.clone()
+                },
+                required: a.required,
+                default: a.default.clone(),
+                description: a.description.clone(),
+            })
+            .collect(),
+    }
+}
+
+/// Render a byte string for human display. ASCII-printable verbatim,
+/// non-printable as `0x..` hex. Truncates at 32 bytes with an ellipsis.
+fn bytes_short(b: &[u8]) -> String {
+    let take = b.len().min(32);
+    let mut out = String::new();
+    for &byte in &b[..take] {
+        if byte.is_ascii_graphic() || byte == b' ' {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("\\x{byte:02x}"));
+        }
+    }
+    if b.len() > take {
+        out.push_str(&format!("... ({} bytes)", b.len()));
+    }
+    out
+}
+
+fn default_scaffold_platform() -> String {
+    if cfg!(target_os = "linux") {
+        "linux".to_string()
+    } else if cfg!(target_os = "windows") {
+        "windows".to_string()
+    } else if cfg!(target_os = "macos") {
+        "darwin".to_string()
+    } else {
+        "linux".to_string()
     }
 }
 
@@ -940,26 +1449,10 @@ fn parse_post_module_config_entry(entry: &str) -> Result<(usize, String, String)
     Ok((idx, key.to_string(), value.to_string()))
 }
 
-fn plugin_schema_fields(plugin: &Plugin) -> Vec<PluginConfigField> {
-    for wasm in plugin.plugins().modules() {
-        if let Ok(Some(schema)) = get_plugin_config_schema(wasm) {
-            return schema.fields;
-        }
-    }
-
-    let wasm = plugin
-        .plugins()
-        .encrypt_shellcode()
-        .or(plugin.plugins().format_encrypted_shellcode())
-        .or(plugin.plugins().format_url_remote())
-        .or(plugin.plugins().upload_final_shellcode_remote());
-
-    if let Some(wasm) = wasm {
-        if let Ok(Some(schema)) = get_plugin_config_schema(wasm) {
-            return schema.fields;
-        }
-    }
-
+fn plugin_schema_fields(_plugin: &Plugin) -> Vec<PluginConfigField> {
+    // Pre-v2.0 this introspected each WASM module's exported
+    // `plugin_schema` via Extism. Native modules don't yet declare
+    // runtime-discoverable schemas; Step 7+ will wire this up.
     Vec::new()
 }
 

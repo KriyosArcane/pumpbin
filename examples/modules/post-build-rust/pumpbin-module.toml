@@ -1,0 +1,14 @@
+name = "marker-append"
+description = "Demo: append a magic marker byte to the implant (replace this with your real post-build mutation)"
+kind = "post-build"
+version = "0.1.0"
+protocol = 1
+platforms = ["linux", "windows", "darwin"]
+executable = "marker-append"
+
+[[args]]
+key = "marker"
+type = "hex-byte"
+required = false
+default = "0xAA"
+description = "Byte to append to the implant (e.g. 0xCC). Single byte only."

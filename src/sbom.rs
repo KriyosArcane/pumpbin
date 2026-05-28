@@ -6,7 +6,6 @@
 //! runtime config (passwords redacted), build duration, builder identity.
 //! Critical for legal red-team engagements where chain-of-custody matters.
 
-use crate::plugin_system::get_plugin_config_schema;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -49,9 +48,8 @@ pub struct PluginRecord {
 #[derive(Debug, Clone, Serialize)]
 pub struct ModuleRecord {
     pub index: usize,
-    pub sha256: String,
-    pub size: usize,
-    pub sdk_version: Option<u32>,
+    /// Module id (post-v2.0). Pre-v2.0 this was sha256 of the wasm bytes.
+    pub id: String,
 }
 
 /// Build an `Sbom` from the inputs `Profile::execute` already has at the
@@ -64,27 +62,21 @@ pub fn build_sbom(
     plugin_bytes: &[u8],
     plugin_name: &str,
     plugin_version: &str,
-    modules: &[Vec<u8>],
+    modules: &[String],
     shellcode_bytes: &[u8],
     runtime_config: &BTreeMap<String, String>,
     output_path: &Path,
     output_bytes: usize,
     duration_ms: u128,
 ) -> Sbom {
-    let mut module_records = Vec::with_capacity(modules.len());
-    for (idx, wasm) in modules.iter().enumerate() {
-        let sha256 = sha256_hex(wasm);
-        let sdk_version = get_plugin_config_schema(wasm)
-            .ok()
-            .flatten()
-            .and_then(|s| s.runtime.and_then(|rt| rt.sdk_version));
-        module_records.push(ModuleRecord {
+    let module_records: Vec<_> = modules
+        .iter()
+        .enumerate()
+        .map(|(idx, id)| ModuleRecord {
             index: idx,
-            sha256,
-            size: wasm.len(),
-            sdk_version,
-        });
-    }
+            id: id.clone(),
+        })
+        .collect();
 
     Sbom {
         schema: SBOM_SCHEMA,

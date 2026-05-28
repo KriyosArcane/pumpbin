@@ -1,3 +1,4 @@
+#[cfg(feature = "gui")]
 use iced::{
     advanced::graphics::image::image_rs::ImageFormat,
     window::{self, Level, Position},
@@ -5,12 +6,15 @@ use iced::{
 };
 use memchr::memmem;
 use rand::RngCore;
+#[cfg(feature = "gui")]
 use rfd::{AsyncMessageDialog, MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 use std::iter;
 use thiserror::Error;
 
+#[cfg(feature = "gui")]
 pub const JETBRAINS_MONO_FONT: Font = Font::with_name("JetBrainsMono NF");
 
+#[cfg(feature = "gui")]
 pub fn error_dialog(error: anyhow::Error) {
     MessageDialog::new()
         .set_buttons(MessageButtons::Ok)
@@ -20,6 +24,7 @@ pub fn error_dialog(error: anyhow::Error) {
         .show();
 }
 
+#[cfg(feature = "gui")]
 pub fn message_dialog(message: String, level: MessageLevel) -> Task<MessageDialogResult> {
     let dialog = AsyncMessageDialog::new()
         .set_buttons(MessageButtons::Ok)
@@ -30,6 +35,7 @@ pub fn message_dialog(message: String, level: MessageLevel) -> Task<MessageDialo
     Task::future(dialog)
 }
 
+#[cfg(feature = "gui")]
 pub fn confirm_dialog(message: String, title: String) -> Task<MessageDialogResult> {
     let dialog = AsyncMessageDialog::new()
         .set_buttons(MessageButtons::YesNo)
@@ -40,6 +46,7 @@ pub fn confirm_dialog(message: String, title: String) -> Task<MessageDialogResul
     Task::future(dialog)
 }
 
+#[cfg(feature = "gui")]
 pub fn settings() -> Settings {
     Settings {
         fonts: vec![include_bytes!("../assets/JetBrainsMonoNerdFont-Regular.ttf").into()],
@@ -50,6 +57,7 @@ pub fn settings() -> Settings {
     }
 }
 
+#[cfg(feature = "gui")]
 pub fn window_settings() -> window::Settings {
     let size = Size::new(1200.0, 800.0);
 
