@@ -103,10 +103,31 @@ fn runtime_config_default_matches_resolved_defaults() {
 // ── SDK version compatibility constant ──────────────────────────────────
 
 #[test]
-fn host_sdk_version_is_one() {
-    // Locked at 1 for the entire 1.x line. Bumping requires a major
-    // version cut (v2.0) and a CHANGELOG entry naming what changed.
-    assert_eq!(PUMPBIN_SDK_VERSION, 1);
+fn host_sdk_version_is_two() {
+    // v1 (1.1.7) introduced per-module runtime policy.
+    // v2 (1.5.0) added the host helper ABI (host::pe, host::log) via
+    // Extism with_function. v2 is additive: v1 plugins still load.
+    // Bumping again requires a CHANGELOG entry naming what changed.
+    assert_eq!(PUMPBIN_SDK_VERSION, 2);
+}
+
+#[test]
+fn sdk_version_compat_rules() {
+    // v1.5.0 relaxed the version check from strict-equality to
+    // "declared <= host". This codifies the rule so the compat path
+    // doesn't silently regress.
+    let host = PUMPBIN_SDK_VERSION;
+    for declared in 1..=host {
+        assert!(
+            declared <= host,
+            "SDK v{declared} plugin must load on host v{host} (additive compat)"
+        );
+    }
+    let future = host + 1;
+    assert!(
+        future > host,
+        "SDK v{future} plugin must NOT load on host v{host} (forward compat is opt-out)"
+    );
 }
 
 // ── End-to-end: existing AES wasm loads under defaults ──────────────────

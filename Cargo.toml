@@ -1,6 +1,6 @@
 [package]
 name = "pumpbin"
-version = "1.4.6"
+version = "1.5.0"
 authors = ["b1n <b1n@b1n.io>"]
 edition = "2021"
 description = "PumpBin is an Implant Generation Platform."
@@ -39,6 +39,13 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["e
 zeroize = { version = "1.8.2", features = ["derive"] }
 toml = { version = "1.1.2", features = ["parse"] }
 sha2 = "0.10"
+# Host helper ABI (v1.5.0, Phase A). The SDK declares extern "ExtismHost"
+# imports against the `pumpbin:host/v1` namespace; the host registers
+# matching closures via Extism `with_function` in
+# `src/host_helpers/`. Plugins call into the host for PE patching and
+# structured logging instead of bundling these libs in every `.wasm`.
+pumpbin-plugin-sdk = { path = "plugin-sdk" }
+goblin = { version = "0.10", default-features = false, features = ["std", "pe32", "pe64", "endian_fd"] }
 
 [[bin]]
 name = "pumpbin-cli"

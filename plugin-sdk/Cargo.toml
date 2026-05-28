@@ -1,6 +1,6 @@
 [package]
 name = "pumpbin-plugin-sdk"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Shared types and helpers for writing PumpBin WASM plugins"
 
@@ -11,3 +11,6 @@ crate-type = ["cdylib", "rlib"]
 extism-pdk = "1.4.1"
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
+# Wire format for host helpers (PumpBin SDK v2). Same version the main
+# crate pins so host + guest deserialize each other without drift.
+bincode = { version = "2.0.0-rc.3", default-features = false, features = ["alloc", "derive", "std", "serde"] }

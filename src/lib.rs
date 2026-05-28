@@ -1,6 +1,7 @@
 pub mod config_utils;
 pub mod convert;
 pub mod error;
+pub mod host_helpers;
 pub mod inspect;
 pub mod logging;
 pub mod maker;

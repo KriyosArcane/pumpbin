@@ -21,8 +21,10 @@
 //! }
 //! ```
 
-pub use extism_pdk::{self, config, plugin_fn, FnResult, Json};
+pub use extism_pdk::{self, config, host_fn, plugin_fn, FnResult, Json};
 use serde::{Deserialize, Serialize};
+
+pub mod host;
 
 // ── Config access helper ──────────────────────────────────────────────────────
 
@@ -216,7 +218,12 @@ impl PluginConfigField {
 /// the host refuses to load a plugin whose declared version doesn't match.
 /// `None` (the default when `runtime` is absent) is treated as "compatible
 /// with any host" for backward compatibility with pre-1.1.7 plugins.
-pub const PUMPBIN_SDK_VERSION: u32 = 1;
+///
+/// History:
+/// - v1 (PumpBin 1.1.7): per-module runtime policy (timeout, allowed_hosts).
+/// - v2 (PumpBin 1.5.0): host helper ABI (`host::pe`, `host::log`) via
+///   Extism `with_function`. Additive — pre-v2 plugins still load.
+pub const PUMPBIN_SDK_VERSION: u32 = 2;
 
 /// Per-module runtime policy declared by the plugin author.
 ///

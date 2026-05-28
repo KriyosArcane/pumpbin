@@ -1,8 +1,85 @@
 # CHANGELOG
 
-## Unreleased
+## v1.5.0 — PE + log host helpers (Phase A of v1.5.x → v2.0 modularity overhaul)
 
-### Changed (build-time, not runtime)
+First cut of the **SDK v2 host-import ABI**. Plugins now call into
+the host for PE patching and structured logging via Extism
+`with_function`, instead of bundling these libs inside every `.wasm`
+module. Follow-up releases extend the same wire pattern to codec
+helpers (v1.5.1), hash + crypto + random helpers (v1.5.2), and a
+plugin marketplace + scaffolding tool (v1.5.3+).
+
+### Added
+
+- **`pumpbin_plugin_sdk::host` module — SDK v2 contract.** Declares
+  `extern "ExtismHost"` imports against the new `pumpbin:host/v1`
+  namespace for two families:
+  - `host::pe` — `recompute_checksum`, `get_section`, `strip_debug`,
+    `set_version_info`. (`set_icon` is declared but stub'd; returns a
+    structured error pending follow-up.)
+  - `host::log` — `info`, `warn`, `error`.
+
+  Each function is a thin typed wrapper around a `#[host_fn]`
+  `extern "ExtismHost"` declaration. Inputs are bincode-encoded into a
+  `Vec<u8>`; outputs are bincode-decoded from `Result<T, String>`
+  bytes (`HostError` distinguishes wire-format from host-rejection
+  errors).
+
+- **`pumpbin::host_helpers` module — host-side closures** backing
+  every extern, registered via Extism `with_function`. PE family uses
+  `goblin` for section/debug-dir lookups; the VS_VERSION_INFO walker
+  was lifted verbatim from the canary plugin so output is identical
+  by construction. Log family routes through `tracing::` at the
+  `pumpbin::plugin` target and rejects non-UTF8 input, mitigating the
+  "log smuggles shellcode bytes into JSONL" risk.
+
+- **`plugin_system::build_plugin()`** — new shared helper that
+  attaches the host function table on every `extism::Plugin`
+  construction. The three former `Plugin::new(manifest, [], true)`
+  call sites switched to `PluginBuilder::new(manifest)
+  .with_wasi(true).with_functions(host_helpers::host_functions())
+  .build()`.
+
+- **bincode 2.x with the `serde` feature** added to the SDK so host
+  and plugin serialize against the same wire format the main crate
+  already uses for `.b1n` packs.
+
+- **`goblin = "0.10"` (pe32 + pe64, no_default_features)** added to
+  pumpbin as the PE parser backing `host::pe::{get_section, strip_debug}`.
+
+### Changed
+
+- **`plugin-examples/pe-version-info` rewritten** — 277 LOC → 77 LOC
+  (-72%). The 220-LOC hand-rolled UTF-16LE TLV walker collapsed to
+  one `pe::set_version_info(...)` call. The remaining LOC is the
+  `plugin_schema` config-field declarations (unchanged from v1) plus
+  the `post_binary` glue. The walker code itself moved verbatim into
+  `pumpbin/src/host_helpers/pe.rs`, so byte-for-byte output is
+  preserved.
+
+### Changed
+
+- **`PUMPBIN_SDK_VERSION` bumped 1 → 2** in both the SDK and the host
+  mirror (`src/plugin_system.rs`).
+- **Version-check rule relaxed** from strict `declared == host` to
+  `declared <= host`. A v1 plugin compiled against the pre-1.5.0 SDK
+  must continue loading on a v2 host because v2 is a pure addition
+  (new namespace + new functions), not a contract change. The new
+  `tests/wasm_policy.rs::sdk_version_compat_rules` test codifies the
+  rule so this never silently regresses.
+
+### Deferred to v1.5.1+
+
+- Codec helpers (`host::codec::{b64,hex,url,zlib}`) + `url-format`
+  canary rewrite.
+- Crypto/hash/random helpers (`host::crypto`, `host::hash`,
+  `host::random`).
+- `pe_set_icon` implementation (extern declared, host returns
+  `Err("not implemented yet")`).
+- End-to-end `tests/host_helpers.rs` integration test against a
+  fixture probe WASM that exercises each extern.
+
+### Changed (build-time, not runtime, from accumulated post-v1.4.6 work)
 
 - **`[profile.dev]` and `[profile.test]` now use
   `debug = "line-tables-only"` + `split-debuginfo = "unpacked"`.**

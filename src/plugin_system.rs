@@ -1,10 +1,11 @@
 use anyhow::Context;
 use std::{collections::BTreeMap, time::Duration};
 
-use extism::{Manifest, Wasm};
+use extism::{Manifest, PluginBuilder, Wasm};
 use serde::{Deserialize, Serialize};
 
 use crate::error::PumpBinError;
+use crate::host_helpers;
 
 /// Bounds on the per-module timeout declared in `RuntimeConfig::timeout_ms`.
 /// A 10-minute upper bound is enough for any realistic signing or
@@ -86,6 +87,20 @@ pub fn manifest_from_wasm_with_policy(
     Ok(manifest)
 }
 
+/// Build an `extism::Plugin` from a `Manifest`, attaching the v1.5.0
+/// host-helper ABI (`host_helpers::host_functions()`) so plugins can
+/// call the `pumpbin:host/v1` extern imports declared by SDK v2.
+///
+/// Pre-v1.5.0 this was a bare `extism::Plugin::new(manifest, [], true)`;
+/// host helpers required switching to `PluginBuilder` to pass the
+/// function table.
+fn build_plugin(manifest: Manifest) -> Result<extism::Plugin, extism::Error> {
+    PluginBuilder::new(manifest)
+        .with_wasi(true)
+        .with_functions(host_helpers::host_functions())
+        .build()
+}
+
 /// Read the `plugin_schema` export from `wasm`, validate the embedded
 /// `RuntimeConfig`, and return a [`ResolvedPolicy`] ready to feed
 /// [`manifest_from_wasm_with_policy`].
@@ -110,7 +125,7 @@ pub fn resolve_policy(
         Ok(m) => m,
         Err(_) => return Ok(bootstrap), // module won't load anyway; defaults are fine
     };
-    let mut plugin = match extism::Plugin::new(manifest, [], true) {
+    let mut plugin = match build_plugin(manifest) {
         Ok(p) => p,
         Err(_) => return Ok(bootstrap),
     };
@@ -129,9 +144,12 @@ pub fn resolve_policy(
         return Ok(bootstrap);
     };
 
-    // SDK version check. None = "any" for backward compat.
+    // SDK version check. None = "any" for backward compat with pre-1.1.7
+    // plugins that ship no runtime block. Pre-v1.5.0 policy was strict
+    // equality; v1.5.0 relaxed it to "declared <= host" so the additive
+    // v1→v2 host-helper ABI didn't strand every shipped plugin.
     if let Some(declared) = runtime.sdk_version {
-        if declared != PUMPBIN_SDK_VERSION {
+        if declared > PUMPBIN_SDK_VERSION {
             return Err(PumpBinError::WasmSdkVersionMismatch {
                 module: module_name,
                 declared,
@@ -168,9 +186,13 @@ pub struct PluginConfigField {
 
 /// Current PumpBin SDK version. Bump on breaking schema changes only.
 /// Plugins declare what they target via `RuntimeConfig::sdk_version`;
-/// the host refuses to load on mismatch. Mirrors the constant in
+/// the host accepts any `declared <= PUMPBIN_SDK_VERSION` (additive
+/// host evolution doesn't break old plugins). Mirrors the constant in
 /// `pumpbin-plugin-sdk`.
-pub const PUMPBIN_SDK_VERSION: u32 = 1;
+///
+/// v1 (1.1.7): per-module runtime policy.
+/// v2 (1.5.0): host helper ABI via Extism with_function.
+pub const PUMPBIN_SDK_VERSION: u32 = 2;
 
 /// Per-module runtime policy declared by the plugin author. Mirrors
 /// `pumpbin_plugin_sdk::RuntimeConfig` so the host can deserialize what
@@ -252,7 +274,7 @@ pub fn run_module<T: Serialize>(
         manifest = manifest.with_config(cfg.clone().into_iter());
     }
 
-    let mut plugin = extism::Plugin::new(manifest, [], true)?;
+    let mut plugin = build_plugin(manifest)?;
 
     match plugin.call::<Vec<u8>, Vec<u8>>(func, serde_json::to_vec(input)?) {
         Ok(output) => Ok(Some(output)),
@@ -326,7 +348,7 @@ pub fn get_plugin_config_schema(wasm: &[u8]) -> anyhow::Result<Option<PluginConf
     let policy = ResolvedPolicy::defaults("plugin_schema");
     let manifest = manifest_from_wasm_with_policy(wasm, &policy)?;
 
-    let mut plugin = extism::Plugin::new(manifest, [], true)?;
+    let mut plugin = build_plugin(manifest)?;
 
     match plugin.call::<Vec<u8>, Vec<u8>>("plugin_schema", Vec::new()) {
         Ok(output) => Ok(Some(serde_json::from_slice(output.as_slice())?)),
