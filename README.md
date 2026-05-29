@@ -21,30 +21,21 @@ Not a C2. Not a shellcode generator. Sits between them.
 
 ## Quick start
 
-You have a compiled loader binary with PumpBin markers. One command to an implant:
+You have a compiled loader binary with PumpBin markers:
 
 ```
 $ pumpbin-cli stamp loader.exe payload.bin
-[*] Detecting platform from loader.exe (MZ -> windows)
-[*] Assembling .b1n from loader.exe
-[*] Injecting shellcode
-[+] wrote stamp.exe
+wrote stamp.exe
 ```
 
 You are writing the loader from scratch:
 
 ```
 $ pumpbin-cli new-loader myloader --platform windows --pack
-[*] Scaffolded loader crate at myloader
-[*] cargo build (profile: release)
-[*] Packed .b1n -> myloader/myloader.b1n
-[+] Scaffolded and packed: myloader/myloader.b1n
+wrote myloader/myloader.b1n
+Scaffolded and packed: myloader/myloader.b1n
 
 $ pumpbin-cli generate -p myloader -s payload.bin
-[*] Loading plugin myloader/myloader.b1n
-[*] Auto-detected target: Windows / Exe
-[*] Injecting shellcode
-[+] Generation complete -> myloader.exe
 ```
 
 ## Commands
@@ -92,28 +83,21 @@ Advanced:
       --marker <MARKER>      Shellcode placeholder  [default: $$SHELLCODE$$]
 ```
 
-Apply transforms at stamp time:
+With transforms:
 
 ```
 $ pumpbin-cli stamp loader.exe payload.bin \
     --post cert-graft:donor=/path/to/signed.exe \
     --post byte-patch:patches=4831d2:4833d2 \
     --output implant.exe
-[*] Detecting platform from loader.exe (MZ -> windows)
-[*] Assembling .b1n from loader.exe
-[*] Injecting shellcode
-[+] wrote implant.exe
+wrote implant.exe
 ```
 
-Save the `.b1n` for future reuse:
+Save the `.b1n` for future reuse with `generate`:
 
 ```
 $ pumpbin-cli stamp loader.exe payload.bin --save-b1n loader.b1n
-[*] Detecting platform from loader.exe (MZ -> windows)
-[*] Assembling .b1n from loader.exe
-[*] stamp: saved .b1n -> loader.b1n
-[*] Injecting shellcode
-[+] wrote stamp.exe
+wrote stamp.exe
 ```
 
 ## generate
@@ -144,8 +128,8 @@ $ pumpbin-cli generate -p myloader -s payload.bin --dry-run
 DRY RUN: nothing will be written
 
   Plugin:       myloader (v0.1.0)
-  Target:       Windows / Exe
-  Output:       myloader.exe
+  Target:       Linux / Exe
+  Output:       myloader.elf
   Shellcode:    payload.bin (460 B)
   Module chain: (none)
 ```
@@ -155,10 +139,7 @@ DRY RUN: nothing will be written
 Attach transforms with `--post`. Order matters. Two forms:
 
 ```
-# Plain id
 --post cert-graft
-
-# With args (comma-separated key=value after the colon)
 --post cert-graft:donor=/path/to/signed.exe
 --post byte-patch:patches=4831d2:4833d2,mode=all
 --post pe-version-info:from_donor=/path/to/signed.exe
@@ -176,8 +157,8 @@ format_url:
   url-passthrough (built-in) - Embeds the operator URL verbatim
 post_build:
   pe-version-info (built-in) - Patch VS_VERSION_INFO StringFileInfo entries in a PE
-  byte-patch (built-in) - Apply in-place hex byte substitutions to the implant
-  cert-graft (built-in) - Graft a donor PE's WIN_CERTIFICATE onto the implant
+  byte-patch (built-in) - Apply in-place hex byte substitutions to the implant (equal-length pairs only)
+  cert-graft (built-in) - Graft a donor PE's WIN_CERTIFICATE onto the implant (cert blob only; use external `trustmebro` for full clone)
 ```
 
 Show args for a specific module:
@@ -186,7 +167,7 @@ Show args for a specific module:
 $ pumpbin-cli module list --options --id byte-patch
 
 post_build:
-  byte-patch (built-in) - Apply in-place hex byte substitutions to the implant
+  byte-patch (built-in) - Apply in-place hex byte substitutions to the implant (equal-length pairs only)
     patches: string (required)
         Comma-separated <hex_from>:<hex_to> pairs; each pair must be equal length
     mode: string [default: all]
@@ -224,7 +205,7 @@ $ pumpbin-cli inspect myloader/myloader.b1n --brief
 myloader                 linux/exe                        0 modules
 ```
 
-If markers are missing, print a language guide:
+Print a language guide for embedding markers:
 
 ```
 $ pumpbin-cli inspect loader.exe --help-markers
@@ -243,15 +224,14 @@ Exits non-zero with matching rule names on a hit.
 
 ## list-donors
 
-Find PEs with embedded Authenticode signatures for use with `cert-graft`:
+Find PEs with embedded Authenticode signatures for `cert-graft`:
 
 ```
-$ pumpbin-cli list-donors /Windows/System32/
+$ pumpbin-cli list-donors /Windows/System32/ --embedded-only
 
   embedded (1929416 B at 0x0D04B000)  /Windows/System32/MRT.exe
-  catalog-only  /Windows/System32/cmd.exe
 
-1 embedded, 42 catalog-only, 0 errored
+1 embedded, 0 catalog-only, 0 errored (43 files scanned)
 ```
 
 ## Installation
