@@ -142,7 +142,7 @@ impl B1nBuilder {
         }
 
         if let Some(module_id) = primary_module {
-            plugin.plugins.modules_mut().push(module_id);
+            *plugin.plugins.encrypt_shellcode_mut() = Some(module_id);
         }
         for id in post_modules {
             plugin.plugins.modules_mut().push(id);
