@@ -19,7 +19,7 @@ PumpBin is an implant build pipeline for red teams. You write a shellcode loader
 
 ## Description
 
-Researchers write the loader. Operators run `generate`. The `.b1n` plugin pack bundles everything between them: the loader binary, the placeholder markers, and an optional default transform chain (signature grafting, YARA-pattern patching, version-info cloning).
+Researchers write the loader. Operators run `generate`. The `.b1n` plugin pack bundles everything between them: the loader binary, the placeholder markers, and an optional default transform chain.
 
 PumpBin is not a C2 and not a shellcode generator. It fits between them. Use any shellcode source (msfvenom, Donut, custom) and any C2.
 
@@ -29,15 +29,15 @@ PumpBin is not a C2 and not a shellcode generator. It fits between them. Use any
 - Auto-detects platform and binary type from the `.b1n`
 - Composable post-build module chain per generation
 - Built-in AES-256-GCM and XOR encryption modules
-- Certificate blob grafting for defeating unsigned-file checks
-- In-place hex byte-patch module for breaking YARA signatures without changing behavior
-- VS_VERSION_INFO patching with full donor PE cloning (`from_donor=`)
+- WIN_CERTIFICATE blob grafting onto the implant PE (defeats unsigned-binary string/YARA checks; does not pass WinVerifyTrust without a target-side SIP registry patch)
+- In-place equal-length hex byte substitutions for neutralizing YARA byte patterns
+- VS_VERSION_INFO StringFileInfo field patching; `from_donor=` clones all 8 string fields (CompanyName, FileDescription, FileVersion, InternalName, LegalCopyright, OriginalFilename, ProductName, ProductVersion) from a donor PE
 - Drop-in module support: any language, no recompile, no registration
 - Pre-flight YARA scan before deploy
 - Dry-run mode to preview output before writing
-- JSON output on every command for scripting
+- `--json` output on `inspect`, `convert`, `build`, and `list-modules` for scripting
 - Profile-driven builds via `pumpbin.toml`
-- `--randomize-markers` to eliminate static placeholder signatures across builds
+- `--randomize-markers` replaces default `$$SHELLCODE$$` / `$$99999$$` placeholder bytes with a unique-per-scaffold random pair to eliminate static template signatures
 
 ## Legal
 
@@ -80,7 +80,7 @@ pumpbin-cli new-loader myloader --platform windows --pack
 pumpbin-cli generate -p myloader -s payload.bin
 ```
 
-`-p myloader` resolves to `myloader/myloader.b1n` automatically. Output defaults to `myloader.exe`.
+`-p myloader` resolves to `myloader/myloader.b1n` automatically. Output defaults to `myloader.exe` in the current directory (extension matches the target platform and type).
 
 **Preview before writing:**
 
@@ -91,7 +91,7 @@ pumpbin-cli generate -p myloader -s payload.bin --dry-run
 **Apply post-build transforms:**
 
 ```bash
-# Graft a stolen cert and patch a YARA signature
+# Graft a stolen cert and patch a YARA byte pattern
 pumpbin-cli generate -p myloader -s payload.bin \
     --post cert-graft:donor=/path/to/signed.exe \
     --post byte-patch:patches=4831d2:4833d2
@@ -108,7 +108,7 @@ pumpbin-cli generate -p myloader -s payload.bin \
 pumpbin-cli check implant.exe --yara-rules /path/to/elastic-rules/
 ```
 
-**Find embeddable donor PEs for cert grafting:**
+**Find donor PEs with embedded signatures for cert grafting:**
 
 ```bash
 pumpbin-cli list-donors /Windows/System32/
@@ -124,13 +124,13 @@ pumpbin-cli list-donors /Windows/System32/
 | `new-loader` | Scaffold a Rust loader crate. |
 | `pack` | Build a scaffolded crate and produce a `.b1n`. |
 | `create-b1n` | Pack any pre-built binary into a `.b1n`. |
-| `inspect` | Dump `.b1n` metadata. `--brief` for one-liner. |
-| `verify` | Authenticode, checksum, and marker check. |
+| `inspect` | Dump `.b1n` metadata. `--brief` for one-liner. `--json` for scripting. |
+| `verify` | PE format, checksum, Authenticode, and marker check. |
 | `list-modules` | Show installed modules. `--json` for scripting. |
 | `module-test` | Test a module in isolation. `--debug` dumps wire frames. |
-| `list-donors` | Find PEs with embedded Authenticode signatures. |
+| `list-donors` | Scan a directory for PEs with embedded (not catalog-only) Authenticode signatures. |
 | `check` | Pre-flight YARA scan. |
-| `convert` | Reformat shellcode (hex, C array, Python, base64). |
+| `convert` | Reformat shellcode bytes (hex, C array, C#, Python, base64). |
 | `completions` | Print shell completion script. |
 
 ## Modules
@@ -144,9 +144,9 @@ Modules are post-build transforms. Drop-in modules go in `~/.config/pumpbin/modu
 | encrypt | `aes-gcm` | AES-256-GCM, random key and nonce per build. |
 | encrypt | `xor` | Single-byte XOR, random non-zero key. |
 | format-url | `url-passthrough` | Embed URL as-is for remote-mode builds. |
-| post-build | `pe-version-info` | Patch VS_VERSION_INFO. `from_donor=<path>` clones all fields from a donor PE. |
-| post-build | `byte-patch` | In-place equal-length hex substitutions. Breaks YARA patterns without changing behavior. |
-| post-build | `cert-graft` | Graft a donor PE's WIN_CERTIFICATE blob. Defeats unsigned-file string checks. For full Authenticode and `.rsrc` clone use [trustmebro](https://github.com/KriyosArcane/TrustMeBro-Rust). |
+| post-build | `pe-version-info` | Patch VS_VERSION_INFO StringFileInfo fields. `from_donor=<path>` clones all 8 string fields from a donor PE. |
+| post-build | `byte-patch` | In-place equal-length hex substitutions. Useful for neutralizing YARA byte patterns. |
+| post-build | `cert-graft` | Graft a donor PE's WIN_CERTIFICATE blob onto the implant. Defeats unsigned-binary string checks. Does not pass WinVerifyTrust without a SIP registry patch on the target. For full Authenticode and `.rsrc` clone use [trustmebro](https://github.com/KriyosArcane/TrustMeBro-Rust). |
 
 See [MODULES.md](MODULES.md) for the full authoring spec.
 
