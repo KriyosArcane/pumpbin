@@ -17,19 +17,19 @@ use std::process::Command;
 struct Cli {
     /// Disable the JSON log file sink (stderr console layer stays on).
     /// Equivalent to `PUMPBIN_NO_LOG=1`.
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help_heading = "Output")]
     no_log: bool,
 
     /// Override log level. Accepts EnvFilter syntax, e.g. `debug` or
     /// `info,extism=warn`. Takes precedence over `PUMPBIN_LOG`.
-    #[arg(long, global = true, value_name = "FILTER")]
+    #[arg(long, global = true, value_name = "FILTER", help_heading = "Output")]
     log_level: Option<String>,
 
     /// Emit machine-readable JSON on stdout instead of human-readable
     /// text. Schema: `{"schema":"pumpbin.cli/v1","ok":bool,
     /// "data":{...} (when ok),"error":{"code":"PB-Exxxx","message":"..."}
     /// (when !ok)}`. Tracing logs still go to stderr.
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help_heading = "Output")]
     json: bool,
 
     #[command(subcommand)]
@@ -2722,6 +2722,14 @@ fn verify_authenticode(path: &Path, security_dir_size: u32) -> AuthVerifyStatus 
                     summary: "valid (osslsigncode verify succeeded)".to_string(),
                     detail: Some(first_line),
                     status: AuthCheckStatus::Valid,
+                }
+            } else if security_dir_size == 0 {
+                // osslsigncode exits non-zero for unsigned binaries.
+                // That is not a failure — it is an unsigned binary.
+                AuthVerifyStatus {
+                    summary: "unsigned (no Authenticode signature present)".to_string(),
+                    detail: None,
+                    status: AuthCheckStatus::NotApplicable,
                 }
             } else {
                 AuthVerifyStatus {
