@@ -1,91 +1,86 @@
-# PumpBin modules
+# PumpBin Modules
 
-A module is one folder with two files: a manifest and an executable. Drop it into the right directory, and PumpBin picks it up on the next run. No source-code edits. No recompile. No registration.
+A module is a directory with two files: a manifest and an executable. Drop it into the modules directory and PumpBin picks it up on the next run. No source-code changes. No recompile. No registration.
 
-This document covers everything you need to write, ship, and run a module in any language.
+## Module directory
 
----
+PumpBin scans these paths at startup:
 
-## Where modules live
+| Path | Notes |
+|------|-------|
+| `$XDG_CONFIG_HOME/pumpbin/modules/` (Linux) | Default: `~/.config/pumpbin/modules/` |
+| `~/Library/Application Support/pumpbin/modules/` (macOS) | |
+| `%APPDATA%\pumpbin\modules\` (Windows) | |
+| `$PUMPBIN_MODULES_PATH` | Colon-separated override for testing |
 
-PumpBin scans these roots in order at every invocation:
+First match wins on duplicate IDs. A drop-in cannot shadow a built-in. A bad manifest logs a warning and skips that module. All other modules continue working.
 
-| # | Path | Notes |
-|---|------|-------|
-| 1 | `<install>/modules/` | Reserved for shipped built-ins. Empty by default in v2.0. |
-| 2 | `$XDG_CONFIG_HOME/pumpbin/modules/` (Linux) | User drop-in dir. Default: `~/.config/pumpbin/modules/`. |
-|   | `~/Library/Application Support/pumpbin/modules/` (macOS) | |
-|   | `%APPDATA%\pumpbin\modules\` (Windows) | |
-| 3 | `$PUMPBIN_MODULES_PATH` | Colon-separated on Unix, semicolon-separated on Windows. Useful for testing. |
-
-First match wins on duplicate ids. A user drop-in with the same id as a built-in does not shadow it. To replace a built-in, give your module a different id.
-
-A bad manifest logs a warning to stderr and skips that module. The rest keep working.
-
----
-
-## Anatomy of a module
-
-Every module is a directory with at least two files:
+## Module structure
 
 ```
-<module-id>/
-+-- pumpbin-module.toml      # manifest
-+-- <executable-or-script>   # the runnable; named in the manifest
+my-module/
++-- pumpbin-module.toml
++-- my-module              (or my-module.py, my-module.exe, etc.)
 ```
 
 ### pumpbin-module.toml
 
 ```toml
-name = "strip-timestamps"
-description = "Zero PE TimeDateStamp fields"
-kind = "post-build"
-version = "0.1.0"
-protocol = 1
-platforms = ["linux", "windows"]
-executable = "strip-timestamps"
+name        = "my-module"
+description = "One-line description shown in list-modules"
+kind        = "post-build"
+version     = "0.1.0"
+protocol    = 1
+platforms   = ["linux", "windows", "darwin"]
+executable  = "my-module"
 
 [[args]]
-key = "deep"
-type = "bool"
-required = false
-default = "false"
-description = "Also zero export dir timestamps"
+key         = "threshold"
+type        = "string"
+required    = true
+description = "Minimum match score"
+
+[[args]]
+key         = "mode"
+type        = "string"
+required    = false
+default     = "all"
+description = "all or first"
 ```
 
-| Field | Type | Required | Notes |
-|-------|------|----------|-------|
-| `name` | string | yes | Any non-empty unique identifier. |
-| `description` | string | yes | Shown in `list-modules`. |
-| `kind` | string | yes | One of: `encrypt`, `format-encrypted`, `format-url`, `upload-remote`, `post-build`. |
-| `version` | string | no | Freeform. SemVer by convention. |
-| `protocol` | uint | no | Wire protocol version. Currently 1. |
-| `platforms` | [string] | no | Use `["any"]` for scripts. Otherwise list `linux`, `windows`, `darwin`. |
-| `executable` | string | yes | Filename of the runnable, relative to the manifest directory. |
-| `args` | [Arg] | no | Optional arg schema shown in `list-modules --options`. |
+**Manifest fields:**
 
-The executable is never run during discovery. Only the TOML is parsed.
+| Field | Required | Notes |
+|-------|----------|-------|
+| `name` | yes | Unique ID. Used in `--post` and `list-modules`. |
+| `description` | yes | One line. Shown in `list-modules`. |
+| `kind` | yes | `encrypt`, `format-encrypted`, `format-url`, `upload-remote`, or `post-build`. |
+| `version` | no | Freeform string. SemVer by convention. |
+| `protocol` | no | Defaults to 1. |
+| `platforms` | no | `["any"]` for scripts. Omit to default to `["any"]`. |
+| `executable` | yes | Filename relative to the manifest directory. |
+| `[[args]]` | no | Repeat for each argument your module accepts. |
 
----
+The executable is never run during discovery. Only the TOML is read.
 
 ## Wire protocol v1
 
-When an operator references your module, PumpBin spawns the executable and communicates over stdin/stdout using length-prefixed frames:
+PumpBin spawns the executable and communicates over stdin/stdout using length-prefixed frames:
 
 ```
-frame = [u32 little-endian length][length bytes of payload]
+frame = [u32 little-endian byte count][payload bytes]
 ```
 
-### Invocation
+**Invocation:**
 
-| Stream | Frame 0 | Frame 1 |
-|--------|---------|---------|
-| stdin  | JSON request header | raw input payload bytes |
-| stdout | JSON response header | raw output payload bytes |
-
-Stderr is free-form text. Anything written there surfaces to the operator on failure.
-
-Exit code: `0` is success. Non-zero is failure.
+```
+stdin  frame 0: JSON request header
+stdin  frame 1: raw input bytes
+stdout frame 0: JSON response header
+stdout frame 1: raw output bytes
+stderr:         free-form text (surfaced to operator on failure)
+exit code:      0 = success, non-zero = failure
+```
 
 ### Request header
 
@@ -93,12 +88,12 @@ Exit code: `0` is success. Non-zero is failure.
 {
   "protocol": 1,
   "kind": "post-build",
-  "id": "strip-timestamps",
-  "args": ["deep=true", "keep_export=false"]
+  "id": "my-module",
+  "args": ["threshold=80", "mode=first"]
 }
 ```
 
-`args` is always a flat array of `"key=value"` strings, not a dict. To consume it in Python:
+`args` is a flat array of `"key=value"` strings. Parse them by splitting on the first `=`:
 
 ```python
 def parse_args(header):
@@ -108,118 +103,101 @@ def parse_args(header):
         if sep:
             args[key] = val
     return args
-# args["deep"] == "true", args["keep_export"] == "false"
 ```
-
-Split each string on the first `=`. Values that contain `=` (e.g. base64) are preserved correctly.
 
 Treat unknown keys as errors. Treat missing required keys as errors.
 
-### Response header (success)
+### Response headers
+
+Success:
 
 ```json
 { "protocol": 1 }
 ```
 
-### Response header (failure)
+Failure:
 
 ```json
-{ "protocol": 1, "error": "donor PE not found at /tmp/chrome.exe" }
+{ "protocol": 1, "error": "donor file not found at /tmp/signed.exe" }
 ```
 
-Set `error` and exit non-zero for the clearest failure signal.
+Set `error` and exit non-zero. Both signals are checked independently.
 
-### Per-kind payload contract
+### Payload contract by kind
 
-| Kind | Input (frame 1 in) | Output (frame 1 out) | Response extras |
-|------|---------------------|----------------------|-----------------|
+| Kind | Input | Output | Extra response fields |
+|------|-------|--------|-----------------------|
+| `post-build` | implant bytes | mutated implant bytes | none |
 | `encrypt` | raw shellcode bytes | encrypted bytes | `pass: [{holder_hex, replace_by_hex}, ...]` |
-| `format-encrypted` | encrypted bytes | reshaped bytes | `pass: [...]` (may be empty) |
-| `format-url` | URL as UTF-8 | rewritten URL as UTF-8 | `string: "<rewritten URL>"` |
-| `upload-remote` | shellcode bytes | URL as UTF-8 | `string: "<upload URL>"` |
-| `post-build` | implant binary bytes | mutated implant bytes | (none) |
+| `format-encrypted` | encrypted bytes | reshaped bytes | `pass: [...]` |
+| `format-url` | URL as UTF-8 | rewritten URL as UTF-8 | `string: "<url>"` |
+| `upload-remote` | shellcode bytes | upload URL as UTF-8 | `string: "<url>"` |
 
-For `encrypt` and `format-encrypted`: the `pass` array tells PumpBin to find each `holder_hex` byte sequence in the loader template and overwrite it with `replace_by_hex`. Both are hex-encoded so they survive JSON safely.
-
----
+For `encrypt` and `format-encrypted`: the `pass` array tells PumpBin which byte sequences to overwrite in the loader template. Both `holder_hex` and `replace_by_hex` are hex-encoded strings.
 
 ## Writing a module
 
-### The contract in six steps
+### The full contract
 
 ```
-1. Read 4 bytes from stdin -> u32 LE -> N
-2. Read N bytes from stdin -> JSON request header
-3. Read 4 bytes from stdin -> u32 LE -> M
-4. Read M bytes from stdin -> raw payload
-5. Compute your transformation
-6. Write [u32 LE header length][header JSON][u32 LE output length][output] to stdout. Exit 0.
+1. Read 4 bytes  -> u32 LE -> N
+2. Read N bytes  -> JSON request header
+3. Read 4 bytes  -> u32 LE -> M
+4. Read M bytes  -> raw input payload
+5. Do your transformation
+6. Write [u32 LE][response JSON][u32 LE][output bytes] to stdout
+7. Exit 0
 ```
 
-Any language with stdin/stdout and JSON support handles this in around 30 lines.
+Any language with stdin/stdout and JSON handles this in around 30 lines.
 
-### Python (40 lines)
+### Python
 
-See [examples/modules/post-build-python/](examples/modules/post-build-python/).
+See [examples/modules/post-build-python/](examples/modules/post-build-python/) for a complete working template with `parse_args`, `read_frame`, `write_frame`, and error handling.
 
-### Rust (10 lines of your code + pumpbin-module-sdk)
+### Rust
 
 ```rust
 use pumpbin_module_sdk::{post_build, Result};
 
 fn main() -> Result<()> {
     post_build(|args, implant| {
-        // your mutation here
-        implant.push(0xAA);
+        // mutate implant bytes here
         Ok(())
     })
 }
 ```
 
-See [examples/modules/post-build-rust/](examples/modules/post-build-rust/) for the full template.
+See [examples/modules/post-build-rust/](examples/modules/post-build-rust/) for the full Cargo template.
 
-The SDK is optional. Rust authors who prefer zero dependencies can hand-roll the framing the same way the Python example does.
+The SDK is optional. Hand-roll the framing if you prefer zero dependencies.
 
-### Go, Bash, or anything else
-
-Use the six-step contract above. PumpBin does not care what language a module uses.
-
----
-
-## Module dev loop
+## Development loop
 
 ```bash
-# 1. Build your module (skip for scripts)
-cd my-module && cargo build --release
-
-# 2. Install
+# 1. Install your module
 mkdir -p ~/.config/pumpbin/modules/my-module
-cp target/release/my-module pumpbin-module.toml ~/.config/pumpbin/modules/my-module/
+cp my-module pumpbin-module.toml ~/.config/pumpbin/modules/my-module/
 
-# 3. Verify PumpBin sees it
+# 2. Verify discovery
 pumpbin-cli list-modules
-#   post_build:
-#     my-module (external: ...) - <description>
 
-# 4. See its arg schema
+# 3. Check arg schema
 pumpbin-cli list-modules --options --id my-module
 
-# 5. Test in isolation
-pumpbin-cli module-test my-module --input /tmp/sample.bin --output /tmp/out.bin
+# 4. Test in isolation
+pumpbin-cli module-test my-module --input sample.bin --output out.bin
+
+# 5. Debug the wire frames
+pumpbin-cli module-test my-module --input sample.bin --output out.bin --debug
 
 # 6. Use in the pipeline
-
-# Short form: id and args in one flag
 pumpbin-cli generate -p loader.b1n -s sc.bin --post my-module:key=value
-
-# Long form (useful for complex args)
-pumpbin-cli generate -p loader.b1n -s sc.bin \
-    --post my-module --post-arg my-module=key=value
 ```
 
-### Baking a default chain into a .b1n
+## Baking a default chain into a .b1n
 
-Add a `[[package.metadata.pumpbin.post]]` block to your loader crate's `Cargo.toml`. `pumpbin-cli pack` reads it and bakes the chain in:
+**Option A: Cargo.toml metadata block (scaffolded loaders)**
 
 ```toml
 [package.metadata.pumpbin]
@@ -228,71 +206,59 @@ platform = "windows"
 
 [[package.metadata.pumpbin.post]]
 id = "cert-graft"
-config = { donor = "/tmp/mrt.exe" }
+config = { donor = "/path/to/signed.exe" }
 
 [[package.metadata.pumpbin.post]]
 id = "pe-version-info"
-config = { from_donor = "/tmp/mrt.exe" }
+config = { from_donor = "/path/to/signed.exe" }
 ```
 
-After this, `pumpbin-cli generate -p myloader.b1n -s sc.bin` runs the chain automatically. Explicit `--post` args on `generate` append to the baked chain.
+`pumpbin-cli pack` reads this and bakes the chain into the `.b1n`. Operators run `generate` with no `--post` flags.
 
-For loaders without a scaffold, use `create-b1n --post-module` instead:
+**Option B: create-b1n flags (any loader)**
 
 ```bash
 pumpbin-cli create-b1n \
-    --template loader.exe --output loader.b1n \
-    --name myloader --platform windows --type exe \
-    --src-prefix '$$SHELLCODE$$' --size-holder '$$99999$$' \
+    --template loader.exe \
+    --output loader.b1n \
+    --name myloader \
+    --platform windows \
+    --type exe \
+    --src-prefix '$$SHELLCODE$$' \
+    --size-holder '$$99999$$' \
     --post-module cert-graft \
-    --post-module-config 0:donor=/tmp/mrt.exe
+    --post-module-config 0:donor=/path/to/signed.exe
 ```
 
----
+Explicit `--post` args on `generate` append to the baked chain. They do not replace it.
 
-## Discovering options
+## Discovering installed modules
 
 ```bash
-pumpbin-cli list-modules                       # ids and descriptions
-pumpbin-cli list-modules --options             # adds per-module arg schema
-pumpbin-cli list-modules --options --id <id>   # focus on one module
-pumpbin-cli list-modules --json                # machine-readable output
+pumpbin-cli list-modules                       # IDs and descriptions
+pumpbin-cli list-modules --options             # includes arg schema
+pumpbin-cli list-modules --options --id <id>   # single module
+pumpbin-cli list-modules --json                # machine-readable
 ```
-
-Built-ins declare their args via `Module::args() -> Vec<ArgSpec>`. External modules declare them via `[[args]]` blocks in the manifest.
-
----
 
 ## Trust model
 
-Modules run as subprocesses with the operator's full OS privileges. There is no sandbox. A malicious module reads your files, hits the network, and installs persistence the same as any program you run.
+Modules run as subprocesses with the operator's full OS privileges. There is no sandbox.
 
-PumpBin's guarantees:
+PumpBin guarantees:
 
-- Never executes a module during discovery. Only the TOML is read.
-- Never auto-installs modules from the network. You populate the drop-in directory.
-- Never silently shadows a built-in. First match wins.
+- Never executes a module during discovery.
+- Never auto-installs modules from the network.
+- Never silently shadows a built-in.
 
-Your responsibilities:
+Treat the drop-in directory the same as `~/.local/bin/`. Inspect source or binaries before installing any module you did not write.
 
-- Treat the drop-in directory like `~/.local/bin/`. Only install modules you trust.
-- Inspect the TOML and source or binary before installing.
+## Protocol versioning
 
----
+`protocol = 1` is current. PumpBin refuses to dispatch to a module declaring a higher version than it speaks.
 
-## Protocol stability
+Additive changes (new optional fields) do not increment the version. Breaking changes go to `protocol = 2`. Old modules stay working on the old dispatch path until the CHANGELOG announces removal.
 
-`protocol = 1` is the current version. PumpBin refuses to dispatch to a module declaring a higher version than it speaks.
+## Sharing modules
 
-Additive changes (new optional fields) do not bump the version. Breaking changes bump to `protocol = 2`. Old `protocol = 1` modules keep working until explicitly removed. The CHANGELOG announces removal windows in advance.
-
----
-
-## Sharing your module
-
-There is no central registry yet. The current path:
-
-1. Push your module directory to its own git repo.
-2. Add `README.md` with install steps, usage, and safety notes.
-3. Add a `LICENSE` file.
-4. Link to it from your own project documentation.
+There is no central registry. Publish your module directory as its own git repo with a `README.md` covering install steps, usage, and a safety note. Link to it from your project documentation.
