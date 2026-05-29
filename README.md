@@ -124,12 +124,6 @@ sudo apt-get install libwayland-dev libxkbcommon-dev libgtk-3-dev libssl-dev
 cargo build --release --bin pumpbin --features gui
 ```
 
-## CI
-
-Tests run on Linux, macOS, and Windows. The GUI binary builds on Linux only; the library it delegates to is tested cross-platform.
-
-v2.0 was end-to-end verified on macOS Ventura 13.7.8 under `dockur/macos` (QEMU/KVM). Scaffold, pack, stamp, and reverse-shell callback all passed. 53 lib tests and 116 integration tests pass natively on Darwin.
-
 ## License
 
 MIT. See [LICENSE](LICENSE).
