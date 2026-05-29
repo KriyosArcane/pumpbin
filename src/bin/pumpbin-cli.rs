@@ -146,11 +146,11 @@ enum Commands {
         )]
         module_config: Vec<String>,
 
-        /// Append a post-build module id to the chain. Order matters
-        /// — modules run in the order given. Repeat the flag to chain
-        /// multiple. Use `pumpbin-cli list-modules` to see the
-        /// available ids.
-        #[arg(long = "post", value_name = "ID")]
+        /// Append a post-build module to the chain. Two forms accepted:
+        ///   --post <id>              plain module id
+        ///   --post <id>:<k=v;k=v>   module id with inline args (no --post-arg needed)
+        /// Order matters — modules run in the order given. Repeat to chain multiple.
+        #[arg(long = "post", value_name = "ID[:K=V;K=V]")]
         post: Vec<String>,
 
         /// Per-module args for the post chain, formatted as
@@ -159,6 +159,12 @@ enum Commands {
         /// you need args for several modules.
         #[arg(long = "post-arg", value_name = "ID=K=V")]
         post_arg: Vec<String>,
+
+        /// Print what would be generated — plugin, target, output path,
+        /// shellcode size, module chain, resolved config — without
+        /// actually running the modules or writing a file.
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Generate multiple implants from a directory of shellcodes
@@ -313,6 +319,10 @@ enum Commands {
         /// Optional second .b1n to diff against the first.
         #[arg(long, value_hint = clap::ValueHint::FilePath)]
         diff: Option<PathBuf>,
+        /// One-line summary: name, supported slots, module count.
+        /// Useful for quick scanning without the full report.
+        #[arg(long)]
+        brief: bool,
     },
 
     /// Convert a raw shellcode file to a different representation
@@ -456,6 +466,13 @@ enum Commands {
         /// avoidance for a VirtualProtect transition event.
         #[arg(long)]
         no_rwx: bool,
+
+        /// After scaffolding, immediately run `cargo build --release` and
+        /// pack the resulting binary into a `.b1n`. Equivalent to running
+        /// `pumpbin-cli pack <dest>` right after, but in one command.
+        /// If the build or pack fails, the scaffold is still kept on disk.
+        #[arg(long)]
+        pack: bool,
     },
 
     /// Pre-flight YARA scan of a generated artifact. Shells out to the
@@ -544,6 +561,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
             binary_type,
             output,
             module_config,
+            dry_run,
             post,
             post_arg,
         } => {
@@ -552,16 +570,26 @@ fn dispatch(cli: &Cli) -> Result<()> {
             let explicit_platform = platform.as_deref().map(parse_platform).transpose()?;
             let explicit_binary_type = binary_type.as_deref().map(parse_binary_type).transpose()?;
 
-            tracing::info!(plugin = ?plugin, "Loading plugin");
-            let plugin_buf = std::fs::read(plugin)?;
-            let mut plugin_obj = Plugin::decode_from_slice(&plugin_buf)?;
+            // If -p points at a directory, resolve to <dir>/<name>.b1n using
+            // the [package.metadata.pumpbin] block in that crate's Cargo.toml.
+            let plugin_path: PathBuf = if plugin.is_dir() {
+                let (_, md) = pumpbin::pack::read_loader_metadata(plugin)?;
+                let b1n = plugin.join(format!("{}.b1n", md.name));
+                if !b1n.exists() {
+                    bail!(
+                        "no .b1n at {}; run `pumpbin-cli pack {}` first",
+                        b1n.display(),
+                        plugin.display()
+                    );
+                }
+                b1n
+            } else {
+                plugin.clone()
+            };
 
-            // Append CLI-supplied post-build modules to the .b1n's chain
-            // in operator-given order. The .b1n's own modules run first,
-            // then CLI additions.
-            for id in post {
-                plugin_obj.plugins.modules_mut().push(id.clone());
-            }
+            tracing::info!(plugin = ?plugin_path, "Loading plugin");
+            let plugin_buf = std::fs::read(&plugin_path)?;
+            let mut plugin_obj = Plugin::decode_from_slice(&plugin_buf)?;
 
             // Resolve target via auto-detect when --platform / --type
             // are omitted. Single-slot .b1n => no flags ever needed.
@@ -589,6 +617,20 @@ fn dispatch(cli: &Cli) -> Result<()> {
             plugin_obj.validate_shellcode_source(shellcode)?;
             let final_shellcode_src = shellcode.clone();
             let mut runtime_config = parse_module_config(module_config)?;
+
+            // Append CLI-supplied post-build modules to the .b1n's chain.
+            // Two forms are accepted:
+            //   --post <id>               plain id (backwards-compat)
+            //   --post <id>:<k=v;k=v>    combined id + args (new short form)
+            for entry in post {
+                if let Some((id, args)) = entry.split_once(':') {
+                    plugin_obj.plugins.modules_mut().push(id.to_string());
+                    runtime_config.insert(format!("post:{id}"), args.to_string());
+                } else {
+                    plugin_obj.plugins.modules_mut().push(entry.clone());
+                }
+            }
+
             for entry in post_arg {
                 let (id, rest) = entry.split_once('=').ok_or_else(|| {
                     anyhow!("--post-arg expects <id>=<k=v[;k=v...]>; got: {entry}")
@@ -599,6 +641,57 @@ fn dispatch(cli: &Cli) -> Result<()> {
             let runtime_config =
                 normalize_runtime_config_for_schema(runtime_config, &schema_fields)?;
 
+            // Resolve output path before dry-run so we can show it in the preview.
+            let output_path = if let Some(out) = output {
+                out.clone()
+            } else {
+                let ext = ext_for_output(parsed_platform, parsed_binary_type);
+                let base = plugin_obj
+                    .info()
+                    .plugin_name()
+                    .to_lowercase()
+                    .replace(' ', "_");
+                let candidate = PathBuf::from(format!("{base}.{ext}"));
+                // Only add a timestamp if the clean name is already taken,
+                // so interactive use gets a predictable filename.
+                if candidate.exists() {
+                    let ts = Local::now().format("%Y%m%d_%H%M%S").to_string();
+                    PathBuf::from(format!("{base}_{ts}.{ext}"))
+                } else {
+                    candidate
+                }
+            };
+
+            if *dry_run {
+                println!("DRY RUN — nothing will be written\n");
+                println!(
+                    "  Plugin:       {} (v{})",
+                    plugin_obj.info().plugin_name(),
+                    plugin_obj.info().version()
+                );
+                println!(
+                    "  Target:       {} / {}",
+                    parsed_platform, parsed_binary_type
+                );
+                println!("  Output:       {}", output_path.display());
+                let sc_size = std::fs::metadata(shellcode).map(|m| m.len()).ok();
+                if let Some(sz) = sc_size {
+                    println!("  Shellcode:    {shellcode} ({sz} B)");
+                } else {
+                    println!("  Shellcode:    {shellcode}");
+                }
+                let chain = plugin_obj.plugins.modules();
+                if chain.is_empty() {
+                    println!("  Module chain: (none)");
+                } else {
+                    println!("  Module chain: {}", chain.join(" → "));
+                }
+                for (k, v) in &runtime_config {
+                    println!("  Config:       {k} = {v}");
+                }
+                return Ok(());
+            }
+
             tracing::info!("Injecting shellcode");
             let bin = plugin_obj.replace_binary(
                 bin,
@@ -606,28 +699,6 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 vec![],
                 Some(&runtime_config),
             )?;
-
-            let output_path = if let Some(out) = output {
-                out.clone()
-            } else {
-                let now = Local::now();
-                let timestamp = now.format("%Y%m%d_%H%M%S").to_string();
-                let plugin_name_sanitized = plugin_obj
-                    .info()
-                    .plugin_name()
-                    .to_lowercase()
-                    .replace(' ', "_");
-                let platform_str = parsed_platform.to_string().to_lowercase();
-                let bin_type_str = match parsed_binary_type {
-                    BinaryType::Executable => "exe",
-                    BinaryType::DynamicLibrary => "dll",
-                };
-                let ext = ext_for_output(parsed_platform, parsed_binary_type);
-                PathBuf::from(format!(
-                    "{}_{}_{}_{}.{}",
-                    plugin_name_sanitized, platform_str, bin_type_str, timestamp, ext
-                ))
-            };
 
             tracing::info!(output = ?output_path, "Saving generated binary");
             pumpbin::utils::atomic_write(&output_path, &bin)?;
@@ -648,8 +719,23 @@ fn dispatch(cli: &Cli) -> Result<()> {
             let explicit_platform = platform.as_deref().map(parse_platform).transpose()?;
             let explicit_binary_type = binary_type.as_deref().map(parse_binary_type).transpose()?;
 
-            tracing::info!(plugin = ?plugin, "Loading plugin");
-            let plugin_buf = std::fs::read(plugin)?;
+            let plugin_path: PathBuf = if plugin.is_dir() {
+                let (_, md) = pumpbin::pack::read_loader_metadata(plugin)?;
+                let b1n = plugin.join(format!("{}.b1n", md.name));
+                if !b1n.exists() {
+                    bail!(
+                        "no .b1n at {}; run `pumpbin-cli pack {}` first",
+                        b1n.display(),
+                        plugin.display()
+                    );
+                }
+                b1n
+            } else {
+                plugin.clone()
+            };
+
+            tracing::info!(plugin = ?plugin_path, "Loading plugin");
+            let plugin_buf = std::fs::read(&plugin_path)?;
             let plugin_obj = Plugin::decode_from_slice(&plugin_buf)?;
             let runtime_config = parse_module_config(module_config)?;
             let schema_fields = plugin_schema_fields(&plugin_obj);
@@ -889,8 +975,34 @@ fn dispatch(cli: &Cli) -> Result<()> {
             skip_build,
         } => pack_crate(crate_dir, profile, output.as_deref(), *skip_build),
         Commands::Verify { binary } => verify_binary(binary),
-        Commands::Inspect { binary, diff } => {
+        Commands::Inspect {
+            binary,
+            diff,
+            brief,
+        } => {
             let left = pumpbin::inspect::inspect(binary)?;
+            if *brief {
+                // One-liner: name, populated slots, module count.
+                let slots: Vec<String> = left
+                    .platforms
+                    .iter()
+                    .flat_map(|p| {
+                        p.binary_types
+                            .iter()
+                            .map(|b| format!("{}/{}", p.name.to_lowercase(), b))
+                    })
+                    .collect();
+                let mods = left.modules.len();
+                let module_word = if mods == 1 { "module" } else { "modules" };
+                println!(
+                    "{:<24} {:<32} {} {}",
+                    left.plugin_name,
+                    slots.join(", "),
+                    mods,
+                    module_word
+                );
+                return Ok(());
+            }
             if cli.json {
                 if let Some(other_path) = diff {
                     let right = pumpbin::inspect::inspect(other_path)?;
@@ -979,7 +1091,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
             }
             Ok(())
         }
-        Commands::ListModules { options, id } => list_modules(*options, id.as_deref()),
+        Commands::ListModules { options, id } => list_modules(*options, id.as_deref(), cli.json),
         Commands::ModuleTest {
             id,
             input,
@@ -1109,6 +1221,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
             binary_size_holder,
             pre_load_libs,
             no_rwx,
+            pack,
         } => {
             let dest = dest.as_path();
             let crate_name = name.clone().unwrap_or_else(|| {
@@ -1140,10 +1253,23 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 binary_size = binary_size_holder,
                 "Scaffolded loader crate",
             );
-            println!(
-                "Scaffolded loader crate at {0}.\n  pumpbin-cli pack {0}    # build + assemble .b1n in one step",
-                dest.display(),
-            );
+            if *pack {
+                if let Err(e) = pack_crate(dest, "release", None, false) {
+                    eprintln!("warning: scaffold succeeded but pack failed: {e}");
+                    eprintln!("  retry with: pumpbin-cli pack {}", dest.display());
+                } else {
+                    println!(
+                        "Scaffolded and packed: {0}/{1}.b1n",
+                        dest.display(),
+                        crate_name
+                    );
+                }
+            } else {
+                println!(
+                    "Scaffolded loader crate at {0}.\n  pumpbin-cli pack {0}    # build + assemble .b1n in one step",
+                    dest.display(),
+                );
+            }
             Ok(())
         }
         Commands::Check {
@@ -1174,14 +1300,17 @@ fn dispatch(cli: &Cli) -> Result<()> {
 /// One row of `list-modules` output. Owned so we can build it
 /// uniformly for built-ins (static-string traits) and externals
 /// (owned manifest fields).
+#[derive(serde::Serialize)]
 struct ModuleRow {
     id: String,
     source: String,
     description: String,
+    kind: String,
     /// `(key, type, required, default, description)` for every arg.
     args: Vec<ArgRow>,
 }
 
+#[derive(serde::Serialize)]
 struct ArgRow {
     key: String,
     arg_type: String,
@@ -1190,7 +1319,7 @@ struct ArgRow {
     description: String,
 }
 
-fn list_modules(show_options: bool, only_id: Option<&str>) -> Result<()> {
+fn list_modules(show_options: bool, only_id: Option<&str>, json: bool) -> Result<()> {
     use pumpbin::modules::external::{registry, wire::WireKind};
     use pumpbin::modules::{
         encrypt_modules, format_encrypted_modules, format_url_modules, post_build_modules,
@@ -1199,7 +1328,7 @@ fn list_modules(show_options: bool, only_id: Option<&str>) -> Result<()> {
 
     let ext = registry();
 
-    let print_section = |title: &str, rows: Vec<ModuleRow>| {
+    let print_section = |title: &str, rows: &[ModuleRow]| {
         let filtered: Vec<&ModuleRow> = rows
             .iter()
             .filter(|r| only_id.is_none_or(|want| r.id == want))
@@ -1245,11 +1374,12 @@ fn list_modules(show_options: bool, only_id: Option<&str>) -> Result<()> {
             id: m.id().to_string(),
             source: "built-in".to_string(),
             description: m.description().to_string(),
+            kind: "encrypt".to_string(),
             args: m.args().into_iter().map(arg_from_spec).collect(),
         })
         .collect();
     for m in ext.all().filter(|m| m.kind() == WireKind::Encrypt) {
-        encrypt_rows.push(external_row(m));
+        encrypt_rows.push(external_row(m, "encrypt"));
     }
     if let Some(want) = only_id {
         if encrypt_rows.iter().any(|r| r.id == want) {
@@ -1258,7 +1388,9 @@ fn list_modules(show_options: bool, only_id: Option<&str>) -> Result<()> {
     } else if !encrypt_rows.is_empty() {
         found_any = true;
     }
-    print_section("encrypt", encrypt_rows);
+    if !json {
+        print_section("encrypt", &encrypt_rows);
+    }
 
     let mut fe_rows: Vec<ModuleRow> = format_encrypted_modules()
         .iter()
@@ -1266,18 +1398,21 @@ fn list_modules(show_options: bool, only_id: Option<&str>) -> Result<()> {
             id: m.id().to_string(),
             source: "built-in".to_string(),
             description: m.description().to_string(),
+            kind: "format-encrypted".to_string(),
             args: m.args().into_iter().map(arg_from_spec).collect(),
         })
         .collect();
     for m in ext.all().filter(|m| m.kind() == WireKind::FormatEncrypted) {
-        fe_rows.push(external_row(m));
+        fe_rows.push(external_row(m, "format-encrypted"));
     }
     if let Some(want) = only_id {
         if fe_rows.iter().any(|r| r.id == want) {
             found_any = true;
         }
     }
-    print_section("format_encrypted", fe_rows);
+    if !json {
+        print_section("format_encrypted", &fe_rows);
+    }
 
     let mut url_rows: Vec<ModuleRow> = format_url_modules()
         .iter()
@@ -1285,18 +1420,21 @@ fn list_modules(show_options: bool, only_id: Option<&str>) -> Result<()> {
             id: m.id().to_string(),
             source: "built-in".to_string(),
             description: m.description().to_string(),
+            kind: "format-url".to_string(),
             args: m.args().into_iter().map(arg_from_spec).collect(),
         })
         .collect();
     for m in ext.all().filter(|m| m.kind() == WireKind::FormatUrl) {
-        url_rows.push(external_row(m));
+        url_rows.push(external_row(m, "format-url"));
     }
     if let Some(want) = only_id {
         if url_rows.iter().any(|r| r.id == want) {
             found_any = true;
         }
     }
-    print_section("format_url", url_rows);
+    if !json {
+        print_section("format_url", &url_rows);
+    }
 
     let mut ur_rows: Vec<ModuleRow> = upload_remote_modules()
         .iter()
@@ -1304,18 +1442,21 @@ fn list_modules(show_options: bool, only_id: Option<&str>) -> Result<()> {
             id: m.id().to_string(),
             source: "built-in".to_string(),
             description: m.description().to_string(),
+            kind: "upload-remote".to_string(),
             args: m.args().into_iter().map(arg_from_spec).collect(),
         })
         .collect();
     for m in ext.all().filter(|m| m.kind() == WireKind::UploadRemote) {
-        ur_rows.push(external_row(m));
+        ur_rows.push(external_row(m, "upload-remote"));
     }
     if let Some(want) = only_id {
         if ur_rows.iter().any(|r| r.id == want) {
             found_any = true;
         }
     }
-    print_section("upload_remote", ur_rows);
+    if !json {
+        print_section("upload_remote", &ur_rows);
+    }
 
     let mut pb_rows: Vec<ModuleRow> = post_build_modules()
         .iter()
@@ -1323,18 +1464,39 @@ fn list_modules(show_options: bool, only_id: Option<&str>) -> Result<()> {
             id: m.id().to_string(),
             source: "built-in".to_string(),
             description: m.description().to_string(),
+            kind: "post-build".to_string(),
             args: m.args().into_iter().map(arg_from_spec).collect(),
         })
         .collect();
     for m in ext.all().filter(|m| m.kind() == WireKind::PostBuild) {
-        pb_rows.push(external_row(m));
+        pb_rows.push(external_row(m, "post-build"));
     }
     if let Some(want) = only_id {
         if pb_rows.iter().any(|r| r.id == want) {
             found_any = true;
         }
     }
-    print_section("post_build", pb_rows);
+    if json {
+        // Collect all rows into a single flat JSON array before any
+        // print_section call takes ownership of the Vecs.
+        let all_rows: Vec<&ModuleRow> = encrypt_rows
+            .iter()
+            .chain(fe_rows.iter())
+            .chain(url_rows.iter())
+            .chain(ur_rows.iter())
+            .chain(pb_rows.iter())
+            .filter(|r| only_id.is_none_or(|want| r.id == want))
+            .collect();
+        emit_json_ok(all_rows);
+        for w in ext.warnings() {
+            eprintln!("warning: {w}");
+        }
+        return Ok(());
+    }
+
+    if !json {
+        print_section("post_build", &pb_rows);
+    }
 
     if let Some(want) = only_id {
         if !found_any {
@@ -1360,11 +1522,12 @@ fn arg_from_spec(s: pumpbin::modules::ArgSpec) -> ArgRow {
     }
 }
 
-fn external_row(m: &pumpbin::modules::external::ExternalModule) -> ModuleRow {
+fn external_row(m: &pumpbin::modules::external::ExternalModule, kind: &str) -> ModuleRow {
     ModuleRow {
         id: m.id().to_string(),
         source: format!("external: {}", m.manifest_path.display()),
         description: m.description().to_string(),
+        kind: kind.to_string(),
         args: m
             .manifest
             .args
