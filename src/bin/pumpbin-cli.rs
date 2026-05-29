@@ -698,7 +698,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
             };
 
             if *dry_run {
-                println!("DRY RUN — nothing will be written\n");
+                println!("DRY RUN: nothing will be written\n");
                 println!(
                     "  Plugin:       {} (v{})",
                     plugin_obj.info().plugin_name(),
@@ -1800,7 +1800,7 @@ fn yara_check(
     let matches: Vec<&str> = stdout.lines().filter(|l| !l.trim().is_empty()).collect();
     if matches.is_empty() {
         println!(
-            "clean — no YARA matches in {} against {}",
+            "clean: no YARA matches in {} against {}",
             artifact.display(),
             rules.display()
         );
@@ -2009,9 +2009,9 @@ fn inspect_loader_binary(path: &Path, bytes: &[u8], json: bool) {
     }
     println!();
     if suitable {
-        println!("verdict:   SUITABLE — ready for pumpbin-cli stamp");
+        println!("verdict:   SUITABLE: ready for pumpbin-cli stamp");
     } else {
-        println!("verdict:   NOT SUITABLE — add markers before stamping");
+        println!("verdict:   NOT SUITABLE: add markers before stamping");
         println!("           pumpbin-cli inspect --help-markers");
     }
 }
@@ -2027,14 +2027,14 @@ byte sequence (the marker). Two markers must be present:
 
   SHELLCODE MARKER   $$SHELLCODE$$  (13 bytes)
     Marks the start of the shellcode region.
-    Follow it immediately with N bytes of constant padding — the loader
+    Follow it immediately with N bytes of constant padding. The loader
     will execute the shellcode placed here by pumpbin-cli stamp.
 
   SIZE HOLDER        $$99999$$      (9 bytes)
     Replaced at stamp time with the shellcode length as a decimal string.
     Your loader reads this at runtime to get the byte count.
 
-RUST (recommended — pumpbin-cli new-loader handles this automatically)
+RUST (recommended: pumpbin-cli new-loader handles this automatically)
 
   In build.rs:
     let mut buf = b"$$SHELLCODE$$".to_vec();
@@ -2135,7 +2135,7 @@ fn pack_crate(
     );
     let template_bytes = std::fs::read(&template_path).with_context(|| {
         format!(
-            "no built artifact at {} — did `cargo build --{}` succeed?",
+            "no built artifact at {} -- did `cargo build --{}` succeed?",
             template_path.display(),
             profile
         )

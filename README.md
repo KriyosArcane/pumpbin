@@ -15,48 +15,36 @@
   <img src="logo/pumpbin-256x256.png" height="30%" width="30%">
 </p>
 
-PumpBin is an implant build pipeline for red teams. You write a shellcode loader, package it as a `.b1n`, and stamp shellcode into it. Post-build transforms run at the same time: signature grafting, YARA-pattern patching, version-info cloning. One command from shellcode to finished implant.
+PumpBin is an implant generation platform for red teams. Write a shellcode loader, package it as a `.b1n`, stamp shellcode into it, and apply post-build transforms in one command.
 
-It is not a C2. It is not a shellcode generator. It sits between them.
+Not a C2. Not a shellcode generator. Sits between them.
 
 ## Quick start
 
-### Starting point A: you have a compiled loader binary
+You have a compiled loader binary with PumpBin markers. One command to an implant:
 
 ```
 $ pumpbin-cli stamp loader.exe payload.bin
+[*] Detecting platform from loader.exe (MZ -> windows)
+[*] Assembling .b1n from loader.exe
+[*] Injecting shellcode
+[+] wrote stamp.exe
 ```
 
-Platform is auto-detected from the binary magic bytes. Output defaults to `stamp.exe` in the current directory.
-
-With transforms and explicit output:
-
-```
-$ pumpbin-cli stamp loader.exe payload.bin \
-    --post cert-graft:donor=/path/to/signed.exe \
-    --post byte-patch:patches=4831d2:4833d2 \
-    --output implant.exe
-```
-
-### Starting point B: you are writing the loader
+You are writing the loader from scratch:
 
 ```
 $ pumpbin-cli new-loader myloader --platform windows --pack
+[*] Scaffolded loader crate at myloader
+[*] cargo build (profile: release)
+[*] Packed .b1n -> myloader/myloader.b1n
+[+] Scaffolded and packed: myloader/myloader.b1n
+
 $ pumpbin-cli generate -p myloader -s payload.bin
-```
-
-Preview what will happen before writing:
-
-```
-$ pumpbin-cli generate -p myloader -s payload.bin --dry-run
-
-DRY RUN — nothing will be written
-
-  Plugin:       myloader (v0.1.0)
-  Target:       Windows / Exe
-  Output:       myloader.exe
-  Shellcode:    payload.bin (460 B)
-  Module chain: (none)
+[*] Loading plugin myloader/myloader.b1n
+[*] Auto-detected target: Windows / Exe
+[*] Injecting shellcode
+[+] Generation complete -> myloader.exe
 ```
 
 ## Commands
@@ -64,22 +52,20 @@ DRY RUN — nothing will be written
 ```
 $ pumpbin-cli --help
 
-Implant build pipeline — stamp shellcode into a loader, apply post-build transforms, get an implant.
-
 Usage: pumpbin-cli [OPTIONS] <COMMAND>
 
 Commands:
-  generate     Generate an implant from a plugin and shellcode
-  batch        Generate multiple implants from a directory of shellcodes
-  stamp        Pack a pre-built loader binary and immediately stamp shellcode into it
-  pack         Build a scaffolded loader crate and produce a .b1n
-  new-loader   Scaffold a new PumpBin-ready loader crate
-  create-b1n   Create a .b1n from a pre-built binary (low-level)
+  stamp        Pack a loader binary and stamp shellcode in one step
+  generate     Stamp shellcode into an existing .b1n
+  batch        Stamp shellcode from a directory of .bin files
+  new-loader   Scaffold a new Rust loader crate
+  pack         Build a loader crate and produce a .b1n
+  create-b1n   Pack a pre-built binary into a .b1n
   inspect      Inspect a .b1n or check a loader binary for markers
-  build        Build from a pumpbin.toml profile file
+  build        Build from a pumpbin.toml profile
   module       List and test modules
   check        Pre-flight YARA scan
-  convert      Reformat shellcode (hex, C array, Python, base64, ...)
+  convert      Reformat shellcode bytes
   list-donors  Find PEs with embedded Authenticode signatures
   completions  Print shell completion script
 ```
@@ -93,51 +79,92 @@ Usage: pumpbin-cli stamp [OPTIONS] <LOADER> <SHELLCODE>
 
 Arguments:
   <LOADER>     Compiled loader binary (PE, ELF, or Mach-O)
-  <SHELLCODE>  Raw shellcode file (.bin) to stamp into the loader
+  <SHELLCODE>  Raw shellcode file (.bin)
 
 Options:
-  -o, --output <OUTPUT>       Output path for the generated implant
-      --post <ID[:K=V,K=V]>  Post-build module. Repeat to chain multiple.
-      --save-b1n <PATH>       Also write the intermediate .b1n for later reuse
+  -o, --output <OUTPUT>       Output path  [default: stamp.<ext>]
+      --post <ID[:K=V,K=V]>  Post-build module, repeat to chain
+      --save-b1n <PATH>       Save the intermediate .b1n for later reuse
 
 Advanced:
-      --platform <PLATFORM>  Override auto-detected platform (windows, linux, darwin)
+      --platform <PLATFORM>  Override auto-detected platform
   -t, --type <TYPE>          Binary type (exe, lib)  [default: exe]
-      --marker <MARKER>      Shellcode placeholder marker  [default: $$SHELLCODE$$]
+      --marker <MARKER>      Shellcode placeholder  [default: $$SHELLCODE$$]
+```
+
+Apply transforms at stamp time:
+
+```
+$ pumpbin-cli stamp loader.exe payload.bin \
+    --post cert-graft:donor=/path/to/signed.exe \
+    --post byte-patch:patches=4831d2:4833d2 \
+    --output implant.exe
+[*] Detecting platform from loader.exe (MZ -> windows)
+[*] Assembling .b1n from loader.exe
+[*] Injecting shellcode
+[+] wrote implant.exe
+```
+
+Save the `.b1n` for future reuse:
+
+```
+$ pumpbin-cli stamp loader.exe payload.bin --save-b1n loader.b1n
+[*] Detecting platform from loader.exe (MZ -> windows)
+[*] Assembling .b1n from loader.exe
+[*] stamp: saved .b1n -> loader.b1n
+[*] Injecting shellcode
+[+] wrote stamp.exe
 ```
 
 ## generate
 
 ```
-$ pumpbin-cli generate --help
+$ pumpbin-cli generate -h
 
 Usage: pumpbin-cli generate [OPTIONS] --plugin <PLUGIN> --shellcode <SHELLCODE>
 
 Options:
   -p, --plugin <PLUGIN>        .b1n plugin pack or crate directory
   -s, --shellcode <SHELLCODE>  Shellcode file (.bin) or remote URL
-  -o, --output <OUTPUT>        Output file path
-      --post <ID[:K=V,K=V]>   Post-build module. Repeat to chain multiple.
+  -o, --output <OUTPUT>        Output path  [default: <name>.<ext>]
+      --post <ID[:K=V,K=V]>   Post-build module, repeat to chain
       --dry-run                Preview without writing
 
 Advanced:
-      --platform <PLATFORM>       Target platform (auto-detected from .b1n)
-  -t, --type <TYPE>               Binary type (auto-detected from .b1n)
-      --module-config <KEY=VALUE> Override module config
+      --platform <PLATFORM>        Target platform (auto-detected from .b1n)
+  -t, --type <TYPE>                Binary type (auto-detected from .b1n)
+      --module-config <KEY=VALUE>  Override module config
+```
+
+Preview before generating:
+
+```
+$ pumpbin-cli generate -p myloader -s payload.bin --dry-run
+
+DRY RUN: nothing will be written
+
+  Plugin:       myloader (v0.1.0)
+  Target:       Windows / Exe
+  Output:       myloader.exe
+  Shellcode:    payload.bin (460 B)
+  Module chain: (none)
 ```
 
 ## Post-build modules
 
-Modules run after stamping. Two forms:
+Attach transforms with `--post`. Order matters. Two forms:
 
 ```
 # Plain id
 --post cert-graft
 
-# With args (comma-separated key=value)
---post cert-graft:donor=/path/to/signed.exe,mode=fast
+# With args (comma-separated key=value after the colon)
+--post cert-graft:donor=/path/to/signed.exe
 --post byte-patch:patches=4831d2:4833d2,mode=all
+--post pe-version-info:from_donor=/path/to/signed.exe
 ```
+
+List installed modules:
 
 ```
 $ pumpbin-cli module list
@@ -150,8 +177,10 @@ format_url:
 post_build:
   pe-version-info (built-in) - Patch VS_VERSION_INFO StringFileInfo entries in a PE
   byte-patch (built-in) - Apply in-place hex byte substitutions to the implant
-  cert-graft (built-in) - Graft a donor PE's WIN_CERTIFICATE blob onto the implant
+  cert-graft (built-in) - Graft a donor PE's WIN_CERTIFICATE onto the implant
 ```
+
+Show args for a specific module:
 
 ```
 $ pumpbin-cli module list --options --id byte-patch
@@ -168,7 +197,9 @@ Drop-in modules go in `~/.config/pumpbin/modules/<id>/`. A TOML manifest and an 
 
 ## inspect
 
-Works on both `.b1n` files and compiled loader binaries:
+Works on `.b1n` files and compiled loader binaries.
+
+Check a loader for markers before stamping:
 
 ```
 $ pumpbin-cli inspect myloader/target/release/myloader
@@ -182,16 +213,18 @@ markers:
 
 capacity:  4096 bytes (4 KiB)
 
-verdict:   SUITABLE — ready for pumpbin-cli stamp
+verdict:   SUITABLE: ready for pumpbin-cli stamp
 ```
+
+One-line summary of a `.b1n`:
 
 ```
 $ pumpbin-cli inspect myloader/myloader.b1n --brief
 
-myloader   linux/exe   0 modules
+myloader                 linux/exe                        0 modules
 ```
 
-If markers are missing, use `--help-markers` for a language guide:
+If markers are missing, print a language guide:
 
 ```
 $ pumpbin-cli inspect loader.exe --help-markers
@@ -203,18 +236,20 @@ Pre-flight YARA scan before deploying:
 
 ```
 $ pumpbin-cli check implant.exe --yara-rules /path/to/elastic-rules/
+clean: no YARA matches in implant.exe against /path/to/elastic-rules/
 ```
 
-Exits 0 if clean, non-zero with matching rule names on a hit.
+Exits non-zero with matching rule names on a hit.
 
-## Find signature donors
+## list-donors
+
+Find PEs with embedded Authenticode signatures for use with `cert-graft`:
 
 ```
 $ pumpbin-cli list-donors /Windows/System32/
 
   embedded (1929416 B at 0x0D04B000)  /Windows/System32/MRT.exe
   catalog-only  /Windows/System32/cmd.exe
-  ...
 
 1 embedded, 42 catalog-only, 0 errored
 ```
@@ -227,7 +262,7 @@ cd pumpbin
 cargo build --release --bin pumpbin-cli
 ```
 
-GUI (Linux, requires Iced/wgpu deps):
+GUI build (Linux):
 
 ```
 sudo apt-get install libwayland-dev libxkbcommon-dev libgtk-3-dev libssl-dev
