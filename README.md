@@ -22,34 +22,39 @@ generator — fits between them.
 ## Quick start
 
 ```bash
-# 1. Scaffold a Windows loader (a buildable Rust crate)
-pumpbin-cli new-loader myloader --platform windows
+# 1. Scaffold a Windows loader and immediately build + pack it
+pumpbin-cli new-loader myloader --platform windows --pack
 
-# 2. Build + assemble .b1n in one step
-pumpbin-cli pack myloader
+# 2. Preview what generate will do before committing
+pumpbin-cli generate -p myloader -s payload.bin --dry-run
 
-# 3. Stamp your shellcode into the loader
-pumpbin-cli generate \
-    --plugin myloader/myloader.b1n --shellcode payload.bin \
-    --platform windows --type exe --output implant.exe
+# 3. Stamp your shellcode — target auto-detected from the .b1n
+pumpbin-cli generate -p myloader -s payload.bin
 ```
 
-You now have `implant.exe`. That's the whole loop.
+`-p myloader` resolves to `myloader/myloader.b1n` automatically.
+Output defaults to `myloader.exe` in the current directory.
 
 ### Going further
 
-Run transforms over the implant at build time — sign with a stolen
-cert, patch out YARA-matched bytes, clone version info from a donor PE,
-etc. Each transform is a `--post <module> --post-arg <module>=k=v`
-pair:
+Post-build transforms — sign with a stolen cert, patch out
+YARA-matched bytes, clone version info from a donor PE — go on
+`--post`. Two forms:
 
 ```bash
-pumpbin-cli generate ... \
+# Short form: id and args in one flag
+pumpbin-cli generate -p myloader -s payload.bin \
+    --post cert-graft:donor=/path/to/signed.exe \
+    --post byte-patch:patches=4831d2:4833d2
+
+# Long form (backwards-compat)
+pumpbin-cli generate -p myloader -s payload.bin \
     --post cert-graft --post-arg cert-graft=donor=/path/to/signed.exe
 ```
 
-`pumpbin-cli list-modules` shows what's installed.
-[MODULES.md](MODULES.md) explains how to write your own.
+`pumpbin-cli list-modules` (add `--json` for machine-readable output)
+shows what's installed. [MODULES.md](MODULES.md) explains how to write
+your own.
 
 `pumpbin-cli check implant.exe --yara-rules <dir>` does a pre-flight
 local YARA scan so you don't burn a sandbox round-trip on a static hit.
@@ -57,12 +62,15 @@ local YARA scan so you don't burn a sandbox round-trip on a static hit.
 ## CLI
 
 ```
-generate / batch / build       stamp shellcode into a loader
-new-loader / pack              scaffold + build + assemble a .b1n
-create-b1n / inspect / verify  ad-hoc pack + audit .b1n plugin packs
-list-modules / module-test     list and exercise modules
-list-donors                    find PEs with embedded signatures
-check                          pre-flight YARA scan
+generate [--dry-run]           stamp shellcode; preview without writing
+batch / build                  bulk stamping; profile-driven builds
+new-loader [--pack] / pack     scaffold + build + assemble a .b1n
+create-b1n / inspect [--brief] ad-hoc pack; one-line or full report
+verify                         authenticode + checksum sanity check
+list-modules [--json]          installed modules; machine-readable output
+module-test [--debug]          exercise a module, dump wire frames
+list-donors                    find PEs with embedded Authenticode sigs
+check --yara-rules             pre-flight static scan before deploy
 convert / completions          shellcode reformat / shell completion
 ```
 
