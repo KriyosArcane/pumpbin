@@ -123,13 +123,16 @@ enum Commands {
         #[arg(short, long, value_hint = clap::ValueHint::AnyPath)]
         shellcode: String,
 
-        /// Target platform (windows, linux, darwin)
+        /// Target platform (windows, linux, darwin). Auto-detected from
+        /// the .b1n if omitted: if exactly one slot is populated it's
+        /// picked; otherwise falls back to windows preference.
         #[arg(long)]
-        platform: String,
+        platform: Option<String>,
 
-        /// Target binary type (exe, lib)
+        /// Target binary type (exe, lib). Same auto-detect behavior as
+        /// `--platform`; the two filters compose.
         #[arg(short = 't', long = "type")]
-        binary_type: String,
+        binary_type: Option<String>,
 
         /// Output file path (optional)
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
@@ -168,13 +171,15 @@ enum Commands {
         #[arg(short, long, value_hint = clap::ValueHint::DirPath)]
         directory: PathBuf,
 
-        /// Target platform (windows, linux, darwin)
+        /// Target platform (windows, linux, darwin). Auto-detected from
+        /// the .b1n if omitted.
         #[arg(long)]
-        platform: String,
+        platform: Option<String>,
 
-        /// Target binary type (exe, lib)
+        /// Target binary type (exe, lib). Auto-detected from the .b1n
+        /// if omitted.
         #[arg(short = 't', long = "type")]
-        binary_type: String,
+        binary_type: Option<String>,
 
         /// Output directory path (optional)
         #[arg(short, long, value_hint = clap::ValueHint::DirPath)]
@@ -544,8 +549,8 @@ fn dispatch(cli: &Cli) -> Result<()> {
         } => {
             tracing::info!("Starting automated CLI generation...");
 
-            let parsed_platform = parse_platform(platform)?;
-            let parsed_binary_type = parse_binary_type(binary_type)?;
+            let explicit_platform = platform.as_deref().map(parse_platform).transpose()?;
+            let explicit_binary_type = binary_type.as_deref().map(parse_binary_type).transpose()?;
 
             tracing::info!(plugin = ?plugin, "Loading plugin");
             let plugin_buf = std::fs::read(plugin)?;
@@ -558,7 +563,20 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 plugin_obj.plugins.modules_mut().push(id.clone());
             }
 
-            tracing::info!(%platform, %binary_type, "Validating plugin for target");
+            // Resolve target via auto-detect when --platform / --type
+            // are omitted. Single-slot .b1n => no flags ever needed.
+            let (parsed_platform, parsed_binary_type) = plugin_obj
+                .bins()
+                .auto_select_target(explicit_platform, explicit_binary_type)?;
+            if explicit_platform.is_none() || explicit_binary_type.is_none() {
+                tracing::info!(
+                    platform = %parsed_platform,
+                    binary_type = %parsed_binary_type,
+                    "Auto-detected target from .b1n"
+                );
+            }
+
+            tracing::info!(%parsed_platform, %parsed_binary_type, "Validating plugin for target");
             plugin_obj.validate_for_generation(parsed_platform, parsed_binary_type)?;
 
             let bin = plugin_obj
@@ -627,8 +645,8 @@ fn dispatch(cli: &Cli) -> Result<()> {
         } => {
             tracing::info!("Starting automated Batch generation");
 
-            let parsed_platform = parse_platform(platform)?;
-            let parsed_binary_type = parse_binary_type(binary_type)?;
+            let explicit_platform = platform.as_deref().map(parse_platform).transpose()?;
+            let explicit_binary_type = binary_type.as_deref().map(parse_binary_type).transpose()?;
 
             tracing::info!(plugin = ?plugin, "Loading plugin");
             let plugin_buf = std::fs::read(plugin)?;
@@ -638,7 +656,18 @@ fn dispatch(cli: &Cli) -> Result<()> {
             let runtime_config =
                 normalize_runtime_config_for_schema(runtime_config, &schema_fields)?;
 
-            tracing::info!(%platform, %binary_type, "Validating plugin for target");
+            let (parsed_platform, parsed_binary_type) = plugin_obj
+                .bins()
+                .auto_select_target(explicit_platform, explicit_binary_type)?;
+            if explicit_platform.is_none() || explicit_binary_type.is_none() {
+                tracing::info!(
+                    platform = %parsed_platform,
+                    binary_type = %parsed_binary_type,
+                    "Auto-detected target from .b1n"
+                );
+            }
+
+            tracing::info!(%parsed_platform, %parsed_binary_type, "Validating plugin for target");
             plugin_obj.validate_for_generation(parsed_platform, parsed_binary_type)?;
 
             let save_type = if plugin_obj.replace().size_holder().is_some() {

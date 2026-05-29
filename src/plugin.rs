@@ -196,6 +196,70 @@ impl PluginBins {
             BinaryType::DynamicLibrary => platform_bins.dynamic_library().cloned(),
         }
     }
+
+    /// Pick a (platform, binary_type) pair to generate against.
+    ///
+    /// - If a caller passes both `platform` and `binary_type`, those win
+    ///   (subject to that slot actually being populated).
+    /// - If only one side is given, the other auto-resolves against the
+    ///   populated slots that match it.
+    /// - If neither is given and exactly one slot is populated, pick it.
+    /// - On ambiguity (multiple candidates with no narrowing), fall back
+    ///   to the priority order: windows/exe, windows/lib, linux/exe,
+    ///   linux/lib, darwin/exe, darwin/lib.
+    pub fn auto_select_target(
+        &self,
+        platform: Option<Platform>,
+        binary_type: Option<BinaryType>,
+    ) -> anyhow::Result<(Platform, BinaryType)> {
+        // (platform, binary_type) in fallback-priority order.
+        const PRIORITY: &[(Platform, BinaryType)] = &[
+            (Platform::Windows, BinaryType::Executable),
+            (Platform::Windows, BinaryType::DynamicLibrary),
+            (Platform::Linux, BinaryType::Executable),
+            (Platform::Linux, BinaryType::DynamicLibrary),
+            (Platform::Darwin, BinaryType::Executable),
+            (Platform::Darwin, BinaryType::DynamicLibrary),
+        ];
+
+        // Populated slots that survive the caller-supplied filters.
+        let candidates: Vec<(Platform, BinaryType)> = PRIORITY
+            .iter()
+            .copied()
+            .filter(|(p, _)| platform.is_none_or(|want| *p == want))
+            .filter(|(_, b)| binary_type.is_none_or(|want| *b == want))
+            .filter(|(p, b)| self.get_that_binary(*p, *b).is_some())
+            .collect();
+
+        match candidates.as_slice() {
+            [] => {
+                // Help the operator: list what the .b1n actually has.
+                let available: Vec<String> = PRIORITY
+                    .iter()
+                    .filter(|(p, b)| self.get_that_binary(*p, *b).is_some())
+                    .map(|(p, b)| {
+                        let bt = match b {
+                            BinaryType::Executable => "exe",
+                            BinaryType::DynamicLibrary => "lib",
+                        };
+                        format!("{}/{}", p.to_string().to_lowercase(), bt)
+                    })
+                    .collect();
+                if available.is_empty() {
+                    anyhow::bail!("this .b1n has no populated binary slots");
+                } else {
+                    anyhow::bail!(
+                        "no slot matches the requested platform/type filter; available slots: {}",
+                        available.join(", ")
+                    );
+                }
+            }
+            // Exactly one: unambiguous; this is the truly auto-detected case.
+            [only] => Ok(*only),
+            // Multiple candidates: pick the first by priority order.
+            many => Ok(many[0]),
+        }
+    }
 }
 
 impl PluginBins {
@@ -955,5 +1019,127 @@ impl Plugins {
 
     pub fn remove(&mut self, name: &str) {
         self.0.remove(name);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a PluginBins with the requested slots populated. Uses a
+    /// 1-byte sentinel for each slot since auto_select_target only
+    /// cares about Some/None.
+    fn bins_with(slots: &[(Platform, BinaryType)]) -> PluginBins {
+        let mut bins = PluginBins::default();
+        for (p, b) in slots {
+            let target = match p {
+                Platform::Windows => &mut bins.windows,
+                Platform::Linux => &mut bins.linux,
+                Platform::Darwin => &mut bins.darwin,
+            };
+            match b {
+                BinaryType::Executable => *target.executable_mut() = Some(vec![0x00]),
+                BinaryType::DynamicLibrary => *target.dynamic_library_mut() = Some(vec![0x00]),
+            }
+        }
+        bins
+    }
+
+    #[test]
+    fn single_slot_is_returned_with_no_explicit_args() {
+        let bins = bins_with(&[(Platform::Linux, BinaryType::Executable)]);
+        assert_eq!(
+            bins.auto_select_target(None, None).unwrap(),
+            (Platform::Linux, BinaryType::Executable)
+        );
+    }
+
+    #[test]
+    fn windows_exe_wins_when_multiple_slots_and_no_args() {
+        let bins = bins_with(&[
+            (Platform::Linux, BinaryType::Executable),
+            (Platform::Windows, BinaryType::Executable),
+            (Platform::Darwin, BinaryType::Executable),
+        ]);
+        assert_eq!(
+            bins.auto_select_target(None, None).unwrap(),
+            (Platform::Windows, BinaryType::Executable)
+        );
+    }
+
+    #[test]
+    fn fallback_priority_when_no_windows_exe() {
+        // windows/lib beats linux/exe per the priority order.
+        let bins = bins_with(&[
+            (Platform::Linux, BinaryType::Executable),
+            (Platform::Windows, BinaryType::DynamicLibrary),
+            (Platform::Darwin, BinaryType::Executable),
+        ]);
+        assert_eq!(
+            bins.auto_select_target(None, None).unwrap(),
+            (Platform::Windows, BinaryType::DynamicLibrary)
+        );
+    }
+
+    #[test]
+    fn explicit_platform_narrows_to_its_only_populated_type() {
+        let bins = bins_with(&[
+            (Platform::Linux, BinaryType::DynamicLibrary),
+            (Platform::Windows, BinaryType::Executable),
+        ]);
+        assert_eq!(
+            bins.auto_select_target(Some(Platform::Linux), None)
+                .unwrap(),
+            (Platform::Linux, BinaryType::DynamicLibrary)
+        );
+    }
+
+    #[test]
+    fn explicit_platform_with_multiple_types_prefers_exe() {
+        let bins = bins_with(&[
+            (Platform::Linux, BinaryType::DynamicLibrary),
+            (Platform::Linux, BinaryType::Executable),
+        ]);
+        assert_eq!(
+            bins.auto_select_target(Some(Platform::Linux), None)
+                .unwrap(),
+            (Platform::Linux, BinaryType::Executable)
+        );
+    }
+
+    #[test]
+    fn explicit_args_that_match_nothing_error_with_available_slots() {
+        let bins = bins_with(&[(Platform::Linux, BinaryType::Executable)]);
+        let err = bins
+            .auto_select_target(Some(Platform::Windows), None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("linux/exe") && err.contains("available slots"),
+            "unhelpful error: {err}"
+        );
+    }
+
+    #[test]
+    fn empty_plugin_errors_with_clear_message() {
+        let bins = PluginBins::default();
+        let err = bins.auto_select_target(None, None).unwrap_err().to_string();
+        assert!(
+            err.contains("no populated binary slots"),
+            "unhelpful error: {err}"
+        );
+    }
+
+    #[test]
+    fn explicit_args_that_match_a_populated_slot_pass_through() {
+        let bins = bins_with(&[
+            (Platform::Windows, BinaryType::Executable),
+            (Platform::Linux, BinaryType::Executable),
+        ]);
+        assert_eq!(
+            bins.auto_select_target(Some(Platform::Linux), Some(BinaryType::Executable))
+                .unwrap(),
+            (Platform::Linux, BinaryType::Executable)
+        );
     }
 }
