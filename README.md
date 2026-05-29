@@ -15,182 +15,229 @@
   <img src="logo/pumpbin-256x256.png" height="30%" width="30%">
 </p>
 
-PumpBin is an implant build pipeline for red teams. You write a shellcode loader, package it as a `.b1n`, and stamp shellcode into it with post-build transforms applied automatically.
+PumpBin is an implant build pipeline for red teams. You write a shellcode loader, package it as a `.b1n`, and stamp shellcode into it. Post-build transforms run at the same time: signature grafting, YARA-pattern patching, version-info cloning. One command from shellcode to finished implant.
 
-## Description
+It is not a C2. It is not a shellcode generator. It sits between them.
 
-Researchers write the loader. Operators run `generate`. The `.b1n` plugin pack bundles everything between them: the loader binary, the placeholder markers, and an optional default transform chain.
+## Quick start
 
-PumpBin is not a C2 and not a shellcode generator. It fits between them. Use any shellcode source (msfvenom, Donut, custom) and any C2.
+### Starting point A — you have a compiled loader binary
 
-## Features
+```
+$ pumpbin-cli stamp loader.exe payload.bin
+```
 
-- Scaffolds a Rust loader crate from a single command
-- Auto-detects platform and binary type from the `.b1n`
-- Composable post-build module chain per generation
-- Built-in AES-256-GCM and XOR encryption modules
-- WIN_CERTIFICATE blob grafting onto the implant PE (defeats unsigned-binary string/YARA checks; does not pass WinVerifyTrust without a target-side SIP registry patch)
-- In-place equal-length hex byte substitutions for neutralizing YARA byte patterns
-- VS_VERSION_INFO StringFileInfo field patching; `from_donor=` clones all 8 string fields (CompanyName, FileDescription, FileVersion, InternalName, LegalCopyright, OriginalFilename, ProductName, ProductVersion) from a donor PE
-- Drop-in module support: any language, no recompile, no registration
-- Pre-flight YARA scan before deploy
-- Dry-run mode to preview output before writing
-- `--json` output on `inspect`, `convert`, `build`, and `list-modules` for scripting
-- Profile-driven builds via `pumpbin.toml`
-- `--randomize-markers` replaces default `$$SHELLCODE$$` / `$$99999$$` placeholder bytes with a unique-per-scaffold random pair to eliminate static template signatures
+Platform is auto-detected from the binary magic bytes. Output defaults to `stamp.exe` in the current directory.
 
-## Legal
+With transforms and explicit output:
 
-This tool is intended for authorized penetration testing and red team operations only. Use against systems you do not have explicit permission to test is illegal. The authors accept no liability for misuse.
+```
+$ pumpbin-cli stamp loader.exe payload.bin \
+    --post cert-graft:donor=/path/to/signed.exe \
+    --post byte-patch:patches=4831d2:4833d2 \
+    --output implant.exe
+```
 
-## Requirements
+### Starting point B — you are writing the loader
 
-- Rust toolchain (stable) for building loaders
-- `yara` binary for `check` subcommand (optional)
-- Linux, macOS, or Windows
+```
+$ pumpbin-cli new-loader myloader --platform windows --pack
+$ pumpbin-cli generate -p myloader -s payload.bin
+```
+
+Preview what will happen before writing:
+
+```
+$ pumpbin-cli generate -p myloader -s payload.bin --dry-run
+
+DRY RUN — nothing will be written
+
+  Plugin:       myloader (v0.1.0)
+  Target:       Windows / Exe
+  Output:       myloader.exe
+  Shellcode:    payload.bin (460 B)
+  Module chain: (none)
+```
+
+## Commands
+
+```
+$ pumpbin-cli --help
+
+Implant build pipeline — stamp shellcode into a loader, apply post-build transforms, get an implant.
+
+Usage: pumpbin-cli [OPTIONS] <COMMAND>
+
+Commands:
+  generate     Generate an implant from a plugin and shellcode
+  batch        Generate multiple implants from a directory of shellcodes
+  stamp        Pack a pre-built loader binary and immediately stamp shellcode into it
+  pack         Build a scaffolded loader crate and produce a .b1n
+  new-loader   Scaffold a new PumpBin-ready loader crate
+  create-b1n   Create a .b1n from a pre-built binary (low-level)
+  inspect      Inspect a .b1n or check a loader binary for markers
+  build        Build from a pumpbin.toml profile file
+  module       List and test modules
+  check        Pre-flight YARA scan
+  convert      Reformat shellcode (hex, C array, Python, base64, ...)
+  list-donors  Find PEs with embedded Authenticode signatures
+  completions  Print shell completion script
+```
+
+## stamp
+
+```
+$ pumpbin-cli stamp --help
+
+Usage: pumpbin-cli stamp [OPTIONS] <LOADER> <SHELLCODE>
+
+Arguments:
+  <LOADER>     Compiled loader binary (PE, ELF, or Mach-O)
+  <SHELLCODE>  Raw shellcode file (.bin) to stamp into the loader
+
+Options:
+  -o, --output <OUTPUT>       Output path for the generated implant
+      --post <ID[:K=V,K=V]>  Post-build module. Repeat to chain multiple.
+      --save-b1n <PATH>       Also write the intermediate .b1n for later reuse
+
+Advanced:
+      --platform <PLATFORM>  Override auto-detected platform (windows, linux, darwin)
+  -t, --type <TYPE>          Binary type (exe, lib)  [default: exe]
+      --marker <MARKER>      Shellcode placeholder marker  [default: $$SHELLCODE$$]
+```
+
+## generate
+
+```
+$ pumpbin-cli generate --help
+
+Usage: pumpbin-cli generate [OPTIONS] --plugin <PLUGIN> --shellcode <SHELLCODE>
+
+Options:
+  -p, --plugin <PLUGIN>        .b1n plugin pack or crate directory
+  -s, --shellcode <SHELLCODE>  Shellcode file (.bin) or remote URL
+  -o, --output <OUTPUT>        Output file path
+      --post <ID[:K=V,K=V]>   Post-build module. Repeat to chain multiple.
+      --dry-run                Preview without writing
+
+Advanced:
+      --platform <PLATFORM>       Target platform (auto-detected from .b1n)
+  -t, --type <TYPE>               Binary type (auto-detected from .b1n)
+      --module-config <KEY=VALUE> Override module config
+```
+
+## Post-build modules
+
+Modules run after stamping. Two forms:
+
+```
+# Plain id
+--post cert-graft
+
+# With args (comma-separated key=value)
+--post cert-graft:donor=/path/to/signed.exe,mode=fast
+--post byte-patch:patches=4831d2:4833d2,mode=all
+```
+
+```
+$ pumpbin-cli module list
+
+encrypt:
+  aes-gcm (built-in) - AES-256-GCM with random key/nonce per generation
+  xor (built-in) - Single-byte XOR with random non-zero key
+format_url:
+  url-passthrough (built-in) - Embeds the operator URL verbatim
+post_build:
+  pe-version-info (built-in) - Patch VS_VERSION_INFO StringFileInfo entries in a PE
+  byte-patch (built-in) - Apply in-place hex byte substitutions to the implant
+  cert-graft (built-in) - Graft a donor PE's WIN_CERTIFICATE blob onto the implant
+```
+
+```
+$ pumpbin-cli module list --options --id byte-patch
+
+post_build:
+  byte-patch (built-in) - Apply in-place hex byte substitutions to the implant
+    patches: string (required)
+        Comma-separated <hex_from>:<hex_to> pairs; each pair must be equal length
+    mode: string [default: all]
+        `all` (replace every occurrence) or `first` (replace only first)
+```
+
+Drop-in modules go in `~/.config/pumpbin/modules/<id>/` — a TOML manifest and an executable, any language. See [MODULES.md](MODULES.md).
+
+## inspect
+
+Works on both `.b1n` files and compiled loader binaries:
+
+```
+$ pumpbin-cli inspect myloader/target/release/myloader
+
+file:      myloader/target/release/myloader (306480 bytes)
+format:    linux
+
+markers:
+  shellcode    "$$SHELLCODE$$"   offset 0x4824
+  size-holder  "$$99999$$"       offset 0x6B23
+
+capacity:  4096 bytes (4 KiB)
+
+verdict:   SUITABLE — ready for pumpbin-cli stamp
+```
+
+```
+$ pumpbin-cli inspect myloader/myloader.b1n --brief
+
+myloader   linux/exe   0 modules
+```
+
+If markers are missing, use `--help-markers` for a language guide:
+
+```
+$ pumpbin-cli inspect loader.exe --help-markers
+```
+
+## check
+
+Pre-flight YARA scan before deploying:
+
+```
+$ pumpbin-cli check implant.exe --yara-rules /path/to/elastic-rules/
+```
+
+Exits 0 if clean, non-zero with matching rule names on a hit.
+
+## Find signature donors
+
+```
+$ pumpbin-cli list-donors /Windows/System32/
+
+  embedded (1929416 B at 0x0D04B000)  /Windows/System32/MRT.exe
+  catalog-only  /Windows/System32/cmd.exe
+  ...
+
+1 embedded, 42 catalog-only, 0 errored
+```
 
 ## Installation
 
-```bash
+```
 git clone https://github.com/KriyosArcane/pumpbin.git
 cd pumpbin
 cargo build --release --bin pumpbin-cli
 ```
 
-Add `target/release/pumpbin-cli` to your PATH.
+GUI (Linux, requires Iced/wgpu deps):
 
-GUI build (Linux only):
-
-```bash
+```
 sudo apt-get install libwayland-dev libxkbcommon-dev libgtk-3-dev libssl-dev
 cargo build --release --bin pumpbin --features gui
 ```
 
-## Usage
+## Legal
 
-### Starting point A — you have a loader binary
-
-You already have a compiled loader binary with PumpBin placeholder markers baked in. Use `stamp` to go directly from binary + shellcode to implant in one command:
-
-```bash
-pumpbin-cli stamp --loader loader.exe --shellcode payload.bin
-```
-
-Platform is auto-detected from the binary's magic bytes (MZ header = windows, ELF = linux, Mach-O = darwin). Output defaults to `stamp.exe` in the current directory.
-
-With post-build transforms and explicit output path:
-
-```bash
-pumpbin-cli stamp \
-    --loader loader.exe \
-    --shellcode payload.bin \
-    --output implant.exe \
-    --post cert-graft:donor=/path/to/signed.exe
-```
-
-Save the intermediate `.b1n` for reuse if you plan to stamp more shellcodes into the same loader later:
-
-```bash
-pumpbin-cli stamp --loader loader.exe --shellcode payload.bin --save-b1n loader.b1n
-```
-
-### Starting point B — you are writing the loader yourself
-
-Scaffold a new Rust loader crate, build it, and pack it in one command:
-
-```bash
-pumpbin-cli new-loader myloader --platform windows --pack
-```
-
-Then stamp shellcode into it:
-
-```bash
-pumpbin-cli generate -p myloader -s payload.bin
-```
-
-`-p myloader` resolves to `myloader/myloader.b1n` automatically. Output defaults to `myloader.exe`.
-
-**Preview before writing:**
-
-```bash
-pumpbin-cli generate -p myloader -s payload.bin --dry-run
-```
-
-**Apply post-build transforms:**
-
-```bash
-pumpbin-cli generate -p myloader -s payload.bin \
-    --post cert-graft:donor=/path/to/signed.exe \
-    --post byte-patch:patches=4831d2:4833d2
-```
-
-**Pre-flight scan:**
-
-```bash
-pumpbin-cli check implant.exe --yara-rules /path/to/elastic-rules/
-```
-
-**Find donor PEs with embedded signatures for cert grafting:**
-
-```bash
-pumpbin-cli list-donors /Windows/System32/
-```
-
-## Commands
-
-| Command | Description |
-|---|---|
-| `stamp` | Pack a loader binary and stamp shellcode in one step (no .b1n needed). |
-| `generate` | Stamp shellcode into an existing .b1n template. |
-| `batch` | Stamp a directory of shellcodes into a .b1n template. |
-| `build` | Profile-driven build from `pumpbin.toml`. |
-| `new-loader` | Scaffold a Rust loader crate. |
-| `pack` | Build a scaffolded crate and produce a `.b1n`. |
-| `create-b1n` | Pack any pre-built binary into a `.b1n`. |
-| `inspect` | Dump `.b1n` metadata. `--brief` for one-liner. `--json` for scripting. |
-| `verify` | PE format, checksum, Authenticode, and marker check. |
-| `list-modules` | Show installed modules. `--json` for scripting. |
-| `module-test` | Test a module in isolation. `--debug` dumps wire frames. |
-| `list-donors` | Scan a directory for PEs with embedded (not catalog-only) Authenticode signatures. |
-| `check` | Pre-flight YARA scan. |
-| `convert` | Reformat shellcode bytes (hex, C array, C#, Python, base64). |
-| `completions` | Print shell completion script. |
-
-## Modules
-
-Modules are post-build transforms. Drop-in modules go in `~/.config/pumpbin/modules/<id>/` with a TOML manifest and an executable. Any language. No recompile.
-
-**Built-in modules:**
-
-| Kind | ID | Description |
-|---|---|---|
-| encrypt | `aes-gcm` | AES-256-GCM, random key and nonce per build. |
-| encrypt | `xor` | Single-byte XOR, random non-zero key. |
-| format-url | `url-passthrough` | Embed URL as-is for remote-mode builds. |
-| post-build | `pe-version-info` | Patch VS_VERSION_INFO StringFileInfo fields. `from_donor=<path>` clones all 8 string fields from a donor PE. |
-| post-build | `byte-patch` | In-place equal-length hex substitutions. Useful for neutralizing YARA byte patterns. |
-| post-build | `cert-graft` | Graft a donor PE's WIN_CERTIFICATE blob onto the implant. Defeats unsigned-binary string checks. Does not pass WinVerifyTrust without a SIP registry patch on the target. For full Authenticode and `.rsrc` clone use [trustmebro](https://github.com/KriyosArcane/TrustMeBro-Rust). |
-
-See [MODULES.md](MODULES.md) for the full authoring spec.
-
-## Baking transforms into a .b1n
-
-Add `[[package.metadata.pumpbin.post]]` blocks to your loader crate's `Cargo.toml`. Every `generate` run applies them automatically.
-
-```toml
-[package.metadata.pumpbin]
-name = "myloader"
-platform = "windows"
-
-[[package.metadata.pumpbin.post]]
-id = "cert-graft"
-config = { donor = "/path/to/signed.exe" }
-
-[[package.metadata.pumpbin.post]]
-id = "pe-version-info"
-config = { from_donor = "/path/to/signed.exe" }
-```
+For authorized penetration testing and red team operations only. The authors accept no liability for misuse.
 
 ## Acknowledgments
 
-Based on the original [b1n](https://github.com/B3nd1k/b1n) project.
+Based on the original [b1n](https://github.com/B3nd1k/b1n) project. Release history: [CHANGELOG.md](CHANGELOG.md).
