@@ -268,6 +268,70 @@ enum Commands {
         module_config: Vec<String>,
     },
 
+    /// Pack a pre-built loader binary and immediately stamp shellcode
+    /// into it — one command, no .b1n file needed on disk.
+    ///
+    /// Platform is auto-detected from the loader's magic bytes
+    /// (MZ→windows, ELF→linux, Mach-O→darwin). Pass --platform to
+    /// override. The --save-b1n flag persists the intermediate .b1n so
+    /// you can reuse it later with `pumpbin-cli generate`.
+    ///
+    /// Example:
+    ///   pumpbin-cli stamp -l loader.exe -s payload.bin
+    ///   pumpbin-cli stamp -l loader.exe -s payload.bin --save-b1n loader.b1n
+    Stamp {
+        /// Path to the compiled loader binary (PE, ELF, or Mach-O).
+        /// Must contain a shellcode placeholder region (default marker:
+        /// $$SHELLCODE$$). Loaders built with `new-loader` satisfy this.
+        #[arg(short = 'l', long, value_hint = clap::ValueHint::FilePath)]
+        loader: PathBuf,
+
+        /// Path to the raw shellcode file (.bin).
+        #[arg(short, long, value_hint = clap::ValueHint::AnyPath)]
+        shellcode: String,
+
+        /// Output path for the generated implant. Defaults to
+        /// `<name>.<ext>` in the current directory.
+        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
+        output: Option<PathBuf>,
+
+        /// Target platform (windows, linux, darwin).
+        /// Auto-detected from the loader binary if omitted.
+        #[arg(long)]
+        platform: Option<String>,
+
+        /// Target binary type (exe, lib). [default: exe]
+        #[arg(short = 't', long = "type", default_value = "exe")]
+        binary_type: String,
+
+        /// Shellcode placeholder prefix bytes in the loader binary.
+        #[arg(long, default_value = "$$SHELLCODE$$")]
+        src_prefix: String,
+
+        /// Size-holder bytes the loader reads at runtime to know the
+        /// shellcode length.
+        #[arg(long, default_value = "$$99999$$")]
+        size_holder: String,
+
+        /// Also write the intermediate .b1n to this path so you can
+        /// reuse it later with `pumpbin-cli generate`.
+        #[arg(long, value_hint = clap::ValueHint::FilePath)]
+        save_b1n: Option<PathBuf>,
+
+        /// Append a post-build module to the chain. Accepts both
+        /// `--post <id>` and `--post <id>:<k=v;k=v>`.
+        #[arg(long = "post", value_name = "ID[:K=V;K=V]")]
+        post: Vec<String>,
+
+        /// Per-module args for the post chain (`<id>=<k=v[;k=v...]>`).
+        #[arg(long = "post-arg", value_name = "ID=K=V")]
+        post_arg: Vec<String>,
+
+        /// Name embedded in the ephemeral .b1n.
+        #[arg(long, default_value = "stamp")]
+        name: String,
+    },
+
     /// Build a scaffolded loader crate and pack the resulting binary
     /// into a .b1n in one step. Reads `[package.metadata.pumpbin]`
     /// from `<crate-dir>/Cargo.toml` for the loader config. The
@@ -934,6 +998,121 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 .with_context(|| format!("failed to write output .b1n: {}", output.display()))?;
 
             tracing::info!(output = %output.display(), "Created .b1n plugin pack");
+            Ok(())
+        }
+        Commands::Stamp {
+            loader,
+            shellcode,
+            output,
+            platform,
+            binary_type,
+            src_prefix,
+            size_holder,
+            save_b1n,
+            post,
+            post_arg,
+            name,
+        } => {
+            tracing::info!("stamp: reading loader");
+            let template_bytes = std::fs::read(loader)
+                .with_context(|| format!("failed to read loader: {}", loader.display()))?;
+
+            let parsed_platform = if let Some(p) = platform.as_deref() {
+                parse_platform(p)?
+            } else {
+                detect_platform_from_binary(&template_bytes).ok_or_else(|| {
+                    anyhow!(
+                        "could not detect platform from '{}' (unrecognized magic bytes); \
+                         pass --platform explicitly",
+                        loader.display()
+                    )
+                })?
+            };
+            let parsed_binary_type = parse_binary_type(binary_type)?;
+
+            tracing::info!(%parsed_platform, %parsed_binary_type, "stamp: assembling .b1n");
+            let b1n_bytes = pumpbin::pack::B1nBuilder {
+                template_bytes,
+                name: name.clone(),
+                author: "pumpbin-cli stamp".to_string(),
+                plugin_version: "0.1.0".to_string(),
+                desc: "Created by pumpbin-cli stamp".to_string(),
+                platform: parsed_platform,
+                binary_type: parsed_binary_type,
+                save_type: ShellcodeSaveType::Local,
+                src_prefix: src_prefix.clone(),
+                size_holder: size_holder.clone(),
+                max_len_override: None,
+                primary_module: None,
+                post_modules: vec![],
+                module_config: BTreeMap::new(),
+            }
+            .assemble()
+            .with_context(|| format!("assembling .b1n from '{}'", loader.display()))?;
+
+            if let Some(b1n_path) = save_b1n {
+                pumpbin::utils::atomic_write(b1n_path, &b1n_bytes)
+                    .with_context(|| format!("saving .b1n to '{}'", b1n_path.display()))?;
+                tracing::info!(path = %b1n_path.display(), "stamp: saved .b1n");
+            }
+
+            let mut plugin_obj = Plugin::decode_from_slice(&b1n_bytes)?;
+
+            // Apply post-build module chain (same logic as generate).
+            let mut runtime_config = parse_module_config(&[])?;
+            for entry in post {
+                if let Some((id, args)) = entry.split_once(':') {
+                    plugin_obj.plugins.modules_mut().push(id.to_string());
+                    runtime_config.insert(format!("post:{id}"), args.to_string());
+                } else {
+                    plugin_obj.plugins.modules_mut().push(entry.clone());
+                }
+            }
+            for entry in post_arg {
+                let (id, rest) = entry.split_once('=').ok_or_else(|| {
+                    anyhow!("--post-arg expects <id>=<k=v[;k=v...]>; got: {entry}")
+                })?;
+                runtime_config.insert(format!("post:{id}"), rest.to_string());
+            }
+
+            let (resolved_platform, resolved_binary_type) = plugin_obj
+                .bins()
+                .auto_select_target(Some(parsed_platform), Some(parsed_binary_type))?;
+            plugin_obj.validate_for_generation(resolved_platform, resolved_binary_type)?;
+
+            let bin = plugin_obj
+                .bins()
+                .get_that_binary(resolved_platform, resolved_binary_type)
+                .ok_or_else(|| anyhow!("failed to retrieve binary for platform/type"))?;
+
+            plugin_obj.validate_shellcode_source(shellcode)?;
+
+            let schema_fields = plugin_schema_fields(&plugin_obj);
+            let runtime_config =
+                normalize_runtime_config_for_schema(runtime_config, &schema_fields)?;
+
+            tracing::info!("stamp: injecting shellcode");
+            let implant =
+                plugin_obj.replace_binary(bin, shellcode.clone(), vec![], Some(&runtime_config))?;
+
+            let output_path = if let Some(out) = output {
+                out.clone()
+            } else {
+                let ext = ext_for_output(resolved_platform, resolved_binary_type);
+                let base = name.to_lowercase().replace(' ', "_");
+                let candidate = PathBuf::from(format!("{base}.{ext}"));
+                if candidate.exists() {
+                    let ts = Local::now().format("%Y%m%d_%H%M%S").to_string();
+                    PathBuf::from(format!("{base}_{ts}.{ext}"))
+                } else {
+                    candidate
+                }
+            };
+
+            pumpbin::utils::atomic_write(&output_path, &implant)
+                .with_context(|| format!("writing implant to '{}'", output_path.display()))?;
+            tracing::info!(output = %output_path.display(), "stamp: complete");
+            println!("wrote {}", output_path.display());
             Ok(())
         }
         Commands::Pack {
@@ -1833,6 +2012,22 @@ fn parse_platform(s: &str) -> Result<Platform> {
             s
         )),
     }
+}
+
+/// Infer the target platform from a binary's magic bytes.
+/// Returns `None` when the format is unknown (raw shellcode, custom binary, etc.).
+fn detect_platform_from_binary(bytes: &[u8]) -> Option<Platform> {
+    if bytes.starts_with(b"MZ") {
+        return Some(Platform::Windows);
+    }
+    if bytes.starts_with(b"\x7fELF") {
+        return Some(Platform::Linux);
+    }
+    // Mach-O 64-bit and 32-bit little-endian magic
+    if bytes.starts_with(b"\xcf\xfa\xed\xfe") || bytes.starts_with(b"\xce\xfa\xed\xfe") {
+        return Some(Platform::Darwin);
+    }
+    None
 }
 
 fn parse_binary_type(s: &str) -> Result<BinaryType> {

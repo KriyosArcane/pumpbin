@@ -68,19 +68,47 @@ cargo build --release --bin pumpbin --features gui
 
 ## Usage
 
-**Scaffold a loader, build it, and pack it in one command:**
+### Starting point A — you have a loader binary
+
+You already have a compiled loader binary with PumpBin placeholder markers baked in. Use `stamp` to go directly from binary + shellcode to implant in one command:
+
+```bash
+pumpbin-cli stamp --loader loader.exe --shellcode payload.bin
+```
+
+Platform is auto-detected from the binary's magic bytes (MZ header = windows, ELF = linux, Mach-O = darwin). Output defaults to `stamp.exe` in the current directory.
+
+With post-build transforms and explicit output path:
+
+```bash
+pumpbin-cli stamp \
+    --loader loader.exe \
+    --shellcode payload.bin \
+    --output implant.exe \
+    --post cert-graft:donor=/path/to/signed.exe
+```
+
+Save the intermediate `.b1n` for reuse if you plan to stamp more shellcodes into the same loader later:
+
+```bash
+pumpbin-cli stamp --loader loader.exe --shellcode payload.bin --save-b1n loader.b1n
+```
+
+### Starting point B — you are writing the loader yourself
+
+Scaffold a new Rust loader crate, build it, and pack it in one command:
 
 ```bash
 pumpbin-cli new-loader myloader --platform windows --pack
 ```
 
-**Generate an implant:**
+Then stamp shellcode into it:
 
 ```bash
 pumpbin-cli generate -p myloader -s payload.bin
 ```
 
-`-p myloader` resolves to `myloader/myloader.b1n` automatically. Output defaults to `myloader.exe` in the current directory (extension matches the target platform and type).
+`-p myloader` resolves to `myloader/myloader.b1n` automatically. Output defaults to `myloader.exe`.
 
 **Preview before writing:**
 
@@ -91,15 +119,9 @@ pumpbin-cli generate -p myloader -s payload.bin --dry-run
 **Apply post-build transforms:**
 
 ```bash
-# Graft a stolen cert and patch a YARA byte pattern
 pumpbin-cli generate -p myloader -s payload.bin \
     --post cert-graft:donor=/path/to/signed.exe \
     --post byte-patch:patches=4831d2:4833d2
-
-# Long form (backwards-compatible)
-pumpbin-cli generate -p myloader -s payload.bin \
-    --post cert-graft \
-    --post-arg cert-graft=donor=/path/to/signed.exe
 ```
 
 **Pre-flight scan:**
@@ -118,8 +140,9 @@ pumpbin-cli list-donors /Windows/System32/
 
 | Command | Description |
 |---|---|
-| `generate` | Stamp shellcode into a loader. |
-| `batch` | Stamp a directory of shellcodes. |
+| `stamp` | Pack a loader binary and stamp shellcode in one step (no .b1n needed). |
+| `generate` | Stamp shellcode into an existing .b1n template. |
+| `batch` | Stamp a directory of shellcodes into a .b1n template. |
 | `build` | Profile-driven build from `pumpbin.toml`. |
 | `new-loader` | Scaffold a Rust loader crate. |
 | `pack` | Build a scaffolded crate and produce a `.b1n`. |
