@@ -1,5 +1,106 @@
 # CHANGELOG
 
+## v2.1.0 — stamp, CLI surface refactor, progress output
+
+### Added
+
+- **`stamp` command.** Pack a compiled loader binary and inject shellcode
+  in one step without a pre-existing `.b1n`. Platform auto-detected from
+  binary magic bytes (MZ, ELF, Mach-O). `--save-b1n` persists the
+  intermediate pack for reuse with `generate`.
+
+- **`pumpbin-cli pack`.** Build a scaffolded Rust loader crate and
+  produce a `.b1n` in one command. Reads `[package.metadata.pumpbin]`
+  from the crate's `Cargo.toml`; no bash wrapper required.
+
+- **`new-loader --pack`.** Scaffold and immediately pack in one flag.
+
+- **`generate -p <dir>`.** Pass a crate directory directly; resolves to
+  `<dir>/<name>.b1n` automatically.
+
+- **Auto-detect platform/binary-type.** `generate` and `batch` read the
+  `.b1n` and pick the single populated slot when `--platform`/`--type`
+  are omitted. Falls back to windows/exe priority when multiple slots
+  exist.
+
+- **`--dry-run` on `generate`.** Prints resolved plugin, target, output
+  path, shellcode size, and module chain without writing anything.
+
+- **`inspect` accepts loader binaries.** Pass a PE/ELF/Mach-O instead
+  of a `.b1n` to check for placeholder markers, report capacity, and
+  get a stamping verdict.
+
+- **`inspect --verify`.** Runs the authenticode + checksum check
+  previously behind the standalone `verify` command.
+
+- **`inspect --help-markers`.** Prints an inline language guide for
+  embedding PumpBin placeholder markers in Rust and C/C++.
+
+- **`module list` / `module test` subcommand group.** Replaces
+  `list-modules` and `module-test` with consistent noun-verb grouping.
+
+- **`module-test --debug`.** Dumps wire-protocol frames to stderr via
+  `PUMPBIN_MODULE_DEBUG=1` for external module development.
+
+- **`byte-patch` post-build module.** In-place equal-length hex
+  substitutions. Useful for neutralising specific YARA byte patterns
+  without changing shellcode behavior.
+
+- **`cert-graft` post-build module.** Grafts a donor PE's
+  WIN_CERTIFICATE blob onto the implant. Defeats unsigned-binary string
+  checks. Does not pass WinVerifyTrust without a target-side SIP patch.
+
+- **`pe-version-info from_donor=<path>`.** Clones all eight
+  StringFileInfo fields from a donor PE in one arg.
+
+- **`list-donors` command.** Scans a directory for PEs with embedded
+  (not catalog-only) Authenticode signatures suitable for `cert-graft`.
+
+- **`check --yara-rules` command.** Pre-flight YARA scan via the `yara`
+  system binary. Exits non-zero with matching rule names on a hit.
+
+- **NetExec-style progress output.** `stamp`, `generate`, and `pack`
+  emit columnar `[*]`/`[+]` lines to stderr during execution:
+  `PB  loader.exe  win/exe  [*] injecting shellcode (460 B)`.
+
+- **`[package.metadata.pumpbin]` in scaffolded Cargo.toml.** `pack`
+  reads platform, binary type, and marker bytes from the crate metadata.
+  Bake a default post-chain with `[[package.metadata.pumpbin.post]]`.
+
+- **`--post id:k=v,k=v` combined syntax.** Attach a module and its args
+  in a single flag. Commas separate key=value pairs. `--post-arg`
+  removed (redundant with this form).
+
+- **Advanced help_heading on noisy flags.** `--platform`, `--type`, and
+  low-use scaffolding flags are grouped under `[Advanced]` in `--help`.
+
+### Changed
+
+- `list-modules` renamed to `module list`; `module-test` renamed to
+  `module test`. Old names no longer exist.
+- `verify` absorbed into `inspect --verify`. `verify` as a standalone
+  command is removed.
+- `--src-prefix` renamed to `--marker` on `stamp` and `create-b1n`.
+- `--post-module` renamed to `--post` on `create-b1n` for consistency
+  with `stamp` and `generate`.
+- Default output filename for `generate` is now `<plugin-name>.<ext>`.
+  A timestamp suffix is added only when the clean name already exists.
+- capnp codegen no longer gated on `#[cfg(debug_assertions)]`. Release
+  builds regenerate `plugin_capnp.rs` from `plugin.capnp` directly.
+- Scaffolded `pumpbin-pack.sh` removed. Use `pumpbin-cli pack` instead.
+
+### Fixed
+
+- `new-loader` generated `pumpbin-pack.sh` with `--prefix` instead of
+  `--src-prefix` for `create-b1n`. Broke every pack step since the flag
+  rename. Fixed in scaffold template and matching test assertion.
+
+- `stamp` error when loader has no markers now prints the exact missing
+  marker string, the loader filename, and three recovery options instead
+  of the bare `PB-E0001` code.
+
+---
+
 ## v2.0.0 — Extism removed, native Rust modules
 
 **Breaking.** The Extism WASM plugin runtime is gone, replaced by
