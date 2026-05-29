@@ -1,12 +1,8 @@
 # PumpBin modules
 
-PumpBin discovers external (third-party) modules by scanning two
-directories at startup. **A new module is one folder with two
-files: a manifest and an executable.** No source-code edit. No
-recompile. No registration.
+A module is one folder with two files: a manifest and an executable. Drop it into the right directory, and PumpBin picks it up on the next run. No source-code edits. No recompile. No registration.
 
-This document covers everything you need to write, ship, and run a
-module in any language.
+This document covers everything you need to write, ship, and run a module in any language.
 
 ---
 
@@ -16,44 +12,40 @@ PumpBin scans these roots in order at every invocation:
 
 | # | Path | Notes |
 |---|------|-------|
-| 1 | `<install>/modules/` | Built-ins shipped with PumpBin. Empty by default in v2.0. |
-| 2 | `$XDG_CONFIG_HOME/pumpbin/modules/` (Linux) | The user drop-in dir. Default `~/.config/pumpbin/modules/`. |
+| 1 | `<install>/modules/` | Reserved for shipped built-ins. Empty by default in v2.0. |
+| 2 | `$XDG_CONFIG_HOME/pumpbin/modules/` (Linux) | User drop-in dir. Default: `~/.config/pumpbin/modules/`. |
 |   | `~/Library/Application Support/pumpbin/modules/` (macOS) | |
 |   | `%APPDATA%\pumpbin\modules\` (Windows) | |
-| 3 | `$PUMPBIN_MODULES_PATH` | Colon-separated (`:` unix, `;` windows). Override for testing. |
+| 3 | `$PUMPBIN_MODULES_PATH` | Colon-separated on Unix, semicolon-separated on Windows. Useful for testing. |
 
-**First match wins** on duplicate ids — built-ins can't be silently
-shadowed by a user drop-in (security: a malicious folder can't
-hijack `aes-gcm`). To replace a built-in, give your module a
-different id.
+First match wins on duplicate ids. A user drop-in with the same id as a built-in does not shadow it. To replace a built-in, give your module a different id.
 
-A bad manifest **logs a warning to stderr and skips that module**;
-the rest keep working. Same shape as NetExec's `module_is_sane`.
+A bad manifest logs a warning to stderr and skips that module. The rest keep working.
 
 ---
 
 ## Anatomy of a module
 
-Every module is a directory containing **at least two files**:
+Every module is a directory with at least two files:
 
 ```
 <module-id>/
-├── pumpbin-module.toml      # manifest
-└── <executable-or-script>   # runnable; manifest's `executable` field
++-- pumpbin-module.toml      # manifest
++-- <executable-or-script>   # the runnable; named in the manifest
 ```
 
-### `pumpbin-module.toml`
+### pumpbin-module.toml
 
 ```toml
-name = "strip-timestamps"                    # required, unique id
-description = "Zero PE TimeDateStamp fields" # required, one-line
-kind = "post-build"                          # required: see "Kinds"
-version = "0.1.0"                            # optional, freeform
-protocol = 1                                 # optional, defaults to 1
-platforms = ["linux", "windows"]             # optional, defaults to ["any"]
-executable = "strip-timestamps"              # required, relative to this dir
+name = "strip-timestamps"
+description = "Zero PE TimeDateStamp fields"
+kind = "post-build"
+version = "0.1.0"
+protocol = 1
+platforms = ["linux", "windows"]
+executable = "strip-timestamps"
 
-[[args]]                                     # optional, repeat per arg
+[[args]]
 key = "deep"
 type = "bool"
 required = false
@@ -63,27 +55,25 @@ description = "Also zero export dir timestamps"
 
 | Field | Type | Required | Notes |
 |-------|------|----------|-------|
-| `name` | string | yes | snake/kebab/camel — any non-empty unique identifier |
-| `description` | string | yes | shown in `list-modules` |
-| `kind` | string | yes | one of `encrypt`, `format-encrypted`, `format-url`, `upload-remote`, `post-build` |
-| `version` | string | no | freeform; convention is SemVer |
-| `protocol` | uint  | no | wire protocol version this module speaks. Currently 1 |
-| `platforms` | [string] | no | `["any"]` if script; otherwise list of `linux`/`windows`/`darwin` |
-| `executable` | string | yes | filename of the runnable, relative to manifest dir |
-| `args` | [Arg] | no | optional arg schema (informational only in v2.0) |
+| `name` | string | yes | Any non-empty unique identifier. |
+| `description` | string | yes | Shown in `list-modules`. |
+| `kind` | string | yes | One of: `encrypt`, `format-encrypted`, `format-url`, `upload-remote`, `post-build`. |
+| `version` | string | no | Freeform. SemVer by convention. |
+| `protocol` | uint | no | Wire protocol version. Currently 1. |
+| `platforms` | [string] | no | Use `["any"]` for scripts. Otherwise list `linux`, `windows`, `darwin`. |
+| `executable` | string | yes | Filename of the runnable, relative to the manifest directory. |
+| `args` | [Arg] | no | Optional arg schema shown in `list-modules --options`. |
 
-The executable is **never run during discovery** — only the TOML is
-parsed. Safe to scan untrusted-looking folders.
+The executable is never run during discovery. Only the TOML is parsed.
 
 ---
 
 ## Wire protocol v1
 
-When the operator references your module, PumpBin spawns the
-executable and speaks the same simple framing on both sides:
+When an operator references your module, PumpBin spawns the executable and communicates over stdin/stdout using length-prefixed frames:
 
 ```
-length-prefixed frame  =  [u32 little-endian length] [length bytes of payload]
+frame = [u32 little-endian length][length bytes of payload]
 ```
 
 ### Invocation
@@ -93,10 +83,9 @@ length-prefixed frame  =  [u32 little-endian length] [length bytes of payload]
 | stdin  | JSON request header | raw input payload bytes |
 | stdout | JSON response header | raw output payload bytes |
 
-stderr is **free-form text** — anything you log there surfaces to
-the operator on failure. Use it.
+Stderr is free-form text. Anything written there surfaces to the operator on failure.
 
-Exit code: `0` = success; non-zero = failure.
+Exit code: `0` is success. Non-zero is failure.
 
 ### Request header
 
@@ -109,8 +98,7 @@ Exit code: `0` = success; non-zero = failure.
 }
 ```
 
-`args` is always a **flat array of `"key=value"` strings** — not a dict,
-not a list of objects. To consume it in Python:
+`args` is always a flat array of `"key=value"` strings, not a dict. To consume it in Python:
 
 ```python
 def parse_args(header):
@@ -123,12 +111,9 @@ def parse_args(header):
 # args["deep"] == "true", args["keep_export"] == "false"
 ```
 
-The same pattern in any language: split each string on the **first** `=`.
-Values that themselves contain `=` (e.g. base64) are preserved correctly.
+Split each string on the first `=`. Values that contain `=` (e.g. base64) are preserved correctly.
 
-If `args` is set, each entry is a free-form `key=value` string the
-operator passed via `--post-arg`. Modules SHOULD treat unknown keys
-as errors and missing required keys as errors.
+Treat unknown keys as errors. Treat missing required keys as errors.
 
 ### Response header (success)
 
@@ -142,49 +127,42 @@ as errors and missing required keys as errors.
 { "protocol": 1, "error": "donor PE not found at /tmp/chrome.exe" }
 ```
 
-The host treats `error.is_some()` as failure even if the exit code
-is 0. Conversely a non-zero exit is failure even with `error: null`.
-Set `error` AND exit non-zero for clearest signaling.
+Set `error` and exit non-zero for the clearest failure signal.
 
 ### Per-kind payload contract
 
-| Kind | Input payload (frame 1 in) | Output payload (frame 1 out) | Response header extras |
-|------|---------------------------|------------------------------|------------------------|
+| Kind | Input (frame 1 in) | Output (frame 1 out) | Response extras |
+|------|---------------------|----------------------|-----------------|
 | `encrypt` | raw shellcode bytes | encrypted bytes | `pass: [{holder_hex, replace_by_hex}, ...]` |
 | `format-encrypted` | encrypted bytes | reshaped bytes | `pass: [...]` (may be empty) |
-| `format-url` | URL as UTF-8 | rewritten URL as UTF-8 | `string: "<rewritten URL>"` (also echoed in payload) |
+| `format-url` | URL as UTF-8 | rewritten URL as UTF-8 | `string: "<rewritten URL>"` |
 | `upload-remote` | shellcode bytes | URL as UTF-8 | `string: "<upload URL>"` |
 | `post-build` | implant binary bytes | mutated implant bytes | (none) |
 
-For `encrypt` and `format-encrypted`: the `pass` array tells PumpBin
-to find each `holder_hex` byte sequence in the loader template and
-overwrite it with `replace_by_hex`. Hex-encoded for JSON safety
-(arbitrary bytes including NUL, which JSON strings can't carry).
+For `encrypt` and `format-encrypted`: the `pass` array tells PumpBin to find each `holder_hex` byte sequence in the loader template and overwrite it with `replace_by_hex`. Both are hex-encoded so they survive JSON safely.
 
 ---
 
-## Writing a module in any language
+## Writing a module
 
-### Pseudocode (the whole contract in 6 steps)
+### The contract in six steps
 
 ```
-1. Read 4 bytes from stdin → u32 LE → N
-2. Read N bytes from stdin → JSON request header
-3. Read 4 bytes from stdin → u32 LE → M
-4. Read M bytes from stdin → raw payload
+1. Read 4 bytes from stdin -> u32 LE -> N
+2. Read N bytes from stdin -> JSON request header
+3. Read 4 bytes from stdin -> u32 LE -> M
+4. Read M bytes from stdin -> raw payload
 5. Compute your transformation
-6. Write [u32 LE length of header JSON][header JSON][u32 LE length of output][output]
-   to stdout. Exit 0.
+6. Write [u32 LE header length][header JSON][u32 LE output length][output] to stdout. Exit 0.
 ```
 
-That's the whole contract. Any language with stdin/stdout and JSON
-support can implement it in ~30 LOC.
+Any language with stdin/stdout and JSON support handles this in around 30 lines.
 
-### Python (40 LOC)
+### Python (40 lines)
 
 See [examples/modules/post-build-python/](examples/modules/post-build-python/).
 
-### Rust (~10 LOC of your code + `pumpbin-module-sdk`)
+### Rust (10 lines of your code + pumpbin-module-sdk)
 
 ```rust
 use pumpbin_module_sdk::{post_build, Result};
@@ -200,64 +178,48 @@ fn main() -> Result<()> {
 
 See [examples/modules/post-build-rust/](examples/modules/post-build-rust/) for the full template.
 
-The SDK is optional — Rust authors who want zero deps can hand-roll
-the framing the same way the Python example does.
+The SDK is optional. Rust authors who prefer zero dependencies can hand-roll the framing the same way the Python example does.
 
-### Go, Bash, anything-else
+### Go, Bash, or anything else
 
-Use the pseudocode contract above. PumpBin doesn't care what
-language a module is in; it only cares that the executable runs and
-speaks the wire protocol.
+Use the six-step contract above. PumpBin does not care what language a module uses.
 
 ---
 
 ## Module dev loop
 
-```
-# 1. Build your module (skip if it's already a script)
+```bash
+# 1. Build your module (skip for scripts)
 cd my-module && cargo build --release
 
 # 2. Install
 mkdir -p ~/.config/pumpbin/modules/my-module
 cp target/release/my-module pumpbin-module.toml ~/.config/pumpbin/modules/my-module/
 
-# 3. PumpBin sees it
+# 3. Verify PumpBin sees it
 pumpbin-cli list-modules
 #   post_build:
-#     my-module (external: ~/.config/pumpbin/modules/my-module/pumpbin-module.toml) - <description>
+#     my-module (external: ...) - <description>
 
-# 4. See its full arg schema (declared in pumpbin-module.toml `[[args]]`)
+# 4. See its arg schema
 pumpbin-cli list-modules --options --id my-module
-#   post_build:
-#     my-module (external: ...) - ...
-#       marker: hex-byte [default: 0xAA]
-#           Byte to append to the implant.
 
-# 5. Test in isolation (no implant needed)
-echo "hello world" > /tmp/in
-pumpbin-cli module-test my-module --input /tmp/in --output /tmp/out
-#   module 'my-module' applied. /tmp/out has the result.
+# 5. Test in isolation
+pumpbin-cli module-test my-module --input /tmp/sample.bin --output /tmp/out.bin
 
-# 6. Use in the full pipeline — two forms for --post:
+# 6. Use in the pipeline
 
-# Short form: id and inline args in one flag
-pumpbin-cli generate -p loader.b1n -s sc.bin \
-    --post my-module:key=value
+# Short form: id and args in one flag
+pumpbin-cli generate -p loader.b1n -s sc.bin --post my-module:key=value
 
-# Long form (backwards-compat, use when args are complex)
+# Long form (useful for complex args)
 pumpbin-cli generate -p loader.b1n -s sc.bin \
     --post my-module --post-arg my-module=key=value
 ```
 
-### Baking a default post-chain into the `.b1n`
+### Baking a default chain into a .b1n
 
-If a `.b1n` always needs the same post-build modules (e.g. always sign
-with a stolen cert + clone version info from a donor), bake them in
-once so the operator doesn't have to remember `--post` on every
-`generate`.
-
-The cleanest path is the metadata block in your loader crate's
-`Cargo.toml` — `pumpbin-cli pack` picks it up automatically:
+Add a `[[package.metadata.pumpbin.post]]` block to your loader crate's `Cargo.toml`. `pumpbin-cli pack` reads it and bakes the chain in:
 
 ```toml
 [package.metadata.pumpbin]
@@ -273,103 +235,64 @@ id = "pe-version-info"
 config = { from_donor = "/tmp/mrt.exe" }
 ```
 
-For ad-hoc loaders that aren't scaffolded, `create-b1n` takes the
-chain via flags instead:
+After this, `pumpbin-cli generate -p myloader.b1n -s sc.bin` runs the chain automatically. Explicit `--post` args on `generate` append to the baked chain.
 
-```
+For loaders without a scaffold, use `create-b1n --post-module` instead:
+
+```bash
 pumpbin-cli create-b1n \
     --template loader.exe --output loader.b1n \
     --name myloader --platform windows --type exe \
     --src-prefix '$$SHELLCODE$$' --size-holder '$$99999$$' \
     --post-module cert-graft \
-    --post-module-config 0:donor=/tmp/mrt.exe \
-    --post-module pe-version-info \
-    --post-module-config 1:from_donor=/tmp/mrt.exe
+    --post-module-config 0:donor=/tmp/mrt.exe
 ```
 
-Either way, `pumpbin-cli generate -p loader.b1n -s sc.bin -t exe
---platform windows` runs the baked-in chain automatically.
-Explicit `--post`/`--post-arg` on `generate` **append** to it rather
-than replacing it.
+---
 
 ## Discovering options
 
-Mirrors NetExec's `--options` flag:
-
+```bash
+pumpbin-cli list-modules                       # ids and descriptions
+pumpbin-cli list-modules --options             # adds per-module arg schema
+pumpbin-cli list-modules --options --id <id>   # focus on one module
+pumpbin-cli list-modules --json                # machine-readable output
 ```
-pumpbin-cli list-modules                          # ids + descriptions only
-pumpbin-cli list-modules --options                # adds per-module arg schema
-pumpbin-cli list-modules --options --id <id>      # focus on one module
-```
 
-Modules surface their args from two sources:
-
-- **Built-ins**: declared via `Module::args() -> Vec<ArgSpec>` in the
-  trait impl. See `pumpbin/src/modules/post_build/pe_version_info.rs`
-  for an 8-arg example.
-- **External (drop-in)**: declared via `[[args]]` blocks in
-  `pumpbin-module.toml`. Each block has `key`, `type`, optional
-  `description`, optional `required`, optional `default`. Add as
-  many `[[args]]` blocks as your module accepts.
-
-Modules with no `args()` (or no `[[args]]`) print
-`(no documented args)` under `--options`.
+Built-ins declare their args via `Module::args() -> Vec<ArgSpec>`. External modules declare them via `[[args]]` blocks in the manifest.
 
 ---
 
-## Trust model — read this
+## Trust model
 
-Modules run as **subprocesses with the operator's full OS
-privileges**. There is no sandbox. A malicious module can read your
-files, hit the network, install persistence — same as any program
-you run from `bash`.
+Modules run as subprocesses with the operator's full OS privileges. There is no sandbox. A malicious module reads your files, hits the network, and installs persistence the same as any program you run.
 
 PumpBin's guarantees:
 
-- **Never executes** a module during discovery (only the TOML is read).
-- **Never auto-installs** modules from the network. The drop-in dir
-  is something *you* populate.
-- **Never silently shadows** a built-in (first match wins).
+- Never executes a module during discovery. Only the TOML is read.
+- Never auto-installs modules from the network. You populate the drop-in directory.
+- Never silently shadows a built-in. First match wins.
 
-Your job:
+Your responsibilities:
 
-- **Treat the drop-in dir like `~/.local/bin/`.** Only drop in
-  modules you trust the same way you'd trust any script you run.
-- **Inspect TOML + source/binary** before installing. The wire
-  protocol gives modules arbitrary I/O.
+- Treat the drop-in directory like `~/.local/bin/`. Only install modules you trust.
+- Inspect the TOML and source or binary before installing.
 
 ---
 
-## Protocol stability and versioning
+## Protocol stability
 
-`protocol = 1` is the current contract. PumpBin will refuse to
-dispatch to a module declaring a higher protocol than it speaks
-(forward compat: old hosts don't run new modules).
+`protocol = 1` is the current version. PumpBin refuses to dispatch to a module declaring a higher version than it speaks.
 
-When the protocol changes (rare):
-
-- Additive changes (new optional fields) don't bump the version.
-- Breaking changes bump to `protocol = 2`. Old `protocol = 1`
-  modules keep working — pumpbin maintains the dispatch path.
-- Eventually-old protocol versions get removed; PumpBin's
-  CHANGELOG announces the window.
-
-If your module pins `protocol = 1` and pumpbin v3.0 drops support,
-you'll get a clear error at discovery time. No silent breakage.
+Additive changes (new optional fields) do not bump the version. Breaking changes bump to `protocol = 2`. Old `protocol = 1` modules keep working until explicitly removed. The CHANGELOG announces removal windows in advance.
 
 ---
 
 ## Sharing your module
 
-There is **no central registry** yet (premature for the ecosystem
-size). Today the path is:
+There is no central registry yet. The current path:
 
-1. Push your module's directory to its own git repo.
-2. Add `README.md` with install + usage + safety notes.
-3. Add `LICENSE`.
-4. List it in your own project README; eventually we'll maintain
-   a community "modules in the wild" page that links to repos.
-
-Don't ship signed binaries (we don't verify signatures yet — see
-trust model). Operators install at their own risk; clear docs
-matter more than crypto.
+1. Push your module directory to its own git repo.
+2. Add `README.md` with install steps, usage, and safety notes.
+3. Add a `LICENSE` file.
+4. Link to it from your own project documentation.
