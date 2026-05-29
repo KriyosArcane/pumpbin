@@ -564,6 +564,7 @@ enum ModuleCommands {
     /// to `--output` (or stdout with `-`).
     Test {
         /// Module id. Looks up both built-in and drop-in registries.
+        #[arg(value_name = "ID")]
         id: String,
 
         /// Input payload path or `-` for stdin.
@@ -727,11 +728,18 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 } else {
                     println!("  Shellcode:    {shellcode}");
                 }
+                // Show full pipeline: encrypt hook → post-build chain
+                let encrypt_hook = plugin_obj.plugins().encrypt_shellcode();
                 let chain = plugin_obj.plugins.modules();
-                if chain.is_empty() {
+                if encrypt_hook.is_none() && chain.is_empty() {
                     println!("  Module chain: (none)");
                 } else {
-                    println!("  Module chain: {}", chain.join(" → "));
+                    let mut steps: Vec<String> = Vec::new();
+                    if let Some(enc) = encrypt_hook {
+                        steps.push(format!("{enc} (encrypt)"));
+                    }
+                    steps.extend(chain.iter().cloned());
+                    println!("  Module chain: {}", steps.join(" → "));
                 }
                 for (k, v) in &runtime_config {
                     println!("  Config:       {k} = {v}");
@@ -764,11 +772,14 @@ fn dispatch(cli: &Cli) -> Result<()> {
             )?;
 
             pumpbin::utils::atomic_write(&output_path, &bin)?;
+            let display_path = output_path
+                .canonicalize()
+                .unwrap_or_else(|_| output_path.clone());
             eprintln!(
                 "PB  {:<20}  {}  [+] wrote {}",
                 plugin_label,
                 target_label,
-                output_path.display()
+                display_path.display()
             );
 
             Ok(())
@@ -1219,11 +1230,14 @@ fn dispatch(cli: &Cli) -> Result<()> {
 
             pumpbin::utils::atomic_write(&output_path, &implant)
                 .with_context(|| format!("writing implant to '{}'", output_path.display()))?;
+            let display_path = output_path
+                .canonicalize()
+                .unwrap_or_else(|_| output_path.clone());
             eprintln!(
                 "PB  {:<20}  {}  [+] wrote {}",
                 loader_label,
                 target_label,
-                output_path.display()
+                display_path.display()
             );
             Ok(())
         }
