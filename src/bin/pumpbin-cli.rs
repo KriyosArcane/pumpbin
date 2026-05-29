@@ -1496,8 +1496,15 @@ fn dispatch(cli: &Cli) -> Result<()> {
                     pumpbin::modules::dispatch::upload_remote(id, &payload)?.into_bytes()
                 }
                 WireKind::PostBuild => {
+                    let before = payload.clone();
                     let mut buf = payload;
                     pumpbin::modules::dispatch::post_build(id, args, &mut buf)?;
+                    let changed = before.iter().zip(buf.iter()).filter(|(a, b)| a != b).count();
+                    eprintln!(
+                        "module '{id}' post-build: {} → {} bytes ({changed} bytes changed)",
+                        before.len(),
+                        buf.len()
+                    );
                     buf
                 }
             };
@@ -1506,6 +1513,9 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 std::io::stdout().write_all(&result)?;
             } else {
                 std::fs::write(output, &result)?;
+                if output != "-" {
+                    eprintln!("wrote {output}");
+                }
             }
             Ok(())
         }}, // end Commands::Module
@@ -2146,20 +2156,57 @@ RUST (recommended: pumpbin-cli new-loader handles this automatically)
 
   In build.rs:
     let mut buf = b"$$SHELLCODE$$".to_vec();
-    buf.extend(vec![0u8; 1_048_576]);   // 1 MiB capacity
+    buf.extend(std::iter::repeat(b'0').take(1_048_576)); // 1 MiB capacity
+    // WARNING: do NOT use b'\0' (null) for padding. Null bytes are placed in
+    // the BSS section which has no file representation — the marker will not
+    // appear in the compiled binary and pumpbin will fail to find it.
+    // Use any non-null byte: b'0', b'\x90', b'\xcc', etc.
     std::fs::write("shellcode.bin", buf).unwrap();
 
   In src/main.rs:
-    static SC: &[u8] = include_bytes!("../shellcode.bin");
-    const SZ: &str   = "$$99999$$";
-    let len = SZ.parse::<usize>().unwrap_or(0);
-    let shellcode = &SC[..len];
+    use std::hint::black_box;
+
+    // black_box + #[inline(never)] prevent the release optimizer from treating
+    // SC and SZ as dead code and eliminating them. Without these attributes,
+    // LLVM will detect that SZ.parse() returns Err at compile time (since
+    // "$$99999$$" is not a valid decimal), conclude that &SC[..0] is always
+    // the result, and eliminate SC entirely from the binary.
+    #[inline(never)]
+    fn shellcode_buf() -> &'static [u8] {{ black_box(include_bytes!("../shellcode.bin")) }}
+    #[inline(never)]
+    fn size_holder() -> &'static str {{ black_box("$$99999$$") }}
+
+    // In your loader function:
+    let len = size_holder().trim_matches('$').parse::<usize>().unwrap_or(0);
+    let shellcode = &shellcode_buf()[..len];
+
+  For AES-256-GCM encryption (via --encrypt-module aes-gcm), also add:
+    // These holders are stamped with a fresh random key+nonce per generate run.
+    #[inline(never)]
+    fn aes_key()   -> &'static [u8; 32] {{ black_box(b"$$KKKKKKKKKKKKKKKKKKKKKKKKKKKK$$") }}
+    #[inline(never)]
+    fn aes_nonce() -> &'static [u8; 12] {{ black_box(b"$$NNNNNNNN$$") }}
+
+  Then in Cargo.toml:
+    aes-gcm = {{ version = "0.10", default-features = false, features = ["aes", "alloc"] }}
+
+  And decrypt at runtime:
+    use aes_gcm::{{Aes256Gcm, KeyInit, aead::Aead, Key, Nonce}};
+    let key = Key::<Aes256Gcm>::from_slice(aes_key());
+    let nonce = Nonce::from_slice(aes_nonce());
+    let shellcode = Aes256Gcm::new(key).decrypt(nonce, &shellcode_buf()[..len]).unwrap();
+
+  For XOR encryption (via --encrypt-module xor), add this holder:
+    // The xor module stamps the single-byte key into the 7-byte '  XOR  ' slot.
+    #[inline(never)]
+    fn xor_key_holder() -> &'static [u8; 7] {{ black_box(b"  XOR  ") }}
+    // Read the key at runtime: xor_key_holder()[0]
 
 C / C++ (volatile prevents the optimizer from removing the region)
 
     volatile unsigned char sc[] =
         "$$SHELLCODE$$"
-        "\x00\x00\x00..."   // N zero bytes for capacity
+        "\x90\x90\x90..."   // N non-null bytes for capacity (NOT \x00 — see BSS note above)
     ;
     volatile char sz[] = "$$99999$$";
     size_t len = strtoul((char*)sz, NULL, 10);
@@ -2168,10 +2215,12 @@ VERIFY
 
   After building your loader, confirm the markers are present:
     pumpbin-cli inspect loader.exe
+  The verdict line will say "SUITABLE: ready for pumpbin-cli stamp" when
+  all required markers are found.
 
 STAMP
 
-    pumpbin-cli stamp --loader loader.exe --shellcode payload.bin
+    pumpbin-cli stamp loader.exe payload.bin
 "#
     );
 }
