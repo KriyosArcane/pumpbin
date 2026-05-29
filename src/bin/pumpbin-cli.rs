@@ -371,10 +371,18 @@ enum Commands {
     /// supported platforms, embedded modules (with sha256 + declared
     /// runtime policy), and the config schema each module exports.
     ///
+    /// Also accepts a raw loader binary (PE/ELF/Mach-O). When given a
+    /// non-.b1n file, reports whether the PumpBin shellcode markers are
+    /// present, the measured placeholder capacity, and whether the binary
+    /// is ready for `pumpbin-cli stamp`.
+    ///
     /// With `--diff <other.b1n>`, prints a human-readable diff of what
     /// changed between two packs.
+    ///
+    /// `--help-markers` prints a short reference on how to embed markers
+    /// in any language without opening the docs.
     Inspect {
-        /// Path to the .b1n plugin pack to inspect.
+        /// Path to a .b1n plugin pack or a compiled loader binary.
         binary: PathBuf,
         /// Optional second .b1n to diff against the first.
         #[arg(long, value_hint = clap::ValueHint::FilePath)]
@@ -383,6 +391,10 @@ enum Commands {
         /// Useful for quick scanning without the full report.
         #[arg(long)]
         brief: bool,
+        /// Print a short guide on how to embed PumpBin placeholder
+        /// markers into a loader in any language, then exit.
+        #[arg(long)]
+        help_markers: bool,
     },
 
     /// Convert a raw shellcode file to a different representation
@@ -1048,7 +1060,35 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 module_config: BTreeMap::new(),
             }
             .assemble()
-            .with_context(|| format!("assembling .b1n from '{}'", loader.display()))?;
+            .map_err(|e| {
+                // Give the operator a clear, actionable message when the
+                // placeholder marker is not found in the loader binary.
+                // The generic PB-E0001 message does not explain what to do.
+                if e.chain()
+                    .any(|c| c.to_string().contains("not found in binary"))
+                {
+                    anyhow!(
+                        "{loader} does not contain the shellcode marker \"{src_prefix}\".\n\n\
+                         The loader must include this exact byte sequence at compile time \
+                         so PumpBin knows where to write your shellcode.\n\n\
+                         Options:\n  \
+                         1. Build a marker-ready loader:  pumpbin-cli new-loader myloader --platform {platform_hint} --pack\n  \
+                         2. Embed the marker manually:    see pumpbin-cli inspect --help-markers\n  \
+                         3. Verify an existing binary:    pumpbin-cli inspect {loader}",
+                        loader = loader.display(),
+                        src_prefix = src_prefix,
+                        platform_hint = platform
+                            .as_deref()
+                            .unwrap_or(match parsed_platform {
+                                Platform::Windows => "windows",
+                                Platform::Linux => "linux",
+                                Platform::Darwin => "darwin",
+                            }),
+                    )
+                } else {
+                    e.context(format!("assembling .b1n from '{}'", loader.display()))
+                }
+            })?;
 
             if let Some(b1n_path) = save_b1n {
                 pumpbin::utils::atomic_write(b1n_path, &b1n_bytes)
@@ -1126,7 +1166,23 @@ fn dispatch(cli: &Cli) -> Result<()> {
             binary,
             diff,
             brief,
+            help_markers,
         } => {
+            if *help_markers {
+                print_help_markers();
+                return Ok(());
+            }
+
+            // Auto-detect: if this looks like a raw binary (not a .b1n),
+            // run the loader marker scan instead of the .b1n inspector.
+            let bytes = std::fs::read(binary)
+                .with_context(|| format!("failed to read '{}'", binary.display()))?;
+            let is_b1n = pumpbin::plugin::Plugin::decode_from_slice(&bytes).is_ok();
+            if !is_b1n {
+                inspect_loader_binary(binary, &bytes, cli.json);
+                return Ok(());
+            }
+
             let left = pumpbin::inspect::inspect(binary)?;
             if *brief {
                 // One-liner: name, populated slots, module count.
@@ -1883,6 +1939,147 @@ fn resolve_plugin_path(plugin: &Path) -> Result<PathBuf> {
     } else {
         Ok(plugin.to_path_buf())
     }
+}
+
+/// Inspect a raw loader binary for PumpBin shellcode markers.
+/// Called by `inspect` when the path is not a recognisable .b1n.
+fn inspect_loader_binary(path: &Path, bytes: &[u8], json: bool) {
+    use pumpbin::scaffold::{DEFAULT_PREFIX, DEFAULT_SIZE_HOLDER};
+
+    let file_size = bytes.len();
+    let platform = detect_platform_from_binary(bytes)
+        .map(|p| p.to_string().to_lowercase())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    // Scan for the shellcode prefix.
+    let prefix = DEFAULT_PREFIX.as_bytes();
+    let size_holder = DEFAULT_SIZE_HOLDER.as_bytes();
+
+    let prefix_offset = memchr::memmem::find(bytes, prefix);
+    let size_holder_offset = memchr::memmem::find(bytes, size_holder);
+
+    // Measure padding capacity: count constant bytes after the prefix.
+    let capacity = prefix_offset.map(|off| {
+        let start = off + prefix.len();
+        if start >= bytes.len() {
+            return 0;
+        }
+        let pad = bytes[start];
+        bytes[start..]
+            .iter()
+            .take_while(|&&b| b == pad)
+            .count()
+    });
+
+    let marker_found = prefix_offset.is_some();
+    let holder_found = size_holder_offset.is_some();
+    let suitable = marker_found && holder_found;
+
+    if json {
+        #[derive(serde::Serialize)]
+        struct LoaderReport {
+            file: String,
+            file_size: usize,
+            platform: String,
+            shellcode_marker: Option<usize>,
+            size_holder: Option<usize>,
+            capacity_bytes: Option<usize>,
+            suitable_for_stamp: bool,
+        }
+        emit_json_ok(LoaderReport {
+            file: path.display().to_string(),
+            file_size,
+            platform,
+            shellcode_marker: prefix_offset,
+            size_holder: size_holder_offset,
+            capacity_bytes: capacity,
+            suitable_for_stamp: suitable,
+        });
+        return;
+    }
+
+    println!("file:      {} ({} bytes)", path.display(), file_size);
+    println!("format:    {}", platform);
+    println!();
+    println!("markers:");
+    match prefix_offset {
+        Some(off) => println!(
+            "  shellcode    {:?}   offset 0x{:X}",
+            DEFAULT_PREFIX, off
+        ),
+        None => println!("  shellcode    {:?}   NOT FOUND", DEFAULT_PREFIX),
+    }
+    match size_holder_offset {
+        Some(off) => println!(
+            "  size-holder  {:?}   offset 0x{:X}",
+            DEFAULT_SIZE_HOLDER, off
+        ),
+        None => println!("  size-holder  {:?}   NOT FOUND", DEFAULT_SIZE_HOLDER),
+    }
+    println!();
+    match capacity {
+        Some(n) if n > 0 => println!("capacity:  {} bytes ({} KiB)", n, n / 1024),
+        _ => println!("capacity:  unknown"),
+    }
+    println!();
+    if suitable {
+        println!("verdict:   SUITABLE — ready for pumpbin-cli stamp");
+    } else {
+        println!("verdict:   NOT SUITABLE — add markers before stamping");
+        println!("           pumpbin-cli inspect --help-markers");
+    }
+}
+
+/// Print a concise, language-agnostic guide on how to embed PumpBin
+/// markers into a loader. Called by `inspect --help-markers`.
+fn print_help_markers() {
+    println!(
+        r#"PUMPBIN MARKER REFERENCE
+
+PumpBin locates shellcode in a compiled binary by scanning for a known
+byte sequence (the marker). Two markers must be present:
+
+  SHELLCODE MARKER   $$SHELLCODE$$  (13 bytes)
+    Marks the start of the shellcode region.
+    Follow it immediately with N bytes of constant padding — the loader
+    will execute the shellcode placed here by pumpbin-cli stamp.
+
+  SIZE HOLDER        $$99999$$      (9 bytes)
+    Replaced at stamp time with the shellcode length as a decimal string.
+    Your loader reads this at runtime to get the byte count.
+
+RUST (recommended — pumpbin-cli new-loader handles this automatically)
+
+  In build.rs:
+    let mut buf = b"$$SHELLCODE$$".to_vec();
+    buf.extend(vec![0u8; 1_048_576]);   // 1 MiB capacity
+    std::fs::write("shellcode.bin", buf).unwrap();
+
+  In src/main.rs:
+    static SC: &[u8] = include_bytes!("../shellcode.bin");
+    const SZ: &str   = "$$99999$$";
+    let len = SZ.parse::<usize>().unwrap_or(0);
+    let shellcode = &SC[..len];
+
+C / C++ (volatile prevents the optimizer from removing the region)
+
+    volatile unsigned char sc[] =
+        "$$SHELLCODE$$"
+        "\x00\x00\x00..."   // N zero bytes for capacity
+    ;
+    volatile char sz[] = "$$99999$$";
+    size_t len = strtoul((char*)sz, NULL, 10);
+
+VERIFY
+
+  After building your loader, confirm the markers are present:
+    pumpbin-cli inspect loader.exe
+
+STAMP
+
+    pumpbin-cli stamp --loader loader.exe --shellcode payload.bin
+"#
+    );
 }
 
 fn default_scaffold_platform() -> String {
