@@ -1,15 +1,15 @@
 [package]
 name = "pumpbin"
 version = "2.0.0"
-authors = ["b1n <b1n@b1n.io>"]
+authors = ["KriyosArcane"]
 edition = "2021"
-description = "PumpBin is an Implant Generation Platform."
-documentation = "https://pumpbin.b1n.io"
+description = "Implant build pipeline — stamp shellcode into a loader, apply post-build transforms, get an implant."
 readme = "README.md"
-homepage = "https://b1n.io"
-repository = "https://github.com/pumpbin/pumpbin"
+repository = "https://github.com/KriyosArcane/pumpbin"
 license = "MIT"
 build = "build.rs"
+keywords = ["implant", "shellcode", "loader", "red-team", "cli"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 rfd = { version = "0.14", optional = true }

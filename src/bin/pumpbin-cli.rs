@@ -1,15 +1,11 @@
-#![allow(unused)]
-
 use anyhow::{anyhow, bail, Context, Result};
 use base64::{engine::general_purpose, Engine as _};
 use chrono::Local;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{generate, Shell};
 use dirs::home_dir;
-use pumpbin::plugin::{Plugin, PluginInfo, PluginReplace};
-use pumpbin::{
-    get_plugin_config_schema, BinaryType, Platform, PluginConfigField, ShellcodeSaveType,
-};
+use pumpbin::plugin::Plugin;
+use pumpbin::{BinaryType, Platform, PluginConfigField, ShellcodeSaveType};
 use std::collections::BTreeMap;
 use std::ops::Not;
 use std::path::{Path, PathBuf};
@@ -570,22 +566,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
             let explicit_platform = platform.as_deref().map(parse_platform).transpose()?;
             let explicit_binary_type = binary_type.as_deref().map(parse_binary_type).transpose()?;
 
-            // If -p points at a directory, resolve to <dir>/<name>.b1n using
-            // the [package.metadata.pumpbin] block in that crate's Cargo.toml.
-            let plugin_path: PathBuf = if plugin.is_dir() {
-                let (_, md) = pumpbin::pack::read_loader_metadata(plugin)?;
-                let b1n = plugin.join(format!("{}.b1n", md.name));
-                if !b1n.exists() {
-                    bail!(
-                        "no .b1n at {}; run `pumpbin-cli pack {}` first",
-                        b1n.display(),
-                        plugin.display()
-                    );
-                }
-                b1n
-            } else {
-                plugin.clone()
-            };
+            let plugin_path = resolve_plugin_path(plugin)?;
 
             tracing::info!(plugin = ?plugin_path, "Loading plugin");
             let plugin_buf = std::fs::read(&plugin_path)?;
@@ -719,20 +700,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
             let explicit_platform = platform.as_deref().map(parse_platform).transpose()?;
             let explicit_binary_type = binary_type.as_deref().map(parse_binary_type).transpose()?;
 
-            let plugin_path: PathBuf = if plugin.is_dir() {
-                let (_, md) = pumpbin::pack::read_loader_metadata(plugin)?;
-                let b1n = plugin.join(format!("{}.b1n", md.name));
-                if !b1n.exists() {
-                    bail!(
-                        "no .b1n at {}; run `pumpbin-cli pack {}` first",
-                        b1n.display(),
-                        plugin.display()
-                    );
-                }
-                b1n
-            } else {
-                plugin.clone()
-            };
+            let plugin_path = resolve_plugin_path(plugin)?;
 
             tracing::info!(plugin = ?plugin_path, "Loading plugin");
             let plugin_buf = std::fs::read(&plugin_path)?;
@@ -1716,6 +1684,26 @@ fn collect_pe_paths(
         }
     }
     Ok(())
+}
+
+/// If `plugin` is a directory, resolve to `<dir>/<name>.b1n` using
+/// `[package.metadata.pumpbin]` in that crate's Cargo.toml.
+/// Returns the path unchanged when it's already a file.
+fn resolve_plugin_path(plugin: &Path) -> Result<PathBuf> {
+    if plugin.is_dir() {
+        let (_, md) = pumpbin::pack::read_loader_metadata(plugin)?;
+        let b1n = plugin.join(format!("{}.b1n", md.name));
+        if !b1n.exists() {
+            bail!(
+                "no .b1n at {}; run `pumpbin-cli pack {}` first",
+                b1n.display(),
+                plugin.display()
+            );
+        }
+        Ok(b1n)
+    } else {
+        Ok(plugin.to_path_buf())
+    }
 }
 
 fn default_scaffold_platform() -> String {

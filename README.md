@@ -15,104 +15,140 @@
   <img src="logo/pumpbin-256x256.png" height="30%" width="30%">
 </p>
 
-Implant build pipeline. Write a loader once, package it as a `.b1n`,
-stamp shellcode into it from a CLI. Not a C2, not a shellcode
-generator — fits between them.
+PumpBin is an implant build pipeline. You write a shellcode loader once,
+package it as a `.b1n` plugin pack, then stamp any shellcode into it and
+apply post-build transforms — signature grafting, YARA-pattern patching,
+version-info cloning — in a single command. Not a C2, not a shellcode
+generator. It fits between them.
 
 ## Quick start
 
 ```bash
-# 1. Scaffold a Windows loader and immediately build + pack it
+# 1. Scaffold a loader crate and build it immediately
 pumpbin-cli new-loader myloader --platform windows --pack
 
-# 2. Preview what generate will do before committing
+# 2. Preview what generate will do before writing anything
 pumpbin-cli generate -p myloader -s payload.bin --dry-run
 
-# 3. Stamp your shellcode — target auto-detected from the .b1n
+# 3. Stamp shellcode — target is auto-detected from the .b1n
 pumpbin-cli generate -p myloader -s payload.bin
 ```
 
 `-p myloader` resolves to `myloader/myloader.b1n` automatically.
 Output defaults to `myloader.exe` in the current directory.
 
-### Going further
+### Post-build transforms
 
-Post-build transforms — sign with a stolen cert, patch out
-YARA-matched bytes, clone version info from a donor PE — go on
-`--post`. Two forms:
+Add transforms after stamping. Two forms — pick whichever is more readable:
 
 ```bash
-# Short form: id and args in one flag
+# Short form: module id + args in one flag
 pumpbin-cli generate -p myloader -s payload.bin \
     --post cert-graft:donor=/path/to/signed.exe \
     --post byte-patch:patches=4831d2:4833d2
 
-# Long form (backwards-compat)
+# Long form (backwards-compatible)
 pumpbin-cli generate -p myloader -s payload.bin \
     --post cert-graft --post-arg cert-graft=donor=/path/to/signed.exe
 ```
 
-`pumpbin-cli list-modules` (add `--json` for machine-readable output)
-shows what's installed. [MODULES.md](MODULES.md) explains how to write
-your own.
+Bake a default chain into the `.b1n` once so operators never need to
+pass `--post` at all — see [MODULES.md](MODULES.md).
 
-`pumpbin-cli check implant.exe --yara-rules <dir>` does a pre-flight
-local YARA scan so you don't burn a sandbox round-trip on a static hit.
+### Pre-flight scan
 
-## CLI
-
-```
-generate [--dry-run]           stamp shellcode; preview without writing
-batch / build                  bulk stamping; profile-driven builds
-new-loader [--pack] / pack     scaffold + build + assemble a .b1n
-create-b1n / inspect [--brief] ad-hoc pack; one-line or full report
-verify                         authenticode + checksum sanity check
-list-modules [--json]          installed modules; machine-readable output
-module-test [--debug]          exercise a module, dump wire frames
-list-donors                    find PEs with embedded Authenticode sigs
-check --yara-rules             pre-flight static scan before deploy
-convert / completions          shellcode reformat / shell completion
+```bash
+pumpbin-cli check implant.exe --yara-rules /path/to/rules/
 ```
 
-## Modules
+Shells out to `yara` and exits non-zero with rule names on a hit. Catch
+static detections before burning a sandbox round-trip.
 
-Five kinds: `encrypt`, `format-encrypted`, `format-url`,
-`upload-remote`, `post-build`. Built-in or drop-in
-(`~/.config/pumpbin/modules/<id>/` with a TOML manifest + executable
-speaking a length-prefixed JSON wire protocol). Built-ins shadow
-externals on id collision.
+## How it works
 
-Shipped built-ins:
+```
+shellcode.bin ──→ encrypt module ──→ encrypted blob ──┐
+                                                        │
+loader.b1n  ────→ stamp placeholder ───────────────────→ implant bytes
+                                                        │
+                  post-build modules ←──────────────────┘
+                  (cert-graft, byte-patch, pe-version-info...)
+                                                        │
+                                                 implant.exe
+```
 
-| kind | id | what |
+A `.b1n` bundles the loader binary, the placeholder markers, and an
+optional default transform chain. Researchers ship the `.b1n`;
+operators run `generate`. The transform chain is composable and
+language-agnostic — any executable that speaks a simple
+length-prefixed JSON wire protocol qualifies as a module.
+
+## CLI reference
+
+| Command | What it does |
+|---|---|
+| `generate` | Stamp shellcode; `--dry-run` previews without writing |
+| `batch` | Stamp a whole directory of shellcodes |
+| `build` | Profile-driven build from `pumpbin.toml` |
+| `new-loader` | Scaffold a Rust loader crate (`--pack` builds it immediately) |
+| `pack` | Build a scaffolded crate and produce a `.b1n` |
+| `create-b1n` | Ad-hoc: pack any pre-built binary into a `.b1n` |
+| `inspect` | Inspect a `.b1n`; `--brief` for a one-liner, `--diff` to compare two |
+| `verify` | Authenticode + checksum + marker sanity check |
+| `list-modules` | Show installed modules; `--json` for scripting |
+| `module-test` | Exercise a single module; `--debug` dumps wire frames |
+| `list-donors` | Scan a dir for PEs with embedded (not catalog-only) signatures |
+| `check` | Pre-flight YARA scan before deploy |
+| `convert` | Reformat shellcode bytes (hex / C array / Python / base64) |
+| `completions` | Emit shell completion script |
+
+## Built-in modules
+
+Modules are composable post-build transforms. Drop-in modules live
+in `~/.config/pumpbin/modules/<id>/` and need only a TOML manifest
+and an executable — any language, no recompile, no registration.
+
+**Shipped built-ins:**
+
+| Kind | ID | What it does |
 |---|---|---|
-| encrypt | `aes-gcm` | AES-256-GCM, random key/nonce per build |
-| encrypt | `xor` | single-byte XOR |
-| format-url | `url-passthrough` | embeds URL as-is |
-| post-build | `pe-version-info` | patch VS_VERSION_INFO; supports `from_donor=<path>` |
-| post-build | `byte-patch` | in-place hex substitutions, equal-length pairs |
-| post-build | `cert-graft` | graft a donor PE's WIN_CERTIFICATE blob |
+| encrypt | `aes-gcm` | AES-256-GCM with random key/nonce per build |
+| encrypt | `xor` | Single-byte XOR with random non-zero key |
+| format-url | `url-passthrough` | Embeds URL as-is (remote-mode builds) |
+| post-build | `pe-version-info` | Patch VS_VERSION_INFO string fields; `from_donor=<path>` clones all eight fields from a donor PE in one arg |
+| post-build | `byte-patch` | In-place equal-length hex substitutions — useful for breaking specific YARA byte patterns without changing behavior |
+| post-build | `cert-graft` | Graft a donor PE's WIN_CERTIFICATE blob; defeats "no signature" string checks. For a full Authenticode + `.rsrc` clone, use the external [`trustmebro`](https://github.com/KriyosArcane/TrustMeBro-Rust) module |
 
-Full module authoring spec: **[MODULES.md](MODULES.md)**.
+See [MODULES.md](MODULES.md) for the full authoring spec: wire protocol,
+manifest format, Python and Rust examples.
 
 ## Building
 
 ```bash
 git clone https://github.com/KriyosArcane/pumpbin.git
 cd pumpbin
-cargo build --release --bin pumpbin-cli      # CLI
+cargo build --release --bin pumpbin-cli
+```
 
-# GUI (Linux deps: libwayland-dev libxkbcommon-dev libgtk-3-dev libssl-dev)
-cargo build --release --bin pumpbin
+The CLI has no system dependencies. The GUI adds Iced/wgpu:
+
+```bash
+# Linux GUI deps
+sudo apt-get install libwayland-dev libxkbcommon-dev libgtk-3-dev libssl-dev
+cargo build --release --bin pumpbin --features gui
 ```
 
 ## CI
 
-Library + CLI tested on Linux/macOS/Windows. GUI binary builds on
-Linux only (Iced/wgpu deps are flaky on hosted macOS/Windows runners).
+All tests run on Linux, macOS, and Windows. The GUI binary is
+Linux-only in CI (Iced/wgpu deps are unreliable on hosted
+macOS/Windows runners; the library they delegate to is tested
+cross-platform).
+
 v2.0 was end-to-end verified on macOS Ventura 13.7.8 under
-`dockur/macos`: build, scaffold, pack, stamp, reverse-shell callback
-all green; 40/40 lib tests pass natively on Darwin.
+`dockur/macos` (QEMU/KVM): scaffold → pack → stamp → reverse-shell
+callback all green; 53 lib tests + 116 integration tests pass natively
+on Darwin.
 
 ## License
 
@@ -120,9 +156,10 @@ MIT — see [LICENSE](LICENSE).
 
 ## Status
 
-v2.0 is current. The pre-2.0 Extism/WASM plugin model is retired in
-favor of statically-linked Rust modules + a language-agnostic drop-in
-protocol. `.b1n` packs built since v1.0.0 still load. Active
-development on `feature/*` branches; release history in
-[CHANGELOG.md](CHANGELOG.md). Based on the original
-[b1n](https://github.com/B3nd1k/b1n) project.
+v2.0 is the current release. The pre-2.0 Extism/WASM plugin model is
+retired in favor of statically-linked Rust modules + a language-agnostic
+drop-in wire protocol. All `.b1n` packs built since v1.0.0 continue to
+load.
+
+Based on the original [b1n](https://github.com/B3nd1k/b1n) project.
+Release history: [CHANGELOG.md](CHANGELOG.md).

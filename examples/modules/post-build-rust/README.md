@@ -52,7 +52,7 @@ pumpbin-cli generate -p loader.b1n -s sc.bin --platform linux -t exe \
 your module as a stand-alone repo, switch it to a git dep:
 
 ```toml
-pumpbin-module-sdk = { git = "https://github.com/pumpbin/pumpbin.git", subpath = "module-sdk" }
+pumpbin-module-sdk = { git = "https://github.com/KriyosArcane/pumpbin.git", subpath = "module-sdk" }
 ```
 
 (Or pin to a crates.io version when that exists.)

@@ -52,4 +52,4 @@ followed by that many bytes. Per invocation:
 - stdout frame 1 → mutated implant bytes
 - exit code      → 0 ok, non-zero failure
 
-Full spec: see [pumpbin/MODULES.md](../../../MODULES.md).
+Full spec: see [MODULES.md](../../../MODULES.md) in the repo root.
