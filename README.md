@@ -21,7 +21,7 @@ It is not a C2. It is not a shellcode generator. It sits between them.
 
 ## Quick start
 
-### Starting point A — you have a compiled loader binary
+### Starting point A: you have a compiled loader binary
 
 ```
 $ pumpbin-cli stamp loader.exe payload.bin
@@ -38,7 +38,7 @@ $ pumpbin-cli stamp loader.exe payload.bin \
     --output implant.exe
 ```
 
-### Starting point B — you are writing the loader
+### Starting point B: you are writing the loader
 
 ```
 $ pumpbin-cli new-loader myloader --platform windows --pack
@@ -164,7 +164,7 @@ post_build:
         `all` (replace every occurrence) or `first` (replace only first)
 ```
 
-Drop-in modules go in `~/.config/pumpbin/modules/<id>/` — a TOML manifest and an executable, any language. See [MODULES.md](MODULES.md).
+Drop-in modules go in `~/.config/pumpbin/modules/<id>/`. A TOML manifest and an executable in any language. See [MODULES.md](MODULES.md).
 
 ## inspect
 
