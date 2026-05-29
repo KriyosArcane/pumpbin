@@ -229,6 +229,14 @@ enum Commands {
         #[arg(long, default_value = "$$99999$$")]
         size_holder: String,
 
+        /// Encryption module to bake in (runs BEFORE shellcode is stamped).
+        /// Encrypts the shellcode and stamps key/nonce holders into the binary.
+        /// Use an `encrypt` kind module: `aes-gcm` or `xor`.
+        /// Run `pumpbin-cli module list` to see available ids.
+        /// Distinct from `--post` (which runs AFTER stamping).
+        #[arg(long = "encrypt-module", value_name = "ID")]
+        encrypt_module: Option<String>,
+
         /// Post-build module to bake into this .b1n.
         /// Accepts `--post <id>` or `--post <id>:<k=v,k=v>`.
         #[arg(long = "post", value_name = "ID[:K=V,K=V]")]
@@ -238,11 +246,6 @@ enum Commands {
         /// Max placeholder region size (auto-measured from template if omitted).
         #[arg(long, help_heading = "Advanced")]
         max_len: Option<u64>,
-
-        /// Native module id to attach as the primary hook.
-        /// Use `pumpbin-cli module list` to see available ids.
-        #[arg(long, help_heading = "Advanced")]
-        module: Option<String>,
 
         /// Per-post-module config: IDX:KEY=VALUE (index matches --post order).
         #[arg(long = "post-config", value_name = "IDX:KEY=VALUE", help_heading = "Advanced")]
@@ -975,7 +978,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
             marker,
             size_holder,
             max_len,
-            module,
+            encrypt_module,
             post_modules,
             post_module_config,
             module_config,
@@ -983,6 +986,22 @@ fn dispatch(cli: &Cli) -> Result<()> {
             let parsed_platform = parse_platform(platform)?;
             let parsed_binary_type = parse_binary_type(binary_type)?;
             let parsed_save_type = parse_save_type(save_type)?;
+
+            // Validate that --encrypt-module is actually an encrypt-kind module.
+            if let Some(id) = encrypt_module.as_deref() {
+                let known: Vec<&str> = pumpbin::modules::encrypt_modules()
+                    .iter()
+                    .map(|m| m.id())
+                    .collect();
+                if !known.contains(&id) {
+                    bail!(
+                        "--encrypt-module '{id}' is not an encrypt module. \
+                         Available encrypt modules: {}. \
+                         For post-build transforms use --post instead.",
+                        known.join(", ")
+                    );
+                }
+            }
 
             let template_bytes = std::fs::read(template).with_context(|| {
                 format!("failed to read template binary: {}", template.display())
@@ -1017,7 +1036,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 src_prefix: marker.clone(),
                 size_holder: size_holder.clone(),
                 max_len_override: *max_len,
-                primary_module: module.clone(),
+                primary_module: encrypt_module.clone(),
                 post_modules: resolved_post_modules,
                 module_config: cfg,
             }

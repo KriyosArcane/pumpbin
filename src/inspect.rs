@@ -32,6 +32,13 @@ pub struct InspectReport {
     pub max_len: usize,
     pub save_type: String,
     pub platforms: Vec<PlatformReport>,
+    /// Pipeline hooks: encrypt, format-encrypted, format-url, upload-remote.
+    /// Each is Some(module_id) when wired, None when not set.
+    pub encrypt_module: Option<String>,
+    pub format_encrypted_module: Option<String>,
+    pub format_url_module: Option<String>,
+    pub upload_remote_module: Option<String>,
+    /// Post-build modules (run after shellcode injection, in order).
     pub modules: Vec<ModuleReport>,
     pub legacy_module_count: usize,
 }
@@ -101,6 +108,16 @@ pub fn inspect(path: impl AsRef<Path>) -> anyhow::Result<InspectReport> {
         max_len: plugin.replace().max_len(),
         save_type: format!("{:?}", plugin.save_type()),
         platforms,
+        encrypt_module: plugin.plugins().encrypt_shellcode().map(|s| s.to_string()),
+        format_encrypted_module: plugin
+            .plugins()
+            .format_encrypted_shellcode()
+            .map(|s| s.to_string()),
+        format_url_module: plugin.plugins().format_url_remote().map(|s| s.to_string()),
+        upload_remote_module: plugin
+            .plugins()
+            .upload_final_shellcode_remote()
+            .map(|s| s.to_string()),
         modules,
         legacy_module_count,
     })
@@ -169,6 +186,38 @@ pub fn render_text(report: &InspectReport) -> String {
     if !report.description.is_empty() {
         let _ = writeln!(s, "Description: {}", report.description);
     }
+
+    // Pipeline hooks — show all four slots, mark unset ones explicitly.
+    let _ = writeln!(s, "\nPipeline hooks:");
+    let _ = writeln!(
+        s,
+        "  encrypt:        {}",
+        report
+            .encrypt_module
+            .as_deref()
+            .unwrap_or("<none>")
+    );
+    let _ = writeln!(
+        s,
+        "  format-encrypt: {}",
+        report
+            .format_encrypted_module
+            .as_deref()
+            .unwrap_or("<none>")
+    );
+    let _ = writeln!(
+        s,
+        "  format-url:     {}",
+        report.format_url_module.as_deref().unwrap_or("<none>")
+    );
+    let _ = writeln!(
+        s,
+        "  upload-remote:  {}",
+        report
+            .upload_remote_module
+            .as_deref()
+            .unwrap_or("<none>")
+    );
 
     let _ = writeln!(s, "\nPlatforms ({}):", report.platforms.len());
     for p in &report.platforms {
