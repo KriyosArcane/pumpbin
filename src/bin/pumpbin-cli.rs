@@ -111,56 +111,47 @@ impl From<CompletionShell> for Shell {
 enum Commands {
     /// Generate an implant from a plugin and shellcode
     Generate {
-        /// Path to the PumpBin plugin (.b1n)
+        /// Path to the .b1n plugin pack (or a crate directory containing
+        /// a packed .b1n).
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         plugin: PathBuf,
 
-        /// Path to the shellcode (.bin) or a remote URL
+        /// Shellcode file (.bin) or remote URL.
         #[arg(short, long, value_hint = clap::ValueHint::AnyPath)]
         shellcode: String,
 
-        /// Target platform (windows, linux, darwin). Auto-detected from
-        /// the .b1n if omitted: if exactly one slot is populated it's
-        /// picked; otherwise falls back to windows preference.
-        #[arg(long)]
-        platform: Option<String>,
-
-        /// Target binary type (exe, lib). Same auto-detect behavior as
-        /// `--platform`; the two filters compose.
-        #[arg(short = 't', long = "type")]
-        binary_type: Option<String>,
-
-        /// Output file path (optional)
+        /// Output file path.
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: Option<PathBuf>,
 
-        /// Override module config key-values (repeatable), e.g. --module-config padding_mb=8
+        /// Post-build module to apply. Repeat to chain multiple.
+        /// Plain id: `--post byte-patch`
+        /// With args: `--post byte-patch:patches=4831d2:4833d2,mode=all`
+        #[arg(long = "post", value_name = "ID[:K=V,K=V]")]
+        post: Vec<String>,
+
+        /// Preview what would be generated without writing anything.
+        #[arg(long)]
+        dry_run: bool,
+
+        // --- Advanced ---
+        /// Target platform (windows, linux, darwin). Auto-detected from
+        /// the .b1n if omitted.
+        #[arg(long, help_heading = "Advanced")]
+        platform: Option<String>,
+
+        /// Target binary type (exe, lib). Auto-detected from the .b1n.
+        #[arg(short = 't', long = "type", help_heading = "Advanced")]
+        binary_type: Option<String>,
+
+        /// Override module config key-values (repeatable).
         #[arg(
             long = "module-config",
             alias = "plugin-config",
-            value_name = "KEY=VALUE"
+            value_name = "KEY=VALUE",
+            help_heading = "Advanced"
         )]
         module_config: Vec<String>,
-
-        /// Append a post-build module to the chain. Two forms accepted:
-        ///   --post <id>              plain module id
-        ///   --post <id>:<k=v;k=v>   module id with inline args (no --post-arg needed)
-        /// Order matters — modules run in the order given. Repeat to chain multiple.
-        #[arg(long = "post", value_name = "ID[:K=V;K=V]")]
-        post: Vec<String>,
-
-        /// Per-module args for the post chain, formatted as
-        /// `<id>=<k=v[;k=v...]>`. The right-hand side is forwarded
-        /// to the module's `apply(args, ...)`. Repeat the flag if
-        /// you need args for several modules.
-        #[arg(long = "post-arg", value_name = "ID=K=V")]
-        post_arg: Vec<String>,
-
-        /// Print what would be generated — plugin, target, output path,
-        /// shellcode size, module chain, resolved config — without
-        /// actually running the modules or writing a file.
-        #[arg(long)]
-        dry_run: bool,
     },
 
     /// Generate multiple implants from a directory of shellcodes
@@ -230,42 +221,40 @@ enum Commands {
         #[arg(short = 't', long = "type")]
         binary_type: String,
 
-        /// Save type (local or remote)
-        #[arg(long, default_value = "local")]
-        save_type: String,
-
-        /// Shellcode placeholder bytes
+        /// Shellcode placeholder marker bytes.
         #[arg(long, default_value = "$$SHELLCODE$$")]
-        src_prefix: String,
+        marker: String,
 
-        /// Size placeholder bytes (used for local save type)
+        /// Size placeholder bytes (local save type).
         #[arg(long, default_value = "$$99999$$")]
         size_holder: String,
 
-        /// Max placeholder region size. If omitted, PumpBin measures
-        /// the contiguous padding run after `src_prefix` in the template
-        /// and uses that as the capacity. The pre-1.5.x default of 4096
-        /// bytes was a wrong-by-default value for most loaders (which
-        /// allocate 1 MiB+ of placeholder room).
-        #[arg(long)]
-        max_len: Option<u64>,
-
-        /// Native module id to attach as the primary hook. Use
-        /// `pumpbin-cli list-modules` to see available ids.
-        #[arg(long)]
-        module: Option<String>,
-
-        /// Additional post-build module ids to chain in order.
-        #[arg(long = "post-module")]
+        /// Post-build module to bake into this .b1n.
+        /// Accepts `--post <id>` or `--post <id>:<k=v,k=v>`.
+        #[arg(long = "post", value_name = "ID[:K=V,K=V]")]
         post_modules: Vec<String>,
 
-        /// Per-module config block entries formatted as <index>:KEY=VALUE
-        #[arg(long = "post-module-config", value_name = "IDX:KEY=VALUE")]
+        // --- Advanced ---
+        /// Max placeholder region size (auto-measured from template if omitted).
+        #[arg(long, help_heading = "Advanced")]
+        max_len: Option<u64>,
+
+        /// Native module id to attach as the primary hook.
+        /// Use `pumpbin-cli module list` to see available ids.
+        #[arg(long, help_heading = "Advanced")]
+        module: Option<String>,
+
+        /// Per-post-module config: IDX:KEY=VALUE (index matches --post order).
+        #[arg(long = "post-config", value_name = "IDX:KEY=VALUE", help_heading = "Advanced")]
         post_module_config: Vec<String>,
 
-        /// Base module config key-values (repeatable), e.g. --module-config padding_mb=8
-        #[arg(long = "module-config", value_name = "KEY=VALUE")]
+        /// Base module config key-values.
+        #[arg(long = "module-config", value_name = "KEY=VALUE", help_heading = "Advanced")]
         module_config: Vec<String>,
+
+        /// Save type (local or remote).
+        #[arg(long, default_value = "local", help_heading = "Advanced")]
+        save_type: String,
     },
 
     /// Pack a pre-built loader binary and immediately stamp shellcode
@@ -277,58 +266,55 @@ enum Commands {
     /// you can reuse it later with `pumpbin-cli generate`.
     ///
     /// Example:
-    ///   pumpbin-cli stamp -l loader.exe -s payload.bin
-    ///   pumpbin-cli stamp -l loader.exe -s payload.bin --save-b1n loader.b1n
+    ///   pumpbin-cli stamp loader.exe payload.bin
+    ///   pumpbin-cli stamp loader.exe payload.bin --save-b1n loader.b1n
     Stamp {
-        /// Path to the compiled loader binary (PE, ELF, or Mach-O).
-        /// Must contain a shellcode placeholder region (default marker:
-        /// $$SHELLCODE$$). Loaders built with `new-loader` satisfy this.
-        #[arg(short = 'l', long, value_hint = clap::ValueHint::FilePath)]
+        /// Compiled loader binary (PE, ELF, or Mach-O).
+        /// Must contain a shellcode placeholder (default: $$SHELLCODE$$).
+        /// Loaders built with `new-loader` already satisfy this.
+        #[arg(value_hint = clap::ValueHint::FilePath)]
         loader: PathBuf,
 
-        /// Path to the raw shellcode file (.bin).
-        #[arg(short, long, value_hint = clap::ValueHint::AnyPath)]
+        /// Raw shellcode file (.bin) to stamp into the loader.
+        #[arg(value_hint = clap::ValueHint::AnyPath)]
         shellcode: String,
 
-        /// Output path for the generated implant. Defaults to
-        /// `<name>.<ext>` in the current directory.
+        /// Output path for the generated implant.
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: Option<PathBuf>,
 
-        /// Target platform (windows, linux, darwin).
-        /// Auto-detected from the loader binary if omitted.
-        #[arg(long)]
-        platform: Option<String>,
+        /// Post-build module to apply. Repeat to chain multiple.
+        /// Plain id: `--post cert-graft`
+        /// With args: `--post cert-graft:donor=/path/to/signed.exe,mode=fast`
+        #[arg(long = "post", value_name = "ID[:K=V,K=V]")]
+        post: Vec<String>,
 
-        /// Target binary type (exe, lib). [default: exe]
-        #[arg(short = 't', long = "type", default_value = "exe")]
-        binary_type: String,
-
-        /// Shellcode placeholder prefix bytes in the loader binary.
-        #[arg(long, default_value = "$$SHELLCODE$$")]
-        src_prefix: String,
-
-        /// Size-holder bytes the loader reads at runtime to know the
-        /// shellcode length.
-        #[arg(long, default_value = "$$99999$$")]
-        size_holder: String,
-
-        /// Also write the intermediate .b1n to this path so you can
-        /// reuse it later with `pumpbin-cli generate`.
+        /// Also write the intermediate .b1n to this path for reuse
+        /// with `pumpbin-cli generate`.
         #[arg(long, value_hint = clap::ValueHint::FilePath)]
         save_b1n: Option<PathBuf>,
 
-        /// Append a post-build module to the chain. Accepts both
-        /// `--post <id>` and `--post <id>:<k=v;k=v>`.
-        #[arg(long = "post", value_name = "ID[:K=V;K=V]")]
-        post: Vec<String>,
+        // --- Advanced ---
+        /// Target platform (windows, linux, darwin).
+        /// Auto-detected from the loader binary magic bytes.
+        #[arg(long, help_heading = "Advanced")]
+        platform: Option<String>,
 
-        /// Per-module args for the post chain (`<id>=<k=v[;k=v...]>`).
-        #[arg(long = "post-arg", value_name = "ID=K=V")]
-        post_arg: Vec<String>,
+        /// Target binary type (exe, lib).
+        #[arg(short = 't', long = "type", default_value = "exe", help_heading = "Advanced")]
+        binary_type: String,
 
-        /// Name embedded in the ephemeral .b1n.
-        #[arg(long, default_value = "stamp")]
+        /// Shellcode placeholder marker in the loader binary.
+        #[arg(long, default_value = "$$SHELLCODE$$", help_heading = "Advanced")]
+        marker: String,
+
+        /// Size-holder marker the loader reads at runtime.
+        #[arg(long, default_value = "$$99999$$", help_heading = "Advanced")]
+        size_holder: String,
+
+        /// Name embedded in the ephemeral .b1n (used as output basename
+        /// when --output is omitted).
+        #[arg(long, default_value = "stamp", help_heading = "Advanced")]
         name: String,
     },
 
@@ -360,39 +346,34 @@ enum Commands {
         skip_build: bool,
     },
 
-    /// Verify a generated binary for authenticode/checksum/module markers
-    Verify {
-        /// Binary to verify
-        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
-        binary: PathBuf,
-    },
-
-    /// Inspect a .b1n plugin pack: dump plugin info, replace config,
-    /// supported platforms, embedded modules (with sha256 + declared
-    /// runtime policy), and the config schema each module exports.
+    /// Inspect a .b1n plugin pack or a compiled loader binary.
     ///
-    /// Also accepts a raw loader binary (PE/ELF/Mach-O). When given a
-    /// non-.b1n file, reports whether the PumpBin shellcode markers are
-    /// present, the measured placeholder capacity, and whether the binary
-    /// is ready for `pumpbin-cli stamp`.
+    /// For .b1n files: shows plugin name, supported platforms, embedded
+    /// modules, and config schema. Use `--diff` to compare two packs.
     ///
-    /// With `--diff <other.b1n>`, prints a human-readable diff of what
-    /// changed between two packs.
+    /// For loader binaries (PE/ELF/Mach-O): checks whether PumpBin
+    /// shellcode markers are present and reports the capacity.
     ///
-    /// `--help-markers` prints a short reference on how to embed markers
-    /// in any language without opening the docs.
+    /// Use `--verify` to also check authenticode and PE checksum on a
+    /// generated implant.
     Inspect {
-        /// Path to a .b1n plugin pack or a compiled loader binary.
+        /// Path to a .b1n plugin pack or a compiled loader/implant binary.
         binary: PathBuf,
+
+        /// Check authenticode signature and PE checksum (for generated
+        /// implants). Replaces the old `verify` command.
+        #[arg(long)]
+        verify: bool,
+
+        /// One-line summary: name, supported slots, module count.
+        #[arg(long)]
+        brief: bool,
+
         /// Optional second .b1n to diff against the first.
         #[arg(long, value_hint = clap::ValueHint::FilePath)]
         diff: Option<PathBuf>,
-        /// One-line summary: name, supported slots, module count.
-        /// Useful for quick scanning without the full report.
-        #[arg(long)]
-        brief: bool,
-        /// Print a short guide on how to embed PumpBin placeholder
-        /// markers into a loader in any language, then exit.
+
+        /// Print a short guide on embedding PumpBin markers, then exit.
         #[arg(long)]
         help_markers: bool,
     },
@@ -427,53 +408,12 @@ enum Commands {
         profile: PathBuf,
     },
 
-    /// List all registered modules — both shipped built-ins and
-    /// external (drop-in) modules discovered under
-    /// `$XDG_CONFIG_HOME/pumpbin/modules/` (and other roots).
-    /// Discovery warnings (malformed manifests etc.) print to stderr.
-    ListModules {
-        /// Show each module's argument schema (key, type, required,
-        /// default, description). Modules with no documented args
-        /// show "(no documented args)". Mirrors `nxc --options`.
-        #[arg(long)]
-        options: bool,
-
-        /// Limit output to one module id. Useful with `--options`
-        /// to focus on a single module's help.
-        #[arg(long, value_name = "ID")]
-        id: Option<String>,
-    },
-
-    /// Invoke a single module on a sample input — the development
-    /// loop for module authors. Reads payload from `--input` (or
-    /// stdin if `-`), forwards `--args` as the module's CLI args,
-    /// writes the module's response payload to `--output` (or stdout
-    /// if `-`). Surfaces module stderr verbatim on failure.
-    ModuleTest {
-        /// Module id. Looks up both built-in and external registries.
-        id: String,
-
-        /// Input payload path. Use `-` for stdin. For `post-build`
-        /// modules this is the implant bytes; for `encrypt`, the
-        /// shellcode; for `format-url`, the URL as UTF-8 bytes.
-        #[arg(short, long)]
-        input: String,
-
-        /// Repeatable `key=value` args forwarded to the module.
-        #[arg(short = 'a', long = "arg", value_name = "KEY=VALUE")]
-        args: Vec<String>,
-
-        /// Where to write the module's response payload. Use `-` for
-        /// stdout. Defaults to `-`.
-        #[arg(short, long, default_value = "-")]
-        output: String,
-
-        /// Dump the wire frames (request header, payload sizes, response
-        /// header) to stderr. For external modules. Sets the env var
-        /// `PUMPBIN_MODULE_DEBUG=1` for the dispatch call.
-        #[arg(long)]
-        debug: bool,
-    },
+    /// List and test modules.
+    ///
+    /// `pumpbin-cli module list` — show all installed modules.
+    /// `pumpbin-cli module test <ID>` — run a module against a sample input.
+    #[command(subcommand)]
+    Module(ModuleCommands),
 
     /// Scaffold a new PumpBin-ready loader crate. Writes a Cargo crate
     /// at <dest> with `Cargo.toml` (carrying a
@@ -596,6 +536,52 @@ enum Commands {
     },
 }
 
+/// Subcommands for `pumpbin-cli module`.
+#[derive(clap::Subcommand)]
+enum ModuleCommands {
+    /// List all installed modules (built-in and drop-in).
+    ///
+    /// Shows each module's id, source, and description.
+    /// Use `--options` to also show the per-module argument schema.
+    List {
+        /// Show each module's argument schema (key, type, required,
+        /// default, description).
+        #[arg(long)]
+        options: bool,
+
+        /// Limit output to one module id.
+        #[arg(long, value_name = "ID")]
+        id: Option<String>,
+    },
+
+    /// Run a module against a sample input (module author dev loop).
+    ///
+    /// Reads the payload from `--input` (or stdin with `-`), forwards
+    /// `--arg` key=value pairs as the module's args, writes the response
+    /// to `--output` (or stdout with `-`).
+    Test {
+        /// Module id. Looks up both built-in and drop-in registries.
+        id: String,
+
+        /// Input payload path or `-` for stdin.
+        #[arg(short, long)]
+        input: String,
+
+        /// Repeatable key=value args forwarded to the module.
+        #[arg(short = 'a', long = "arg", value_name = "KEY=VALUE")]
+        args: Vec<String>,
+
+        /// Output path or `-` for stdout.
+        #[arg(short, long, default_value = "-")]
+        output: String,
+
+        /// Dump the wire protocol frames to stderr (for debugging
+        /// external/drop-in modules).
+        #[arg(long)]
+        debug: bool,
+    },
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -635,7 +621,6 @@ fn dispatch(cli: &Cli) -> Result<()> {
             module_config,
             dry_run,
             post,
-            post_arg,
         } => {
             tracing::info!("Starting automated CLI generation...");
 
@@ -676,9 +661,9 @@ fn dispatch(cli: &Cli) -> Result<()> {
             let mut runtime_config = parse_module_config(module_config)?;
 
             // Append CLI-supplied post-build modules to the .b1n's chain.
-            // Two forms are accepted:
-            //   --post <id>               plain id (backwards-compat)
-            //   --post <id>:<k=v;k=v>    combined id + args (new short form)
+            // Two forms accepted:
+            //   --post <id>               plain id
+            //   --post <id>:<k=v,k=v>    id with comma-separated args
             for entry in post {
                 if let Some((id, args)) = entry.split_once(':') {
                     plugin_obj.plugins.modules_mut().push(id.to_string());
@@ -686,13 +671,6 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 } else {
                     plugin_obj.plugins.modules_mut().push(entry.clone());
                 }
-            }
-
-            for entry in post_arg {
-                let (id, rest) = entry.split_once('=').ok_or_else(|| {
-                    anyhow!("--post-arg expects <id>=<k=v[;k=v...]>; got: {entry}")
-                })?;
-                runtime_config.insert(format!("post:{id}"), rest.to_string());
             }
             let schema_fields = plugin_schema_fields(&plugin_obj);
             let runtime_config =
@@ -965,7 +943,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
             platform,
             binary_type,
             save_type,
-            src_prefix,
+            marker,
             size_holder,
             max_len,
             module,
@@ -987,6 +965,17 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 cfg.insert(format!("post_chain.{}.config.{}", idx, key), value);
             }
 
+            // post_modules accepts both `--post id` and `--post id:k=v,k=v`
+            let mut resolved_post_modules = vec![];
+            for entry in post_modules {
+                if let Some((id, args)) = entry.split_once(':') {
+                    resolved_post_modules.push(id.to_string());
+                    cfg.insert(format!("post:{id}"), args.to_string());
+                } else {
+                    resolved_post_modules.push(entry.clone());
+                }
+            }
+
             let data = pumpbin::pack::B1nBuilder {
                 template_bytes,
                 name: name.clone(),
@@ -996,11 +985,11 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 platform: parsed_platform,
                 binary_type: parsed_binary_type,
                 save_type: parsed_save_type,
-                src_prefix: src_prefix.clone(),
+                src_prefix: marker.clone(),
                 size_holder: size_holder.clone(),
                 max_len_override: *max_len,
                 primary_module: module.clone(),
-                post_modules: post_modules.clone(),
+                post_modules: resolved_post_modules,
                 module_config: cfg,
             }
             .assemble()
@@ -1018,11 +1007,10 @@ fn dispatch(cli: &Cli) -> Result<()> {
             output,
             platform,
             binary_type,
-            src_prefix,
+            marker,
             size_holder,
             save_b1n,
             post,
-            post_arg,
             name,
         } => {
             tracing::info!("stamp: reading loader");
@@ -1052,7 +1040,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 platform: parsed_platform,
                 binary_type: parsed_binary_type,
                 save_type: ShellcodeSaveType::Local,
-                src_prefix: src_prefix.clone(),
+                src_prefix: marker.clone(),
                 size_holder: size_holder.clone(),
                 max_len_override: None,
                 primary_module: None,
@@ -1061,14 +1049,11 @@ fn dispatch(cli: &Cli) -> Result<()> {
             }
             .assemble()
             .map_err(|e| {
-                // Give the operator a clear, actionable message when the
-                // placeholder marker is not found in the loader binary.
-                // The generic PB-E0001 message does not explain what to do.
                 if e.chain()
                     .any(|c| c.to_string().contains("not found in binary"))
                 {
                     anyhow!(
-                        "{loader} does not contain the shellcode marker \"{src_prefix}\".\n\n\
+                        "{loader} does not contain the shellcode marker \"{marker}\".\n\n\
                          The loader must include this exact byte sequence at compile time \
                          so PumpBin knows where to write your shellcode.\n\n\
                          Options:\n  \
@@ -1076,7 +1061,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
                          2. Embed the marker manually:    see pumpbin-cli inspect --help-markers\n  \
                          3. Verify an existing binary:    pumpbin-cli inspect {loader}",
                         loader = loader.display(),
-                        src_prefix = src_prefix,
+                        marker = marker,
                         platform_hint = platform
                             .as_deref()
                             .unwrap_or(match parsed_platform {
@@ -1098,7 +1083,6 @@ fn dispatch(cli: &Cli) -> Result<()> {
 
             let mut plugin_obj = Plugin::decode_from_slice(&b1n_bytes)?;
 
-            // Apply post-build module chain (same logic as generate).
             let mut runtime_config = parse_module_config(&[])?;
             for entry in post {
                 if let Some((id, args)) = entry.split_once(':') {
@@ -1107,12 +1091,6 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 } else {
                     plugin_obj.plugins.modules_mut().push(entry.clone());
                 }
-            }
-            for entry in post_arg {
-                let (id, rest) = entry.split_once('=').ok_or_else(|| {
-                    anyhow!("--post-arg expects <id>=<k=v[;k=v...]>; got: {entry}")
-                })?;
-                runtime_config.insert(format!("post:{id}"), rest.to_string());
             }
 
             let (resolved_platform, resolved_binary_type) = plugin_obj
@@ -1161,11 +1139,11 @@ fn dispatch(cli: &Cli) -> Result<()> {
             output,
             skip_build,
         } => pack_crate(crate_dir, profile, output.as_deref(), *skip_build),
-        Commands::Verify { binary } => verify_binary(binary),
         Commands::Inspect {
             binary,
             diff,
             brief,
+            verify,
             help_markers,
         } => {
             if *help_markers {
@@ -1174,12 +1152,17 @@ fn dispatch(cli: &Cli) -> Result<()> {
             }
 
             // Auto-detect: if this looks like a raw binary (not a .b1n),
-            // run the loader marker scan instead of the .b1n inspector.
+            // run the loader marker scan (or --verify) instead of the .b1n inspector.
             let bytes = std::fs::read(binary)
                 .with_context(|| format!("failed to read '{}'", binary.display()))?;
             let is_b1n = pumpbin::plugin::Plugin::decode_from_slice(&bytes).is_ok();
-            if !is_b1n {
-                inspect_loader_binary(binary, &bytes, cli.json);
+            if *verify || !is_b1n {
+                if *verify {
+                    verify_binary(binary)?;
+                }
+                if !is_b1n {
+                    inspect_loader_binary(binary, &bytes, cli.json);
+                }
                 return Ok(());
             }
 
@@ -1294,14 +1277,17 @@ fn dispatch(cli: &Cli) -> Result<()> {
             }
             Ok(())
         }
-        Commands::ListModules { options, id } => list_modules(*options, id.as_deref(), cli.json),
-        Commands::ModuleTest {
-            id,
-            input,
-            args,
-            output,
-            debug,
-        } => {
+        Commands::Module(sub) => match sub {
+            ModuleCommands::List { options, id } => {
+                list_modules(*options, id.as_deref(), cli.json)
+            }
+            ModuleCommands::Test {
+                id,
+                input,
+                args,
+                output,
+                debug,
+            } => {
             use pumpbin::modules::external::{registry, wire::WireKind};
             use std::io::{Read, Write};
 
@@ -1354,7 +1340,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
             };
             let kind = kind.ok_or_else(|| {
                 anyhow!(
-                    "module-test: id '{id}' not registered. Run `pumpbin-cli list-modules` to see what's installed."
+                    "module test: id '{id}' not registered. Run `pumpbin-cli module list` to see what's installed."
                 )
             })?;
 
@@ -1414,7 +1400,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 std::fs::write(output, &result)?;
             }
             Ok(())
-        }
+        }}, // end Commands::Module
         Commands::NewLoader {
             dest,
             name,
