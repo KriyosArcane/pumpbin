@@ -6,6 +6,5 @@
 .vscode
 # Per-developer MCP server config; contains lab IPs/keys.
 /.mcp.json
-# Build artifact emitted by examples/create_thread/build.rs
-examples/create_thread/shellcode
-examples/create_thread_encrypt/shellcode
+# Placeholder shellcode files emitted by loader-example build.rs scripts
+examples/*/shellcode
