@@ -25,17 +25,24 @@ You have a compiled loader binary with PumpBin markers:
 
 ```
 $ pumpbin-cli stamp loader.exe payload.bin
-wrote stamp.exe
+PB  loader.exe            win/exe  [*] reading loader
+PB  loader.exe            win/exe  [*] injecting shellcode (460 B)
+PB  loader.exe            win/exe  [+] wrote stamp.exe
 ```
 
 You are writing the loader from scratch:
 
 ```
 $ pumpbin-cli new-loader myloader --platform windows --pack
+PB  myloader              win/exe  [*] cargo build (release)
+PB  myloader              win/exe  [+] packed -> myloader/myloader.b1n
 wrote myloader/myloader.b1n
 Scaffolded and packed: myloader/myloader.b1n
 
 $ pumpbin-cli generate -p myloader -s payload.bin
+PB  myloader.b1n          win/exe  [*] loading plugin
+PB  myloader.b1n          win/exe  [*] injecting shellcode (460 B)
+PB  myloader.b1n          win/exe  [+] wrote myloader.exe
 ```
 
 ## Commands
@@ -83,21 +90,26 @@ Advanced:
       --marker <MARKER>      Shellcode placeholder  [default: $$SHELLCODE$$]
 ```
 
-With transforms:
+With post-build transforms:
 
 ```
 $ pumpbin-cli stamp loader.exe payload.bin \
     --post cert-graft:donor=/path/to/signed.exe \
     --post byte-patch:patches=4831d2:4833d2 \
     --output implant.exe
-wrote implant.exe
+PB  loader.exe            win/exe  [*] reading loader
+PB  loader.exe            win/exe  [*] injecting shellcode (460 B) + cert-graft, byte-patch
+PB  loader.exe            win/exe  [+] wrote implant.exe
 ```
 
-Save the `.b1n` for future reuse with `generate`:
+Save the `.b1n` for reuse with `generate`:
 
 ```
 $ pumpbin-cli stamp loader.exe payload.bin --save-b1n loader.b1n
-wrote stamp.exe
+PB  loader.exe            win/exe  [*] reading loader
+PB  loader.exe            win/exe  [*] saved .b1n -> loader.b1n
+PB  loader.exe            win/exe  [*] injecting shellcode (460 B)
+PB  loader.exe            win/exe  [+] wrote stamp.exe
 ```
 
 ## generate

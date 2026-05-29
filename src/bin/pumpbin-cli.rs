@@ -622,31 +622,40 @@ fn dispatch(cli: &Cli) -> Result<()> {
             dry_run,
             post,
         } => {
-            tracing::info!("Starting automated CLI generation...");
-
             let explicit_platform = platform.as_deref().map(parse_platform).transpose()?;
             let explicit_binary_type = binary_type.as_deref().map(parse_binary_type).transpose()?;
 
             let plugin_path = resolve_plugin_path(plugin)?;
+            let plugin_label = plugin_path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("plugin");
 
-            tracing::info!(plugin = ?plugin_path, "Loading plugin");
             let plugin_buf = std::fs::read(&plugin_path)?;
             let mut plugin_obj = Plugin::decode_from_slice(&plugin_buf)?;
 
-            // Resolve target via auto-detect when --platform / --type
-            // are omitted. Single-slot .b1n => no flags ever needed.
             let (parsed_platform, parsed_binary_type) = plugin_obj
                 .bins()
                 .auto_select_target(explicit_platform, explicit_binary_type)?;
-            if explicit_platform.is_none() || explicit_binary_type.is_none() {
-                tracing::info!(
-                    platform = %parsed_platform,
-                    binary_type = %parsed_binary_type,
-                    "Auto-detected target from .b1n"
-                );
-            }
 
-            tracing::info!(%parsed_platform, %parsed_binary_type, "Validating plugin for target");
+            let target_label = format!(
+                "{}/{}",
+                match parsed_platform {
+                    Platform::Windows => "win",
+                    Platform::Linux => "linux",
+                    Platform::Darwin => "darwin",
+                },
+                match parsed_binary_type {
+                    BinaryType::Executable => "exe",
+                    BinaryType::DynamicLibrary => "lib",
+                }
+            );
+
+            eprintln!(
+                "PB  {:<20}  {}  [*] loading plugin",
+                plugin_label, target_label
+            );
+
             plugin_obj.validate_for_generation(parsed_platform, parsed_binary_type)?;
 
             let bin = plugin_obj
@@ -727,7 +736,23 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 return Ok(());
             }
 
-            tracing::info!("Injecting shellcode");
+            let sc_size = std::fs::metadata(shellcode).map(|m| m.len()).unwrap_or(0);
+            let chain = plugin_obj.plugins.modules().to_vec();
+            if chain.is_empty() {
+                eprintln!(
+                    "PB  {:<20}  {}  [*] injecting shellcode ({} B)",
+                    plugin_label, target_label, sc_size
+                );
+            } else {
+                eprintln!(
+                    "PB  {:<20}  {}  [*] injecting shellcode ({} B) + {}",
+                    plugin_label,
+                    target_label,
+                    sc_size,
+                    chain.join(", ")
+                );
+            }
+
             let bin = plugin_obj.replace_binary(
                 bin,
                 final_shellcode_src,
@@ -735,9 +760,13 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 Some(&runtime_config),
             )?;
 
-            tracing::info!(output = ?output_path, "Saving generated binary");
             pumpbin::utils::atomic_write(&output_path, &bin)?;
-            tracing::info!(output = ?output_path, "Generation complete");
+            eprintln!(
+                "PB  {:<20}  {}  [+] wrote {}",
+                plugin_label,
+                target_label,
+                output_path.display()
+            );
 
             Ok(())
         }
@@ -1013,9 +1042,13 @@ fn dispatch(cli: &Cli) -> Result<()> {
             post,
             name,
         } => {
-            tracing::info!("stamp: reading loader");
             let template_bytes = std::fs::read(loader)
                 .with_context(|| format!("failed to read loader: {}", loader.display()))?;
+
+            let loader_label = loader
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("loader");
 
             let parsed_platform = if let Some(p) = platform.as_deref() {
                 parse_platform(p)?
@@ -1030,7 +1063,23 @@ fn dispatch(cli: &Cli) -> Result<()> {
             };
             let parsed_binary_type = parse_binary_type(binary_type)?;
 
-            tracing::info!(%parsed_platform, %parsed_binary_type, "stamp: assembling .b1n");
+            let target_label = format!(
+                "{}/{}",
+                match parsed_platform {
+                    Platform::Windows => "win",
+                    Platform::Linux => "linux",
+                    Platform::Darwin => "darwin",
+                },
+                match parsed_binary_type {
+                    BinaryType::Executable => "exe",
+                    BinaryType::DynamicLibrary => "lib",
+                }
+            );
+
+            eprintln!(
+                "PB  {:<20}  {}  [*] reading loader",
+                loader_label, target_label
+            );
             let b1n_bytes = pumpbin::pack::B1nBuilder {
                 template_bytes,
                 name: name.clone(),
@@ -1078,7 +1127,12 @@ fn dispatch(cli: &Cli) -> Result<()> {
             if let Some(b1n_path) = save_b1n {
                 pumpbin::utils::atomic_write(b1n_path, &b1n_bytes)
                     .with_context(|| format!("saving .b1n to '{}'", b1n_path.display()))?;
-                tracing::info!(path = %b1n_path.display(), "stamp: saved .b1n");
+                eprintln!(
+                    "PB  {:<20}  {}  [*] saved .b1n -> {}",
+                    loader_label,
+                    target_label,
+                    b1n_path.display()
+                );
             }
 
             let mut plugin_obj = Plugin::decode_from_slice(&b1n_bytes)?;
@@ -1109,7 +1163,24 @@ fn dispatch(cli: &Cli) -> Result<()> {
             let runtime_config =
                 normalize_runtime_config_for_schema(runtime_config, &schema_fields)?;
 
-            tracing::info!("stamp: injecting shellcode");
+            let sc_bytes = std::fs::read(shellcode.as_str()).unwrap_or_default();
+            let sc_size = sc_bytes.len();
+            let chain = plugin_obj.plugins.modules().to_vec();
+            if chain.is_empty() {
+                eprintln!(
+                    "PB  {:<20}  {}  [*] injecting shellcode ({} B)",
+                    loader_label, target_label, sc_size
+                );
+            } else {
+                eprintln!(
+                    "PB  {:<20}  {}  [*] injecting shellcode ({} B) + {}",
+                    loader_label,
+                    target_label,
+                    sc_size,
+                    chain.join(", ")
+                );
+            }
+
             let implant =
                 plugin_obj.replace_binary(bin, shellcode.clone(), vec![], Some(&runtime_config))?;
 
@@ -1129,8 +1200,12 @@ fn dispatch(cli: &Cli) -> Result<()> {
 
             pumpbin::utils::atomic_write(&output_path, &implant)
                 .with_context(|| format!("writing implant to '{}'", output_path.display()))?;
-            tracing::info!(output = %output_path.display(), "stamp: complete");
-            println!("wrote {}", output_path.display());
+            eprintln!(
+                "PB  {:<20}  {}  [+] wrote {}",
+                loader_label,
+                target_label,
+                output_path.display()
+            );
             Ok(())
         }
         Commands::Pack {
@@ -2091,9 +2166,29 @@ fn pack_crate(
     let binary_type = parse_binary_type(&md.binary_type)?;
     let save_type = parse_save_type(&md.save_type)?;
 
+    let crate_label = crate_dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("loader");
+    let target_str = format!(
+        "{}/{}",
+        match platform {
+            Platform::Windows => "win",
+            Platform::Linux => "linux",
+            Platform::Darwin => "darwin",
+        },
+        match binary_type {
+            BinaryType::Executable => "exe",
+            BinaryType::DynamicLibrary => "lib",
+        }
+    );
+
     // 1. Build the crate (unless --skip-build).
     if !skip_build {
-        tracing::info!(crate_dir = %crate_dir.display(), profile, "cargo build");
+        eprintln!(
+            "PB  {:<20}  {}  [*] cargo build ({})",
+            crate_label, target_str, profile
+        );
         let cargo_args: &[&str] = if profile == "release" {
             &["build", "--release"]
         } else if profile == "dev" || profile == "debug" {
@@ -2180,7 +2275,12 @@ fn pack_crate(
     pumpbin::utils::atomic_write(&output_path, &data)
         .with_context(|| format!("writing {}", output_path.display()))?;
 
-    tracing::info!(output = %output_path.display(), "Packed .b1n");
+    eprintln!(
+        "PB  {:<20}  {}  [+] packed -> {}",
+        crate_label,
+        target_str,
+        output_path.display()
+    );
     println!("wrote {}", output_path.display());
     Ok(())
 }
