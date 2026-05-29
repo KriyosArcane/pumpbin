@@ -14,7 +14,7 @@ categories = ["command-line-utilities", "development-tools"]
 [dependencies]
 rfd = { version = "0.14", optional = true }
 dirs = "5.0.1"
-open = "5.3"
+open = { version = "5.3", optional = true }
 bincode = { version = "2.0", default-features = false, features = ["alloc", "derive", "std"] }
 anyhow = "1.0"
 thiserror = "1.0"
@@ -29,7 +29,6 @@ flate2 = "1.0"
 iced_aw = { version = "0.11", default-features = false, features = ["menu"], optional = true }
 
 iced = { version = "0.13", default-features = false, features = ["wgpu", "tiny-skia", "advanced", "svg", "tokio", "image"], optional = true }
-regex = "1.10"
 clap = { version = "4.5", features = ["derive"] }
 clap_complete = "4.5"
 tempfile = "3.10"
@@ -45,7 +44,7 @@ aes-gcm = "0.10"
 # iced_aw / rfd / wgpu stop being pulled into the default build cone
 # while the GUI is frozen pending the CLI rewrite.
 default = []
-gui = ["dep:iced", "dep:iced_aw", "dep:rfd"]
+gui = ["dep:iced", "dep:iced_aw", "dep:rfd", "dep:open"]
 
 [[bin]]
 name = "pumpbin-cli"

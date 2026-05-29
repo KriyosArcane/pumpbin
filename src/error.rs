@@ -19,8 +19,8 @@
 //! }
 //! ```
 //!
-//! v2.0 Phase 0 will migrate the library boundaries to return
-//! `PumpBinResult<T>` directly. Until then, the codes are the stable contract.
+//! The library boundaries return `anyhow::Error`; `PB-Exxxx` codes are the
+//! stable contract for machine-readable matching.
 //!
 //! # Code allocation
 //!

@@ -110,12 +110,12 @@ pub fn replace_with_rng<R: RngCore>(
         return Err(ReplaceError::ReplacementTooLong(replace_by.len(), max_len));
     }
 
-    let mut replace_by = replace_by.to_owned();
-
+    // Find the holder before allocating — no-op if the holder is absent.
     let position = memmem::find_iter(bin, holder)
         .next()
         .ok_or_else(|| ReplaceError::HolderNotFound(String::from_utf8_lossy(holder).to_string()))?;
 
+    let mut replace_by = replace_by.to_owned();
     let mut random: Vec<u8> = iter::repeat_n(b'0', max_len - replace_by.len()).collect();
     rng.fill_bytes(&mut random);
     replace_by.extend_from_slice(random.as_slice());

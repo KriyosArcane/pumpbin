@@ -59,8 +59,16 @@ pub fn read_security_dir(pe: &[u8]) -> anyhow::Result<(u32, u32)> {
     if sec_dir_off + 8 > pe.len() {
         bail!("data directory truncated");
     }
-    let va = u32::from_le_bytes(pe[sec_dir_off..sec_dir_off + 4].try_into().unwrap());
-    let sz = u32::from_le_bytes(pe[sec_dir_off + 4..sec_dir_off + 8].try_into().unwrap());
+    let va = u32::from_le_bytes(
+        pe[sec_dir_off..sec_dir_off + 4]
+            .try_into()
+            .map_err(|_| anyhow!("PE security directory VA truncated"))?,
+    );
+    let sz = u32::from_le_bytes(
+        pe[sec_dir_off + 4..sec_dir_off + 8]
+            .try_into()
+            .map_err(|_| anyhow!("PE security directory size truncated"))?,
+    );
     Ok((va, sz))
 }
 
