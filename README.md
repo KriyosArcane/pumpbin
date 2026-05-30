@@ -235,14 +235,6 @@ PumpBin overwrites the entire placeholder region, including the `$$SHELLCODE$$` 
 
 In Rust, wrap the functions that return your shellcode buffer and size holder in `std::hint::black_box` and mark them `#[inline(never)]`. Without those, the compiler sees `"$$99999$$".parse()` returns an error, concludes the shellcode length is always 0, and silently removes the entire buffer. The binary builds clean. The markers are gone. Run `pumpbin-cli inspect` after building to confirm they are actually there.
 
-**3. Keep your process alive until the shellcode is done.**
-
-If you spawn a thread and your main function returns, the OS kills the process and the shell dies with it. A reverse shell typically needs a few seconds to connect. `WaitForSingleObject(thread_handle, INFINITE)` after `CreateThread` is the fix. A 1-second timeout is not enough.
-
-**4. Run shellcode in a thread, not as a direct function call.**
-
-Most payloads rely on a proper thread context to find Windows APIs. Calling the buffer directly as a function pointer skips that setup and crashes mid-execution. Spawn a thread with `CreateThread` and let it do the work.
-
 **Check your work before stamping:**
 
 ```
