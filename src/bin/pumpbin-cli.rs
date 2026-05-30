@@ -2179,6 +2179,8 @@ RUST (recommended: pumpbin-cli new-loader handles this automatically)
     // In your loader function:
     let len = size_holder().trim_matches('$').parse::<usize>().unwrap_or(0);
     let shellcode = &shellcode_buf()[..len];
+    // IMPORTANT: after stamping, shellcode_buf()[0] is byte 0 of your shellcode.
+    // The $$SHELLCODE$$ prefix is overwritten and gone. Do NOT add any offset.
 
   For AES-256-GCM encryption (via --encrypt-module aes-gcm), also add:
     // These holders are stamped with a fresh random key+nonce per generate run.
@@ -2211,12 +2213,32 @@ C / C++ (volatile prevents the optimizer from removing the region)
     volatile char sz[] = "$$99999$$";
     size_t len = strtoul((char*)sz, NULL, 10);
 
+RUNTIME REQUIREMENTS
+
+  After stamping, your loader must satisfy these at execution time:
+
+  1. Shellcode starts at offset 0 — shellcode_buf()[0] is byte 0 of your payload.
+     The $$SHELLCODE$$ prefix is overwritten. Do not skip any bytes.
+
+  2. Keep the process alive — use WaitForSingleObject(thread_handle, INFINITE).
+     A reverse shell takes several seconds to connect. If main() returns first,
+     the OS kills the process and the shell dies with it.
+
+  3. Use a thread, not a direct call — most payloads need TEB/PEB thread context.
+     CreateThread or equivalent. Do not transmute the buffer to fn() and call it.
+
+  4. Executable memory — allocate with PAGE_EXECUTE_READWRITE, or protect the
+     region before the thread starts. For NtCreateSection, section and view
+     protections must be compatible (PAGE_EXECUTE_READWRITE on both is safe).
+
 VERIFY
 
   After building your loader, confirm the markers are present:
     pumpbin-cli inspect loader.exe
   The verdict line will say "SUITABLE: ready for pumpbin-cli stamp" when
   all required markers are found.
+  If you inspect an already-stamped implant, "NOT SUITABLE" is expected —
+  the markers were consumed during stamping.
 
 STAMP
 

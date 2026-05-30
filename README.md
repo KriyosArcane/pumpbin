@@ -223,6 +223,31 @@ Print a language guide for embedding markers:
 $ pumpbin-cli inspect loader.exe --help-markers
 ```
 
+## Converting an existing loader to work with PumpBin
+
+If you have a working shellcode loader, turning it into a PumpBin template means replacing the hardcoded shellcode with the marker system. Here is what the system requires.
+
+**Shellcode starts at offset 0.** After stamping, `shellcode_buf()[0]` is byte 0 of your shellcode. The `$$SHELLCODE$$` prefix is overwritten and gone. Do not skip any bytes. Do not add 13 to your index. Copy from `[0]`.
+
+**Use black_box and #[inline(never)].** Wrap the functions returning your shellcode buffer and size holder in `std::hint::black_box` and mark them `#[inline(never)]`. Without this, the release compiler concludes the size is always 0 and removes the entire buffer as dead code. The binary will compile and the markers will not be there.
+
+**Keep the process alive.** Your main thread must stay alive until the shellcode finishes. For a reverse shell that means waiting indefinitely — the payload needs several seconds to establish a TCP connection. Use `WaitForSingleObject(thread_handle, INFINITE)` after creating the thread. A short timeout like 1000ms is not enough.
+
+**Use a thread, not a direct call.** Do not call the shellcode buffer as a plain function pointer. Most payloads (msfvenom, Cobalt Strike, Havoc) require a proper thread context with TEB and PEB populated. Call it through `CreateThread` or an equivalent that sets up a real thread context.
+
+**Memory must be executable at the time of execution.** Allocate with `PAGE_EXECUTE_READWRITE` directly, or with `PAGE_READWRITE` followed by a `VirtualProtect` to `PAGE_EXECUTE_READWRITE` before the thread starts. If you use `NtCreateSection`, the section protection and the view protection must be compatible — `PAGE_EXECUTE_READWRITE` on both is the safe baseline.
+
+**Pick a stable injection target.** If your loader injects into another process, that process must stay alive long enough for the shell to run. `svchost.exe` without service group arguments exits immediately. `notepad.exe` is the standard stable test target.
+
+**Verify before you stamp.**
+
+```
+$ pumpbin-cli inspect yourloader.exe
+verdict:   SUITABLE: ready for pumpbin-cli stamp
+```
+
+If the verdict says NOT SUITABLE, the markers are missing or the optimizer removed them. If you inspect an already-stamped implant, the NOT SUITABLE message is expected — the markers were consumed during stamping, which is correct.
+
 ## check
 
 Pre-flight YARA scan before deploying:
