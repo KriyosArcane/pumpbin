@@ -225,28 +225,32 @@ $ pumpbin-cli inspect loader.exe --help-markers
 
 ## Converting an existing loader to work with PumpBin
 
-If you have a working shellcode loader, turning it into a PumpBin template means replacing the hardcoded shellcode with the marker system. Here is what the system requires.
+Already have a working shellcode loader? You swap out the hardcoded shellcode buffer for PumpBin's marker system. Four things to get right.
 
-**Shellcode starts at offset 0.** After stamping, `shellcode_buf()[0]` is byte 0 of your shellcode. The `$$SHELLCODE$$` prefix is overwritten and gone. Do not skip any bytes. Do not add 13 to your index. Copy from `[0]`.
+**1. Your shellcode starts at index 0 after stamping.**
 
-**Use black_box and #[inline(never)].** Wrap the functions returning your shellcode buffer and size holder in `std::hint::black_box` and mark them `#[inline(never)]`. Without this, the release compiler concludes the size is always 0 and removes the entire buffer as dead code. The binary will compile and the markers will not be there.
+PumpBin overwrites the entire placeholder region, including the `$$SHELLCODE$$` prefix itself. Once stamped, byte 0 of your buffer is byte 0 of your shellcode. Do not skip the first 13 bytes. Do not add any offset for the marker. Just read from `[0]`.
 
-**Keep the process alive.** Your main thread must stay alive until the shellcode finishes. For a reverse shell that means waiting indefinitely — the payload needs several seconds to establish a TCP connection. Use `WaitForSingleObject(thread_handle, INFINITE)` after creating the thread. A short timeout like 1000ms is not enough.
+**2. Stop the release compiler from deleting your buffer.**
 
-**Use a thread, not a direct call.** Do not call the shellcode buffer as a plain function pointer. Most payloads (msfvenom, Cobalt Strike, Havoc) require a proper thread context with TEB and PEB populated. Call it through `CreateThread` or an equivalent that sets up a real thread context.
+In Rust, wrap the functions that return your shellcode buffer and size holder in `std::hint::black_box` and mark them `#[inline(never)]`. Without those, the compiler sees `"$$99999$$".parse()` returns an error, concludes the shellcode length is always 0, and silently removes the entire buffer. The binary builds clean. The markers are gone. Run `pumpbin-cli inspect` after building to confirm they are actually there.
 
-**Memory must be executable at the time of execution.** Allocate with `PAGE_EXECUTE_READWRITE` directly, or with `PAGE_READWRITE` followed by a `VirtualProtect` to `PAGE_EXECUTE_READWRITE` before the thread starts. If you use `NtCreateSection`, the section protection and the view protection must be compatible — `PAGE_EXECUTE_READWRITE` on both is the safe baseline.
+**3. Keep your process alive until the shellcode is done.**
 
-**Pick a stable injection target.** If your loader injects into another process, that process must stay alive long enough for the shell to run. `svchost.exe` without service group arguments exits immediately. `notepad.exe` is the standard stable test target.
+If you spawn a thread and your main function returns, the OS kills the process and the shell dies with it. A reverse shell typically needs a few seconds to connect. `WaitForSingleObject(thread_handle, INFINITE)` after `CreateThread` is the fix. A 1-second timeout is not enough.
 
-**Verify before you stamp.**
+**4. Run shellcode in a thread, not as a direct function call.**
+
+Most payloads rely on a proper thread context to find Windows APIs. Calling the buffer directly as a function pointer skips that setup and crashes mid-execution. Spawn a thread with `CreateThread` and let it do the work.
+
+**Check your work before stamping:**
 
 ```
 $ pumpbin-cli inspect yourloader.exe
 verdict:   SUITABLE: ready for pumpbin-cli stamp
 ```
 
-If the verdict says NOT SUITABLE, the markers are missing or the optimizer removed them. If you inspect an already-stamped implant, the NOT SUITABLE message is expected — the markers were consumed during stamping, which is correct.
+NOT SUITABLE means the markers are missing or were removed by the optimizer. If you see NOT SUITABLE on an already-stamped implant, that is fine — it means the markers were consumed, which is exactly what should happen.
 
 ## check
 
