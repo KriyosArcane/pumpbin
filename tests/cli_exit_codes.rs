@@ -170,7 +170,7 @@ fn verify_on_non_pe_exits_nonzero() {
     std::fs::write(&f, b"this is not a PE binary").unwrap();
 
     let status = Command::new(&cli)
-        .args(["verify", "--binary"])
+        .args(["inspect", "--verify"])
         .arg(&f)
         .status()
         .unwrap();
