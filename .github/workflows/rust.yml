@@ -105,7 +105,7 @@ jobs:
           ./target/release/pumpbin-cli generate --help
           ./target/release/pumpbin-cli batch --help
           ./target/release/pumpbin-cli create-b1n --help
-          ./target/release/pumpbin-cli verify --help
+          ./target/release/pumpbin-cli inspect --help
           ./target/release/pumpbin-cli build --help
           ./target/release/pumpbin-cli inspect --help
           ./target/release/pumpbin-cli convert --help

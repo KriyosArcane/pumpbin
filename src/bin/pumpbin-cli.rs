@@ -248,11 +248,19 @@ enum Commands {
         max_len: Option<u64>,
 
         /// Per-post-module config: IDX:KEY=VALUE (index matches --post order).
-        #[arg(long = "post-config", value_name = "IDX:KEY=VALUE", help_heading = "Advanced")]
+        #[arg(
+            long = "post-config",
+            value_name = "IDX:KEY=VALUE",
+            help_heading = "Advanced"
+        )]
         post_module_config: Vec<String>,
 
         /// Base module config key-values.
-        #[arg(long = "module-config", value_name = "KEY=VALUE", help_heading = "Advanced")]
+        #[arg(
+            long = "module-config",
+            value_name = "KEY=VALUE",
+            help_heading = "Advanced"
+        )]
         module_config: Vec<String>,
 
         /// Save type (local or remote).
@@ -304,7 +312,12 @@ enum Commands {
         platform: Option<String>,
 
         /// Target binary type (exe, lib).
-        #[arg(short = 't', long = "type", default_value = "exe", help_heading = "Advanced")]
+        #[arg(
+            short = 't',
+            long = "type",
+            default_value = "exe",
+            help_heading = "Advanced"
+        )]
         binary_type: String,
 
         /// Shellcode placeholder marker in the loader binary.
@@ -1386,9 +1399,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
             Ok(())
         }
         Commands::Module(sub) => match sub {
-            ModuleCommands::List { options, id } => {
-                list_modules(*options, id.as_deref(), cli.json)
-            }
+            ModuleCommands::List { options, id } => list_modules(*options, id.as_deref(), cli.json),
             ModuleCommands::Test {
                 id,
                 input,
@@ -1396,129 +1407,134 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 output,
                 debug,
             } => {
-            use pumpbin::modules::external::{registry, wire::WireKind};
-            use std::io::{Read, Write};
+                use pumpbin::modules::external::{registry, wire::WireKind};
+                use std::io::{Read, Write};
 
-            if *debug {
-                // SAFETY: single-threaded CLI; env var is read only inside
-                // external::invoke() on this same thread.
-                unsafe { std::env::set_var("PUMPBIN_MODULE_DEBUG", "1") };
-            }
+                if *debug {
+                    // SAFETY: single-threaded CLI; env var is read only inside
+                    // external::invoke() on this same thread.
+                    unsafe { std::env::set_var("PUMPBIN_MODULE_DEBUG", "1") };
+                }
 
-            let payload: Vec<u8> = if input == "-" {
-                let mut buf = Vec::new();
-                std::io::stdin().read_to_end(&mut buf)?;
-                buf
-            } else {
-                std::fs::read(input)?
-            };
+                let payload: Vec<u8> = if input == "-" {
+                    let mut buf = Vec::new();
+                    std::io::stdin().read_to_end(&mut buf)?;
+                    buf
+                } else {
+                    std::fs::read(input)?
+                };
 
-            // Resolve kind: external registry tells us explicitly;
-            // for built-ins we probe each kind by id and the first
-            // hit wins (built-ins don't overlap).
-            let kind = if let Some(ext) = registry().get(id) {
-                Some(ext.kind())
-            } else if pumpbin::modules::encrypt_modules()
-                .iter()
-                .any(|m| m.id() == id)
-            {
-                Some(WireKind::Encrypt)
-            } else if pumpbin::modules::format_encrypted_modules()
-                .iter()
-                .any(|m| m.id() == id)
-            {
-                Some(WireKind::FormatEncrypted)
-            } else if pumpbin::modules::format_url_modules()
-                .iter()
-                .any(|m| m.id() == id)
-            {
-                Some(WireKind::FormatUrl)
-            } else if pumpbin::modules::upload_remote_modules()
-                .iter()
-                .any(|m| m.id() == id)
-            {
-                Some(WireKind::UploadRemote)
-            } else if pumpbin::modules::post_build_modules()
-                .iter()
-                .any(|m| m.id() == id)
-            {
-                Some(WireKind::PostBuild)
-            } else {
-                None
-            };
-            let kind = kind.ok_or_else(|| {
+                // Resolve kind: external registry tells us explicitly;
+                // for built-ins we probe each kind by id and the first
+                // hit wins (built-ins don't overlap).
+                let kind = if let Some(ext) = registry().get(id) {
+                    Some(ext.kind())
+                } else if pumpbin::modules::encrypt_modules()
+                    .iter()
+                    .any(|m| m.id() == id)
+                {
+                    Some(WireKind::Encrypt)
+                } else if pumpbin::modules::format_encrypted_modules()
+                    .iter()
+                    .any(|m| m.id() == id)
+                {
+                    Some(WireKind::FormatEncrypted)
+                } else if pumpbin::modules::format_url_modules()
+                    .iter()
+                    .any(|m| m.id() == id)
+                {
+                    Some(WireKind::FormatUrl)
+                } else if pumpbin::modules::upload_remote_modules()
+                    .iter()
+                    .any(|m| m.id() == id)
+                {
+                    Some(WireKind::UploadRemote)
+                } else if pumpbin::modules::post_build_modules()
+                    .iter()
+                    .any(|m| m.id() == id)
+                {
+                    Some(WireKind::PostBuild)
+                } else {
+                    None
+                };
+                let kind = kind.ok_or_else(|| {
                 anyhow!(
                     "module test: id '{id}' not registered. Run `pumpbin-cli module list` to see what's installed."
                 )
             })?;
 
-            let result: Vec<u8> = match kind {
-                WireKind::Encrypt => {
-                    let out = pumpbin::modules::dispatch::encrypt(id, &payload)?;
-                    eprintln!(
-                        "module '{id}' encrypted {} → {} bytes; {} pass entries:",
-                        payload.len(),
-                        out.encrypted.len(),
-                        out.pass.len(),
-                    );
-                    for p in &out.pass {
+                let result: Vec<u8> = match kind {
+                    WireKind::Encrypt => {
+                        let out = pumpbin::modules::dispatch::encrypt(id, &payload)?;
                         eprintln!(
-                            "  holder={}  replace_by={}",
-                            String::from_utf8_lossy(&p.holder),
-                            bytes_short(&p.replace_by)
+                            "module '{id}' encrypted {} → {} bytes; {} pass entries:",
+                            payload.len(),
+                            out.encrypted.len(),
+                            out.pass.len(),
                         );
+                        for p in &out.pass {
+                            eprintln!(
+                                "  holder={}  replace_by={}",
+                                String::from_utf8_lossy(&p.holder),
+                                bytes_short(&p.replace_by)
+                            );
+                        }
+                        out.encrypted
                     }
-                    out.encrypted
-                }
-                WireKind::FormatEncrypted => {
-                    let out = pumpbin::modules::dispatch::format_encrypted(id, &payload)?;
-                    eprintln!(
-                        "module '{id}' reformatted {} → {} bytes; {} pass entries:",
-                        payload.len(),
-                        out.formatted.len(),
-                        out.pass.len(),
-                    );
-                    for p in &out.pass {
+                    WireKind::FormatEncrypted => {
+                        let out = pumpbin::modules::dispatch::format_encrypted(id, &payload)?;
                         eprintln!(
-                            "  holder={}  replace_by={}",
-                            String::from_utf8_lossy(&p.holder),
-                            bytes_short(&p.replace_by)
+                            "module '{id}' reformatted {} → {} bytes; {} pass entries:",
+                            payload.len(),
+                            out.formatted.len(),
+                            out.pass.len(),
                         );
+                        for p in &out.pass {
+                            eprintln!(
+                                "  holder={}  replace_by={}",
+                                String::from_utf8_lossy(&p.holder),
+                                bytes_short(&p.replace_by)
+                            );
+                        }
+                        out.formatted
                     }
-                    out.formatted
-                }
-                WireKind::FormatUrl => {
-                    let url = std::str::from_utf8(&payload)
-                        .map_err(|e| anyhow!("format-url payload must be UTF-8: {e}"))?;
-                    pumpbin::modules::dispatch::format_url(id, url)?.into_bytes()
-                }
-                WireKind::UploadRemote => {
-                    pumpbin::modules::dispatch::upload_remote(id, &payload)?.into_bytes()
-                }
-                WireKind::PostBuild => {
-                    let before = payload.clone();
-                    let mut buf = payload;
-                    pumpbin::modules::dispatch::post_build(id, args, &mut buf)?;
-                    let changed = before.iter().zip(buf.iter()).filter(|(a, b)| a != b).count();
-                    eprintln!(
-                        "module '{id}' post-build: {} → {} bytes ({changed} bytes changed)",
-                        before.len(),
-                        buf.len()
-                    );
-                    buf
-                }
-            };
+                    WireKind::FormatUrl => {
+                        let url = std::str::from_utf8(&payload)
+                            .map_err(|e| anyhow!("format-url payload must be UTF-8: {e}"))?;
+                        pumpbin::modules::dispatch::format_url(id, url)?.into_bytes()
+                    }
+                    WireKind::UploadRemote => {
+                        pumpbin::modules::dispatch::upload_remote(id, &payload)?.into_bytes()
+                    }
+                    WireKind::PostBuild => {
+                        let before = payload.clone();
+                        let mut buf = payload;
+                        pumpbin::modules::dispatch::post_build(id, args, &mut buf)?;
+                        let changed = before
+                            .iter()
+                            .zip(buf.iter())
+                            .filter(|(a, b)| a != b)
+                            .count();
+                        eprintln!(
+                            "module '{id}' post-build: {} → {} bytes ({changed} bytes changed)",
+                            before.len(),
+                            buf.len()
+                        );
+                        buf
+                    }
+                };
 
-            if output == "-" {
-                std::io::stdout().write_all(&result)?;
-            } else {
-                std::fs::write(output, &result)?;
-                if output != "-" {
-                    eprintln!("wrote {output}");
+                if output == "-" {
+                    std::io::stdout().write_all(&result)?;
+                } else {
+                    std::fs::write(output, &result)?;
+                    if output != "-" {
+                        eprintln!("wrote {output}");
+                    }
                 }
+                Ok(())
             }
-            Ok(())
-        }}, // end Commands::Module
+        }, // end Commands::Module
         Commands::NewLoader {
             dest,
             name,
@@ -2069,10 +2085,7 @@ fn inspect_loader_binary(path: &Path, bytes: &[u8], json: bool) {
             return 0;
         }
         let pad = bytes[start];
-        bytes[start..]
-            .iter()
-            .take_while(|&&b| b == pad)
-            .count()
+        bytes[start..].iter().take_while(|&&b| b == pad).count()
     });
 
     let marker_found = prefix_offset.is_some();
@@ -2107,10 +2120,7 @@ fn inspect_loader_binary(path: &Path, bytes: &[u8], json: bool) {
     println!();
     println!("markers:");
     match prefix_offset {
-        Some(off) => println!(
-            "  shellcode    {:?}   offset 0x{:X}",
-            DEFAULT_PREFIX, off
-        ),
+        Some(off) => println!("  shellcode    {:?}   offset 0x{:X}", DEFAULT_PREFIX, off),
         None => println!("  shellcode    {:?}   NOT FOUND", DEFAULT_PREFIX),
     }
     match size_holder_offset {

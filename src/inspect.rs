@@ -192,10 +192,7 @@ pub fn render_text(report: &InspectReport) -> String {
     let _ = writeln!(
         s,
         "  encrypt:        {}",
-        report
-            .encrypt_module
-            .as_deref()
-            .unwrap_or("<none>")
+        report.encrypt_module.as_deref().unwrap_or("<none>")
     );
     let _ = writeln!(
         s,
@@ -213,10 +210,7 @@ pub fn render_text(report: &InspectReport) -> String {
     let _ = writeln!(
         s,
         "  upload-remote:  {}",
-        report
-            .upload_remote_module
-            .as_deref()
-            .unwrap_or("<none>")
+        report.upload_remote_module.as_deref().unwrap_or("<none>")
     );
 
     let _ = writeln!(s, "\nPlatforms ({}):", report.platforms.len());
