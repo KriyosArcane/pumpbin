@@ -225,24 +225,24 @@ $ pumpbin-cli inspect loader.exe --help-markers
 
 ## Converting an existing loader to work with PumpBin
 
-Already have a working shellcode loader? You swap out the hardcoded shellcode buffer for PumpBin's marker system. Four things to get right.
+Already have a working shellcode loader? You swap out the hardcoded shellcode buffer for PumpBin's marker system. Two things to get right.
 
-**1. Your shellcode starts at index 0 after stamping.**
+1. Your shellcode starts at index 0 after stamping.
 
-PumpBin overwrites the entire placeholder region, including the `$$SHELLCODE$$` prefix itself. Once stamped, byte 0 of your buffer is byte 0 of your shellcode. Do not skip the first 13 bytes. Do not add any offset for the marker. Just read from `[0]`.
+PumpBin overwrites the entire placeholder region, including the `$$SHELLCODE$$` prefix itself. Once stamped, byte 0 of your buffer is byte 0 of your shellcode. Do not skip the first 13 bytes. Do not add any offset for the marker. Read from `[0]`.
 
-**2. Stop the release compiler from deleting your buffer.**
+2. Stop the release compiler from deleting your buffer.
 
-In Rust, wrap the functions that return your shellcode buffer and size holder in `std::hint::black_box` and mark them `#[inline(never)]`. Without those, the compiler sees `"$$99999$$".parse()` returns an error, concludes the shellcode length is always 0, and silently removes the entire buffer. The binary builds clean. The markers are gone. Run `pumpbin-cli inspect` after building to confirm they are actually there.
+In Rust, wrap the functions returning your shellcode buffer and size holder in `std::hint::black_box` and mark them `#[inline(never)]`. Without those, the compiler sees `"$$99999$$".parse()` returns an error, concludes the shellcode length is always 0, and silently removes the entire buffer. The binary builds clean. The markers are gone. Run `pumpbin-cli inspect` after building to confirm they are there.
 
-**Check your work before stamping:**
+Check your work before stamping:
 
 ```
 $ pumpbin-cli inspect yourloader.exe
 verdict:   SUITABLE: ready for pumpbin-cli stamp
 ```
 
-NOT SUITABLE means the markers are missing or were removed by the optimizer. If you see NOT SUITABLE on an already-stamped implant, that is fine — it means the markers were consumed, which is exactly what should happen.
+NOT SUITABLE means the markers are missing or the optimizer removed them. If you see NOT SUITABLE on an already-stamped implant, that is expected. The markers were consumed during stamping.
 
 ## check
 
