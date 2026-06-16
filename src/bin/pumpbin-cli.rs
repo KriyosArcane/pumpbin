@@ -6,7 +6,7 @@ use clap_complete::{generate, Shell};
 use dirs::home_dir;
 use owo_colors::OwoColorize;
 use pumpbin::plugin::Plugin;
-use pumpbin::{BinaryType, Platform, PluginConfigField, ShellcodeSaveType};
+use pumpbin::{BinaryType, Platform, ShellcodeSaveType};
 use std::collections::BTreeMap;
 use std::ops::Not;
 use std::path::{Path, PathBuf};
@@ -50,10 +50,7 @@ struct Cli {
     #[arg(long, global = true, value_name = "FILTER", help_heading = "Output")]
     log_level: Option<String>,
 
-    /// Emit machine-readable JSON on stdout instead of human-readable
-    /// text. Schema: `{"schema":"pumpbin.cli/v1","ok":bool,
-    /// "data":{...} (when ok),"error":{"code":"PB-Exxxx","message":"..."}
-    /// (when !ok)}`. Tracing logs still go to stderr.
+    /// Emit machine-readable JSON on stdout. Logs still go to stderr.
     #[arg(long, global = true, help_heading = "Output")]
     json: bool,
 
@@ -134,8 +131,7 @@ impl From<CompletionShell> for Shell {
 #[derive(Subcommand)]
 #[allow(clippy::large_enum_variant)]
 enum Commands {
-    /// Generate an implant from a loader pack and shellcode
-    #[command(next_help_heading = "Generate")]
+    /// Stamp shellcode into a .b1n loader pack.
     Generate {
         /// Path to the .b1n loader pack (or a crate directory containing
         /// a packed .b1n).
@@ -179,8 +175,7 @@ enum Commands {
         module_config: Vec<String>,
     },
 
-    /// Generate multiple implants from a directory of shellcodes
-    #[command(next_help_heading = "Generate")]
+    /// Stamp every matching shellcode file in a directory.
     Batch {
         /// Path to the PumpBin loader pack (.b1n)
         #[arg(short = 'p', long = "pack", value_name = "PACK", value_hint = clap::ValueHint::FilePath)]
@@ -214,43 +209,26 @@ enum Commands {
         module_config: Vec<String>,
     },
 
-    /// Create a new .b1n loader pack from template binary and module(s)
-    #[command(next_help_heading = "Create")]
+    /// Wrap a compiled loader binary as a reusable .b1n pack.
     CreateB1n {
         /// Output .b1n file path
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: PathBuf,
 
-        /// Loader pack name
+        /// Loader pack name. Defaults to the output file stem.
         #[arg(long)]
-        name: String,
-
-        /// Author string
-        #[arg(long, default_value = "pumpbin-cli")]
-        author: String,
-
-        /// Loader pack version string
-        #[arg(
-            long = "pack-version",
-            value_name = "PACK_VERSION",
-            default_value = "0.1.0"
-        )]
-        plugin_version: String,
-
-        /// Description
-        #[arg(long, default_value = "Created by pumpbin-cli create-b1n")]
-        desc: String,
+        name: Option<String>,
 
         /// Template binary path
         #[arg(long, value_hint = clap::ValueHint::FilePath)]
         template: PathBuf,
 
-        /// Platform (windows, linux, darwin)
+        /// Platform (windows, linux, darwin). Auto-detected from the template if omitted.
         #[arg(long)]
-        platform: String,
+        platform: Option<String>,
 
-        /// Binary type (exe, lib)
-        #[arg(short = 't', long = "type")]
+        /// Binary type (exe, lib).
+        #[arg(short = 't', long = "type", default_value = "exe")]
         binary_type: String,
 
         /// Shellcode placeholder marker bytes.
@@ -300,18 +278,7 @@ enum Commands {
         save_type: String,
     },
 
-    /// Pack a pre-built loader binary and immediately stamp shellcode
-    /// into it — one command, no .b1n file needed on disk.
-    ///
-    /// Platform is auto-detected from the loader's magic bytes
-    /// (MZ→windows, ELF→linux, Mach-O→darwin). Pass --platform to
-    /// override. The --save-b1n flag persists the intermediate .b1n so
-    /// you can reuse it later with `pumpbin-cli generate`.
-    ///
-    /// Example:
-    ///   pumpbin-cli stamp loader.exe payload.bin
-    ///   pumpbin-cli stamp loader.exe payload.bin --save-b1n loader.b1n
-    #[command(next_help_heading = "Generate")]
+    /// Stamp shellcode into a compiled loader binary.
     Stamp {
         /// Compiled loader binary (PE, ELF, or Mach-O).
         /// Must contain a shellcode placeholder (default: $$SHELLCODE$$).
@@ -364,19 +331,9 @@ enum Commands {
         /// Size-holder marker the loader reads at runtime.
         #[arg(long, default_value = "$$99999$$", help_heading = "Advanced")]
         size_holder: String,
-
-        /// Name embedded in the ephemeral .b1n (used as output basename
-        /// when --output is omitted).
-        #[arg(long, default_value = "stamp", help_heading = "Advanced")]
-        name: String,
     },
 
-    /// Build a scaffolded loader crate and pack the resulting binary
-    /// into a .b1n in one step. Reads `[package.metadata.pumpbin]`
-    /// from `<crate-dir>/Cargo.toml` for the loader config. The
-    /// modern replacement for the generated `pumpbin-pack.sh` —
-    /// cross-platform (no bash), one command instead of two.
-    #[command(next_help_heading = "Create")]
+    /// Build a scaffolded loader crate and assemble its .b1n pack.
     Pack {
         /// Path to the scaffolded loader crate. Defaults to the current
         /// directory.
@@ -400,17 +357,7 @@ enum Commands {
         skip_build: bool,
     },
 
-    /// Inspect a .b1n loader pack or a compiled loader binary.
-    ///
-    /// For .b1n files: shows pack name, supported platforms, embedded
-    /// modules, and config schema. Use `--diff` to compare two packs.
-    ///
-    /// For loader binaries (PE/ELF/Mach-O): checks whether PumpBin
-    /// shellcode markers are present and reports the capacity.
-    ///
-    /// Use `--verify` to also check authenticode and PE checksum on a
-    /// generated implant.
-    #[command(next_help_heading = "Inspect")]
+    /// Inspect a .b1n pack, loader binary, or generated implant.
     Inspect {
         /// Path to a .b1n loader pack or a compiled loader/implant binary.
         binary: PathBuf,
@@ -433,12 +380,7 @@ enum Commands {
         help_markers: bool,
     },
 
-    /// Convert a raw shellcode file to a different representation
-    /// (hex string, C array, C# byte array, Python bytes literal,
-    /// base64). Pure formatting; no donut wrapping, no msfvenom
-    /// shimming. Useful for embedding shellcode in source code that
-    /// gets compiled outside the PumpBin implant flow.
-    #[command(next_help_heading = "Inspect")]
+    /// Convert raw shellcode to hex, C, C#, Python, base64, or raw bytes.
     Convert {
         /// Path to the input shellcode file.
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
@@ -451,14 +393,7 @@ enum Commands {
         output: Option<PathBuf>,
     },
 
-    /// Build an implant from a pumpbin.toml profile file.
-    ///
-    /// The profile captures pack source, target platform/binary type,
-    /// shellcode source (file/url/base64/hex), module config overrides,
-    /// and output path. See `pumpbin::profile` module docs for the
-    /// full schema. v1.3.0 first lands the profile flow; `--json` output
-    /// and SBOM emission come in follow-up chips.
-    #[command(next_help_heading = "Generate")]
+    /// Build an implant from a pumpbin.toml profile.
     Build {
         /// Path to the pumpbin.toml profile.
         #[arg(short = 'f', long, value_hint = clap::ValueHint::FilePath)]
@@ -466,26 +401,10 @@ enum Commands {
     },
 
     /// List and test modules.
-    ///
-    /// `pumpbin-cli module list` — show all installed modules.
-    /// `pumpbin-cli module test <ID>` — run a module against a sample input.
-    #[command(subcommand, next_help_heading = "Inspect")]
+    #[command(subcommand)]
     Module(ModuleCommands),
 
-    /// Scaffold a new PumpBin-ready loader crate. Writes a Cargo crate
-    /// at <dest> with `Cargo.toml` (carrying a
-    /// `[package.metadata.pumpbin]` block), `build.rs`, and
-    /// `src/main.rs` pre-wired to the placeholder markers. Then run
-    /// `pumpbin-cli pack <dest>` to build the crate and assemble the
-    /// `.b1n` in one step.
-    ///
-    /// `--padding-bytes` sets the shellcode placeholder capacity
-    /// (default 1 MiB; PIC loaders typically want 4 KiB - 64 KiB).
-    /// `--randomize-markers` swaps the default `$$SHELLCODE$$` /
-    /// `$$99999$$` ASCII markers for a unique-per-build pair so the
-    /// pre-stamp template binary doesn't carry stable static
-    /// signatures across operator builds.
-    #[command(next_help_heading = "Create")]
+    /// Scaffold a marker-ready Rust loader crate.
     NewLoader {
         /// Path to write the new crate to. Must not exist.
         dest: PathBuf,
@@ -545,12 +464,7 @@ enum Commands {
         pack: bool,
     },
 
-    /// Pre-flight YARA scan of a generated artifact. Shells out to the
-    /// `yara` binary; install via your package manager (`apt install
-    /// yara`, `brew install yara`, `pacman -S yara`). Exits 0 if clean,
-    /// non-zero with matched rule names if any hits. Use this before
-    /// deploying to a sandbox/lab to avoid round-trips for static hits.
-    #[command(next_help_heading = "Inspect")]
+    /// Run YARA against a generated artifact.
     Check {
         /// Path to the artifact (PE, ELF, or any binary).
         artifact: std::path::PathBuf,
@@ -565,12 +479,7 @@ enum Commands {
         yara_bin: Option<std::path::PathBuf>,
     },
 
-    /// Scan a directory of PE files (.exe, .dll, .sys) and report
-    /// which carry an embedded Authenticode signature (suitable as a
-    /// `trustmebro` / `pe-version-info from_donor=` source) versus
-    /// catalog-signed-only (the signature lives in a separate `.cat`
-    /// file and cannot be grafted onto another PE).
-    #[command(next_help_heading = "Inspect")]
+    /// Find PE files with embedded Authenticode signatures.
     ListDonors {
         /// Directory to scan (non-recursive by default).
         path: std::path::PathBuf,
@@ -584,16 +493,11 @@ enum Commands {
         embedded_only: bool,
     },
 
-    /// Print shell completion script to stdout
-    #[command(next_help_heading = "Shell")]
+    /// Print shell completion script to stdout.
     Completions {
         /// Target shell
         #[arg(value_enum)]
         shell: CompletionShell,
-
-        /// Command name to generate completions for (defaults to pumpbin-cli)
-        #[arg(long, default_value = "pumpbin-cli")]
-        command_name: String,
     },
 }
 
@@ -617,7 +521,7 @@ enum ModuleCommands {
 
     /// Run a module against a sample input (module author dev loop).
     ///
-    /// Reads the payload from `--input` (or stdin with `-`), forwards
+    /// Reads the payload from INPUT (or stdin with `-`), forwards
     /// `--arg` key=value pairs as the module's args, writes the response
     /// to `--output` (or stdout with `-`).
     Test {
@@ -625,8 +529,8 @@ enum ModuleCommands {
         #[arg(value_name = "ID")]
         id: String,
 
-        /// Input payload path or `-` for stdin.
-        #[arg(short, long)]
+        /// Input payload path, or `-`/omitted for stdin.
+        #[arg(default_value = "-", value_hint = clap::ValueHint::AnyPath)]
         input: String,
 
         /// Repeatable key=value args forwarded to the module.
@@ -757,13 +661,8 @@ fn dispatch(cli: &Cli) -> Result<()> {
                     runtime_config.insert(format!("post:{id}"), encode_post_args(&args));
                 }
             }
-            let schema_fields = plugin_schema_fields(&plugin_obj);
-            let runtime_config =
-                normalize_runtime_config_for_schema(runtime_config, &schema_fields)?;
+            let runtime_config = normalize_reserved_runtime_config(runtime_config)?;
             plugin_obj.validate_for_generation(parsed_platform, parsed_binary_type)?;
-            plugin_obj
-                .plugins()
-                .validate_module_config(Some(&runtime_config))?;
 
             // Resolve output path before dry-run so we can show it in the preview.
             let output_path = if let Some(out) = output {
@@ -901,9 +800,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
             let plugin_buf = std::fs::read(&plugin_path)?;
             let plugin_obj = Plugin::decode_from_slice(&plugin_buf)?;
             let runtime_config = parse_module_config(module_config)?;
-            let schema_fields = plugin_schema_fields(&plugin_obj);
-            let runtime_config =
-                normalize_runtime_config_for_schema(runtime_config, &schema_fields)?;
+            let runtime_config = normalize_reserved_runtime_config(runtime_config)?;
 
             let (parsed_platform, parsed_binary_type) = plugin_obj
                 .bins()
@@ -931,9 +828,6 @@ fn dispatch(cli: &Cli) -> Result<()> {
 
             tracing::info!(%parsed_platform, %parsed_binary_type, "Validating plugin for target");
             plugin_obj.validate_for_generation(parsed_platform, parsed_binary_type)?;
-            plugin_obj
-                .plugins()
-                .validate_module_config(Some(&runtime_config))?;
 
             let save_type = if plugin_obj.replace().size_holder().is_some() {
                 ShellcodeSaveType::Local
@@ -1134,9 +1028,6 @@ fn dispatch(cli: &Cli) -> Result<()> {
         Commands::CreateB1n {
             output,
             name,
-            author,
-            plugin_version,
-            desc,
             template,
             platform,
             binary_type,
@@ -1149,9 +1040,27 @@ fn dispatch(cli: &Cli) -> Result<()> {
             post_module_config,
             module_config,
         } => {
-            let parsed_platform = parse_platform(platform)?;
+            let template_bytes = std::fs::read(template).with_context(|| {
+                format!("failed to read template binary: {}", template.display())
+            })?;
+            let parsed_platform = match platform.as_deref() {
+                Some(platform) => parse_platform(platform)?,
+                None => detect_platform_from_binary(&template_bytes).ok_or_else(|| {
+                    anyhow!(
+                        "could not auto-detect template platform; pass --platform windows|linux|darwin"
+                    )
+                })?,
+            };
             let parsed_binary_type = parse_binary_type(binary_type)?;
             let parsed_save_type = parse_save_type(save_type)?;
+            let pack_name = name.clone().unwrap_or_else(|| {
+                output
+                    .file_stem()
+                    .or_else(|| template.file_stem())
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("loader")
+                    .to_string()
+            });
 
             // Validate that --encrypt-module is actually an encrypt-kind module.
             if let Some(id) = encrypt_module.as_deref() {
@@ -1168,10 +1077,6 @@ fn dispatch(cli: &Cli) -> Result<()> {
                     );
                 }
             }
-
-            let template_bytes = std::fs::read(template).with_context(|| {
-                format!("failed to read template binary: {}", template.display())
-            })?;
 
             let mut cfg = parse_module_config(module_config)?;
             for entry in post_module_config {
@@ -1191,10 +1096,10 @@ fn dispatch(cli: &Cli) -> Result<()> {
 
             let data = pumpbin::pack::B1nBuilder {
                 template_bytes,
-                name: name.clone(),
-                author: author.clone(),
-                plugin_version: plugin_version.clone(),
-                desc: desc.clone(),
+                name: pack_name,
+                author: "pumpbin-cli".to_string(),
+                plugin_version: "0.1.0".to_string(),
+                desc: "Created by pumpbin-cli create-b1n".to_string(),
                 platform: parsed_platform,
                 binary_type: parsed_binary_type,
                 save_type: parsed_save_type,
@@ -1225,7 +1130,6 @@ fn dispatch(cli: &Cli) -> Result<()> {
             save_b1n,
             dry_run,
             post,
-            name,
         } => {
             let template_bytes = std::fs::read(loader)
                 .with_context(|| format!("failed to read loader: {}", loader.display()))?;
@@ -1267,7 +1171,11 @@ fn dispatch(cli: &Cli) -> Result<()> {
             );
             let b1n_bytes = pumpbin::pack::B1nBuilder {
                 template_bytes,
-                name: name.clone(),
+                name: loader
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("stamp")
+                    .to_string(),
                 author: "pumpbin-cli stamp".to_string(),
                 plugin_version: "0.1.0".to_string(),
                 desc: "Created by pumpbin-cli stamp".to_string(),
@@ -1344,13 +1252,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
 
             plugin_obj.validate_shellcode_source(shellcode)?;
 
-            let schema_fields = plugin_schema_fields(&plugin_obj);
-            let runtime_config =
-                normalize_runtime_config_for_schema(runtime_config, &schema_fields)?;
-            plugin_obj
-                .plugins()
-                .validate_module_config(Some(&runtime_config))?;
-
+            let runtime_config = normalize_reserved_runtime_config(runtime_config)?;
             let sc_bytes = std::fs::read(shellcode.as_str())
                 .with_context(|| format!("failed to read shellcode: {}", shellcode))?;
             let sc_size = sc_bytes.len();
@@ -1360,7 +1262,12 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 out.clone()
             } else {
                 let ext = ext_for_output(resolved_platform, resolved_binary_type);
-                let base = name.to_lowercase().replace(' ', "_");
+                let base = loader
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("stamp")
+                    .to_lowercase()
+                    .replace(' ', "_");
                 let candidate = PathBuf::from(format!("{base}.{ext}"));
                 if candidate.exists() {
                     let ts = Local::now().format("%Y%m%d_%H%M%S").to_string();
@@ -1373,7 +1280,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
             if *dry_run {
                 println!("DRY RUN: nothing will be written\n");
                 println!("  Loader:       {}", loader.display());
-                println!("  Pack:         {}", name);
+                println!("  Pack:         {}", plugin_obj.info().plugin_name());
                 println!(
                     "  Target:       {} / {}",
                     resolved_platform, resolved_binary_type
@@ -1594,7 +1501,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 output,
                 debug,
             } => {
-                use pumpbin::modules::external::{registry, wire::WireKind};
+                use pumpbin::modules::external::wire::WireKind;
                 use std::io::{Read, Write};
 
                 if *debug {
@@ -1611,25 +1518,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
                     std::fs::read(input)?
                 };
 
-                // Resolve kind: external registry tells us explicitly;
-                // for built-ins we probe each kind by id and the first
-                // hit wins (built-ins don't overlap).
-                let kind = if let Some(ext) = registry().get(id) {
-                    Some(ext.kind())
-                } else if pumpbin::modules::encrypt_modules()
-                    .iter()
-                    .any(|m| m.id() == id)
-                {
-                    Some(WireKind::Encrypt)
-                } else if pumpbin::modules::post_build_modules()
-                    .iter()
-                    .any(|m| m.id() == id)
-                {
-                    Some(WireKind::PostBuild)
-                } else {
-                    None
-                };
-                let kind = kind.ok_or_else(|| {
+                let kind = pumpbin::modules::wire_kind_for(id).ok_or_else(|| {
                 anyhow!(
                     "module test: id '{id}' not registered. Run `pumpbin-cli module list` to see what's installed."
                 )
@@ -1652,31 +1541,6 @@ fn dispatch(cli: &Cli) -> Result<()> {
                             );
                         }
                         out.encrypted
-                    }
-                    WireKind::FormatEncrypted => {
-                        let out = pumpbin::modules::dispatch::format_encrypted(id, args, &payload)?;
-                        eprintln!(
-                            "module '{id}' reformatted {} → {} bytes; {} pass entries:",
-                            payload.len(),
-                            out.formatted.len(),
-                            out.pass.len(),
-                        );
-                        for p in &out.pass {
-                            eprintln!(
-                                "  holder={}  replace_by=<{} bytes>",
-                                String::from_utf8_lossy(&p.holder),
-                                p.replace_by.len()
-                            );
-                        }
-                        out.formatted
-                    }
-                    WireKind::FormatUrl => {
-                        let url = std::str::from_utf8(&payload)
-                            .map_err(|e| anyhow!("format-url payload must be UTF-8: {e}"))?;
-                        pumpbin::modules::dispatch::format_url(id, args, url)?.into_bytes()
-                    }
-                    WireKind::UploadRemote => {
-                        pumpbin::modules::dispatch::upload_remote(id, args, &payload)?.into_bytes()
                     }
                     WireKind::PostBuild => {
                         let before = payload.clone();
@@ -1780,13 +1644,10 @@ fn dispatch(cli: &Cli) -> Result<()> {
             list_donors(path, *recursive, *embedded_only)?;
             Ok(())
         }
-        Commands::Completions {
-            shell,
-            command_name,
-        } => {
+        Commands::Completions { shell } => {
             let mut cmd = Cli::command();
             let generator: Shell = shell.clone().into();
-            generate(generator, &mut cmd, command_name, &mut std::io::stdout());
+            generate(generator, &mut cmd, "pumpbin-cli", &mut std::io::stdout());
             Ok(())
         }
     }
@@ -1861,9 +1722,6 @@ fn list_modules(show_options: bool, only_id: Option<&str>, json: bool) -> Result
     }
 
     print_section("encrypt", "encrypt");
-    print_section("format_encrypted", "format-encrypted");
-    print_section("format_url", "format-url");
-    print_section("upload_remote", "upload-remote");
     print_section("post_build", "post-build");
 
     if let Some(want) = only_id {
@@ -2555,13 +2413,6 @@ fn parse_post_module_config_entry(entry: &str) -> Result<(usize, String, String)
     Ok((idx, key.to_string(), value.to_string()))
 }
 
-fn plugin_schema_fields(_plugin: &Plugin) -> Vec<PluginConfigField> {
-    // Pre-v2.0 this introspected each WASM module's exported
-    // `plugin_schema` via Extism. Native modules don't yet declare
-    // runtime-discoverable schemas; Step 7+ will wire this up.
-    Vec::new()
-}
-
 fn maybe_expand_home_path(value: &str) -> PathBuf {
     if value == "~" {
         return home_dir().unwrap_or_else(|| PathBuf::from(value));
@@ -2664,83 +2515,6 @@ fn normalize_reserved_runtime_config(
             let normalized = normalize_file_path_value(&value);
             config.insert(key, normalized);
             continue;
-        }
-    }
-
-    Ok(config)
-}
-
-fn normalize_runtime_config_for_schema(
-    mut config: BTreeMap<String, String>,
-    schema: &[PluginConfigField],
-) -> Result<BTreeMap<String, String>> {
-    config = normalize_reserved_runtime_config(config)?;
-
-    if schema.is_empty() {
-        return Ok(config);
-    }
-
-    for key in config.keys() {
-        if schema.iter().any(|f| &f.key == key).not() && is_reserved_runtime_key(key).not() {
-            return Err(anyhow!(
-                "Unknown --module-config key '{}'. This module schema defines: {}",
-                key,
-                schema
-                    .iter()
-                    .map(|f| f.key.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-        }
-    }
-
-    for field in schema {
-        let Some(value) = config.get_mut(&field.key) else {
-            continue;
-        };
-
-        if field.required && value.trim().is_empty() {
-            return Err(anyhow!(
-                "Config '{}' is required and cannot be empty.",
-                field.key
-            ));
-        }
-
-        match field.field_type.to_ascii_lowercase().as_str() {
-            "number" => {
-                value.parse::<f64>().map_err(|_| {
-                    anyhow!("Config '{}' expects a number, got '{}'.", field.key, value)
-                })?;
-            }
-            "boolean" => {
-                let normalized = match value.to_ascii_lowercase().as_str() {
-                    "1" | "true" | "yes" | "on" => "true",
-                    "0" | "false" | "no" | "off" => "false",
-                    _ => {
-                        return Err(anyhow!(
-                            "Config '{}' expects a boolean, got '{}'.",
-                            field.key,
-                            value
-                        ));
-                    }
-                };
-                *value = normalized.to_string();
-            }
-            "choice" if field.options.is_empty().not() && field.options.contains(value).not() => {
-                return Err(anyhow!(
-                    "Config '{}' expects one of [{}], got '{}'.",
-                    field.key,
-                    field.options.join(", "),
-                    value
-                ));
-            }
-            "file" | "file_base64" => {
-                *value = normalize_file_value(&field.key, value)?;
-            }
-            "file_path" => {
-                *value = normalize_file_path_value(value);
-            }
-            _ => {}
         }
     }
 

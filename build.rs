@@ -15,7 +15,6 @@ fn main() {
     // Re-run when module directories change (new modules added/removed).
     for dir in &[
         "src/modules/encrypt",
-        "src/modules/format_url",
         "src/modules/post_build",
         "src/modules/external",
     ] {

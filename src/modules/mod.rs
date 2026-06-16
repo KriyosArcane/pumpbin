@@ -6,7 +6,7 @@ pub mod post_build;
 use anyhow::Result;
 use serde::Serialize;
 
-use crate::plugin_system::{EncryptShellcodeOutput, Pass};
+use crate::plugin_system::EncryptShellcodeOutput;
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ModuleConstraints {
@@ -14,10 +14,6 @@ pub struct ModuleConstraints {
     pub host_platforms: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub requires_platform: Option<crate::Platform>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub requires_binary_type: Option<crate::BinaryType>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub incompatible_with: Vec<String>,
 }
 
 impl ModuleConstraints {
@@ -32,15 +28,6 @@ impl ModuleConstraints {
         if let Some(platform) = self.requires_platform {
             out.push(format!("target platform: {platform}"));
         }
-        if let Some(binary_type) = self.requires_binary_type {
-            out.push(format!("target type: {binary_type}"));
-        }
-        if !self.incompatible_with.is_empty() {
-            out.push(format!(
-                "incompatible with: {}",
-                self.incompatible_with.join(", ")
-            ));
-        }
         out
     }
 }
@@ -48,9 +35,6 @@ impl ModuleConstraints {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModuleKind {
     Encrypt,
-    FormatEncrypted,
-    FormatUrl,
-    UploadRemote,
     PostBuild,
 }
 
@@ -58,9 +42,6 @@ impl ModuleKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Encrypt => "encrypt",
-            Self::FormatEncrypted => "format-encrypted",
-            Self::FormatUrl => "format-url",
-            Self::UploadRemote => "upload-remote",
             Self::PostBuild => "post-build",
         }
     }
@@ -153,15 +134,6 @@ pub trait PostBuildModule: Send + Sync {
     fn apply(&self, args: &[String], implant: &mut Vec<u8>) -> Result<()>;
 }
 
-/// `format_encrypted_shellcode` reshapes the encrypted blob and may
-/// emit additional placeholder-replacement pairs (e.g. a new key or
-/// nonce that the format step introduced).
-#[derive(Debug, Default, Clone)]
-pub struct FormatEncryptedOutput {
-    pub formatted: Vec<u8>,
-    pub pass: Vec<Pass>,
-}
-
 pub fn encrypt_modules() -> &'static [&'static dyn EncryptModule] {
     &[&encrypt::aes256_gcm::AesGcm, &encrypt::xor::Xor]
 }
@@ -243,6 +215,16 @@ pub fn descriptor_for(kind: ModuleKind, id: &str) -> Option<ModuleDescriptor> {
     descriptors()
         .into_iter()
         .find(|descriptor| descriptor.kind == kind.as_str() && descriptor.id == id)
+}
+
+pub fn wire_kind_for(id: &str) -> Option<external::wire::WireKind> {
+    if encrypt_modules().iter().any(|module| module.id() == id) {
+        return Some(external::wire::WireKind::Encrypt);
+    }
+    if post_build_modules().iter().any(|module| module.id() == id) {
+        return Some(external::wire::WireKind::PostBuild);
+    }
+    external::registry().get(id).map(|module| module.kind())
 }
 
 fn builtin_descriptor(

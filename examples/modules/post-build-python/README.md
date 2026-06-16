@@ -15,7 +15,7 @@ pumpbin-cli module list         # should list uppercase-strings
 
 ```
 echo "hello world" > /tmp/in
-pumpbin-cli module test uppercase-strings -i /tmp/in -o /tmp/out
+pumpbin-cli module test uppercase-strings /tmp/in -o /tmp/out
 cat /tmp/out                     # → HELLO WORLD
 ```
 

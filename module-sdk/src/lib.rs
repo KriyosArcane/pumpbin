@@ -37,9 +37,6 @@ pub type Args = BTreeMap<String, String>;
 #[serde(rename_all = "kebab-case")]
 pub enum Kind {
     Encrypt,
-    FormatEncrypted,
-    FormatUrl,
-    UploadRemote,
     PostBuild,
 }
 
@@ -144,80 +141,6 @@ where
                 ..Default::default()
             },
             &encrypted,
-        ),
-        Err(e) => {
-            write_error(&format!("{e}"))?;
-            Err(e)
-        }
-    }
-}
-
-/// Drive a **format-url** module: returns a rewritten URL string.
-pub fn format_url<F>(f: F) -> Result<()>
-where
-    F: FnOnce(&[String], &str) -> std::result::Result<String, Box<dyn std::error::Error>>,
-{
-    let (header, payload) = read_request(Kind::FormatUrl)?;
-    let url = std::str::from_utf8(&payload)
-        .map_err(|e| format!("format-url payload must be UTF-8: {e}"))?;
-    match f(&header.args, url) {
-        Ok(out) => write_response(
-            ResponseHeader {
-                protocol: PROTOCOL_VERSION,
-                string: Some(out.clone()),
-                ..Default::default()
-            },
-            out.as_bytes(),
-        ),
-        Err(e) => {
-            write_error(&format!("{e}"))?;
-            Err(e)
-        }
-    }
-}
-
-/// Drive a **format-encrypted** module: reshapes encrypted bytes
-/// and may emit additional `Pass` entries for placeholders the
-/// reshape introduces.
-pub fn format_encrypted<F>(f: F) -> Result<()>
-where
-    F: FnOnce(
-        &[String],
-        &[u8],
-    ) -> std::result::Result<(Vec<u8>, Vec<WirePass>), Box<dyn std::error::Error>>,
-{
-    let (header, payload) = read_request(Kind::FormatEncrypted)?;
-    match f(&header.args, &payload) {
-        Ok((formatted, pass)) => write_response(
-            ResponseHeader {
-                protocol: PROTOCOL_VERSION,
-                pass,
-                ..Default::default()
-            },
-            &formatted,
-        ),
-        Err(e) => {
-            write_error(&format!("{e}"))?;
-            Err(e)
-        }
-    }
-}
-
-/// Drive an **upload-remote** module: takes shellcode, returns
-/// the URL where it landed.
-pub fn upload_remote<F>(f: F) -> Result<()>
-where
-    F: FnOnce(&[String], &[u8]) -> std::result::Result<String, Box<dyn std::error::Error>>,
-{
-    let (header, payload) = read_request(Kind::UploadRemote)?;
-    match f(&header.args, &payload) {
-        Ok(url) => write_response(
-            ResponseHeader {
-                protocol: PROTOCOL_VERSION,
-                string: Some(url.clone()),
-                ..Default::default()
-            },
-            url.as_bytes(),
         ),
         Err(e) => {
             write_error(&format!("{e}"))?;

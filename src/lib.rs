@@ -1,4 +1,3 @@
-pub mod config_utils;
 pub mod convert;
 pub mod error;
 pub mod inspect;
@@ -19,7 +18,7 @@ pub mod plugin_capnp {
 
 pub use convert::OutputFormat;
 pub use error::{PumpBinError, PumpBinResult};
-pub use plugin_system::{get_plugin_config_schema, Pass, PluginConfigField, PluginConfigSchema};
+pub use plugin_system::Pass;
 pub use profile::{BuildArtifact, Profile, PROFILE_SCHEMA};
 pub use sbom::{Sbom, SBOM_SCHEMA};
 pub use secret::SecretBuf;

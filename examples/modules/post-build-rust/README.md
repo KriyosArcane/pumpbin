@@ -19,14 +19,14 @@ pumpbin-cli module list              # → marker-append (external: ...)
 
 ```
 echo "hello" > /tmp/in
-pumpbin-cli module test marker-append -i /tmp/in -o /tmp/out
+pumpbin-cli module test marker-append /tmp/in -o /tmp/out
 hexdump -C /tmp/out    # last byte is 0xAA
 ```
 
 Pass an arg:
 
 ```
-pumpbin-cli module test marker-append -i /tmp/in -o /tmp/out --arg marker=0xCC
+pumpbin-cli module test marker-append /tmp/in -o /tmp/out --arg marker=0xCC
 hexdump -C /tmp/out    # last byte is 0xCC
 ```
 

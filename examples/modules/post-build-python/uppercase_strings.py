@@ -9,7 +9,7 @@ To use:
           ~/.config/pumpbin/modules/uppercase-strings
     chmod +x ~/.config/pumpbin/modules/uppercase-strings/uppercase_strings.py
     pumpbin-cli module list            # should show "uppercase-strings (external: ...)"
-    pumpbin-cli module test uppercase-strings -i sample.bin -o out.bin
+    pumpbin-cli module test uppercase-strings sample.bin -o out.bin
 """
 import json
 import struct

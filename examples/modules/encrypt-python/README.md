@@ -17,7 +17,7 @@ pumpbin-cli module list --options --id xor-demo-encrypt
 
 ```bash
 printf '\\x90\\xcc\\xc3' > /tmp/sc.bin
-pumpbin-cli module test xor-demo-encrypt --input /tmp/sc.bin --output /tmp/sc.xor --arg key=0x41
+pumpbin-cli module test xor-demo-encrypt /tmp/sc.bin --output /tmp/sc.xor --arg key=0x41
 ```
 
 ## Use

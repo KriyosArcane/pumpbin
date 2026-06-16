@@ -46,9 +46,6 @@ pub const PROTOCOL_VERSION: u32 = 1;
 #[serde(rename_all = "kebab-case")]
 pub enum WireKind {
     Encrypt,
-    FormatEncrypted,
-    FormatUrl,
-    UploadRemote,
     PostBuild,
 }
 
@@ -56,9 +53,6 @@ impl std::fmt::Display for WireKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             Self::Encrypt => "encrypt",
-            Self::FormatEncrypted => "format-encrypted",
-            Self::FormatUrl => "format-url",
-            Self::UploadRemote => "upload-remote",
             Self::PostBuild => "post-build",
         };
         f.write_str(s)
@@ -163,14 +157,13 @@ pub struct ResponseHeader {
     /// success; absence means full success.
     #[serde(default)]
     pub error: Option<String>,
-    /// For `encrypt` and `format-encrypted` modules: placeholder
+    /// For `encrypt` modules: placeholder
     /// replacement pairs (hex-encoded). Pumpbin patches the loader
     /// binary at each `holder` with the corresponding `replace_by`
     /// bytes.
     #[serde(default)]
     pub pass: Vec<WirePass>,
-    /// For `format-url` and `upload-remote`: the returned string
-    /// (the rewritten URL, or the upload URL).
+    /// Optional string payload for external modules.
     #[serde(default)]
     pub string: Option<String>,
 }

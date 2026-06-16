@@ -56,7 +56,7 @@ description = "all or first"
 |-------|----------|-------|
 | `name` | yes | Unique ID. Used in `--post` and `module list`. |
 | `description` | yes | One line. Shown in `module list`. |
-| `kind` | yes | `encrypt`, `format-encrypted`, `format-url`, `upload-remote`, or `post-build`. |
+| `kind` | yes | `encrypt` or `post-build`. |
 | `version` | no | Freeform string. SemVer by convention. |
 | `protocol` | no | Defaults to 1. |
 | `platforms` | no | `["any"]` for scripts. Omit to default to `["any"]`. |
@@ -163,7 +163,6 @@ See these examples for complete working templates with `parse_args`, `read_frame
 
 - [examples/modules/post-build-python/](examples/modules/post-build-python/) for a `post-build` transform.
 - [examples/modules/encrypt-python/](examples/modules/encrypt-python/) for an `encrypt` transform.
-- [examples/modules/format-url-python/](examples/modules/format-url-python/) for a `format-url` transform.
 
 ### Rust
 

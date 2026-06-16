@@ -106,9 +106,7 @@ If you change the loader source and want to refresh the `.b1n`:
 # itself a re-package of test/linux_loader_basic.b1n. To build fresh:
 pumpbin-cli create-b1n \
     --output examples/starter-plugins/linux.b1n \
-    --name "starter-linux" --author pumpbin \
-    --template <your-linux-loader-elf> \
-    --platform linux --type exe
+    --template <your-linux-loader-elf>
 ```
 
 **Windows:**
@@ -118,7 +116,5 @@ cd <path-to>/rust-shellcode/create_thread_pumpbin
 cargo build --release --target x86_64-pc-windows-gnu
 pumpbin-cli create-b1n \
     --output examples/starter-plugins/windows.b1n \
-    --name "starter-windows" --author pumpbin \
-    --template target/x86_64-pc-windows-gnu/release/loader.exe \
-    --platform windows --type exe
+    --template target/x86_64-pc-windows-gnu/release/loader.exe
 ```

@@ -153,9 +153,6 @@ impl Profile {
         let plugin = Plugin::decode_from_slice(&plugin_bytes)?;
 
         plugin.validate_for_generation(platform, binary_type)?;
-        plugin
-            .plugins()
-            .validate_module_config(Some(&self.module_config))?;
         let bin = plugin
             .bins()
             .get_that_binary(platform, binary_type)

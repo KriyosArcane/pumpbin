@@ -337,9 +337,6 @@ Current module phases:
 | Phase | When it runs | Typical use |
 | --- | --- | --- |
 | `encrypt` | Before shellcode is stamped | Encrypt payload and emit placeholder replacements for keys/nonces |
-| `format-encrypted` | After encryption, before stamping | Reformat or wrap encrypted bytes |
-| `format-url` | Remote mode, before URL stamping | Rewrite or decorate a remote payload URL |
-| `upload-remote` | Remote mode | Upload payload and return the URL to stamp |
 | `post-build` | After the implant is stamped | Patch bytes, graft cert blobs, clone version info, run finish transforms |
 
 PumpBin ships built-in Rust modules and supports external drop-in modules. External modules are directories with a `pumpbin-module.toml` manifest plus an executable. PumpBin reads the manifest during discovery and does not execute the module until you explicitly use it.
@@ -414,7 +411,7 @@ post_build:
         Path to a donor PE with an embedded Authenticode signature
 ```
 
-Drop-in modules go in `~/.config/pumpbin/modules/<id>/`. A TOML manifest and an executable in any language. See [MODULES.md](MODULES.md). Example external modules live under `examples/modules/`, including Python `encrypt`, `format-url`, and `post-build` templates.
+Drop-in modules go in `~/.config/pumpbin/modules/<id>/`. A TOML manifest and an executable in any language. See [MODULES.md](MODULES.md). Example external modules live under `examples/modules/`, including Python `encrypt` and `post-build` templates.
 
 Test a module in isolation while authoring it:
 

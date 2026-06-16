@@ -9,9 +9,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::modules::external::{self, wire::WireKind};
-use crate::modules::{
-    encrypt_modules, post_build_modules, FormatEncryptedOutput, ModuleArg, ModuleKind,
-};
+use crate::modules::{encrypt_modules, post_build_modules, ModuleArg, ModuleKind};
 use crate::plugin_system::EncryptShellcodeOutput;
 
 pub fn encrypt(id: &str, args: &[String], shellcode: &[u8]) -> Result<EncryptShellcodeOutput> {
@@ -50,85 +48,6 @@ pub fn encrypt(id: &str, args: &[String], shellcode: &[u8]) -> Result<EncryptShe
     ))
 }
 
-pub fn format_encrypted(
-    id: &str,
-    args: &[String],
-    encrypted: &[u8],
-) -> Result<FormatEncryptedOutput> {
-    if let Some(ext) = external::registry().get(id) {
-        if ext.kind() == WireKind::FormatEncrypted {
-            let descriptor = crate::modules::descriptor_for(ModuleKind::FormatEncrypted, id)
-                .ok_or_else(|| anyhow!("module descriptor not found for '{id}'"))?;
-            let args = validate_descriptor_args(id, args, &descriptor)?;
-            let (resp, body) = external::invoke(ext, WireKind::FormatEncrypted, &args, encrypted)?;
-            let pass = resp
-                .pass
-                .iter()
-                .map(|p| p.decode())
-                .collect::<Result<Vec<_>>>()?;
-            return Ok(FormatEncryptedOutput {
-                formatted: body,
-                pass,
-            });
-        }
-        return Err(anyhow!(
-            "module '{id}' exists but is kind {:?}, not format_encrypted",
-            ext.kind()
-        ));
-    }
-    Err(anyhow!(
-        "format_encrypted module not found: '{}' (available: {})",
-        id,
-        available_ids_for(WireKind::FormatEncrypted).join(", ")
-    ))
-}
-
-pub fn format_url(id: &str, args: &[String], url: &str) -> Result<String> {
-    if let Some(ext) = external::registry().get(id) {
-        if ext.kind() == WireKind::FormatUrl {
-            let descriptor = crate::modules::descriptor_for(ModuleKind::FormatUrl, id)
-                .ok_or_else(|| anyhow!("module descriptor not found for '{id}'"))?;
-            let args = validate_descriptor_args(id, args, &descriptor)?;
-            let (resp, _body) = external::invoke(ext, WireKind::FormatUrl, &args, url.as_bytes())?;
-            return resp
-                .string
-                .ok_or_else(|| anyhow!("format_url module '{id}' returned no string in response"));
-        }
-        return Err(anyhow!(
-            "module '{id}' exists but is kind {:?}, not format_url",
-            ext.kind()
-        ));
-    }
-    Err(anyhow!(
-        "format_url module not found: '{}' (available: {})",
-        id,
-        available_ids_for(WireKind::FormatUrl).join(", ")
-    ))
-}
-
-pub fn upload_remote(id: &str, args: &[String], shellcode: &[u8]) -> Result<String> {
-    if let Some(ext) = external::registry().get(id) {
-        if ext.kind() == WireKind::UploadRemote {
-            let descriptor = crate::modules::descriptor_for(ModuleKind::UploadRemote, id)
-                .ok_or_else(|| anyhow!("module descriptor not found for '{id}'"))?;
-            let args = validate_descriptor_args(id, args, &descriptor)?;
-            let (resp, _body) = external::invoke(ext, WireKind::UploadRemote, &args, shellcode)?;
-            return resp
-                .string
-                .ok_or_else(|| anyhow!("upload_remote module '{id}' returned no string"));
-        }
-        return Err(anyhow!(
-            "module '{id}' exists but is kind {:?}, not upload_remote",
-            ext.kind()
-        ));
-    }
-    Err(anyhow!(
-        "upload_remote module not found: '{}' (available: {})",
-        id,
-        available_ids_for(WireKind::UploadRemote).join(", ")
-    ))
-}
-
 pub fn post_build(id: &str, args: &[String], implant: &mut Vec<u8>) -> Result<()> {
     if let Some(m) = post_build_modules().iter().find(|m| m.id() == id) {
         let descriptor = crate::modules::descriptor_for(ModuleKind::PostBuild, id)
@@ -164,7 +83,6 @@ fn available_ids_for(kind: WireKind) -> Vec<String> {
             .iter()
             .map(|m| m.id().to_string())
             .collect(),
-        WireKind::FormatEncrypted | WireKind::FormatUrl | WireKind::UploadRemote => Vec::new(),
         WireKind::PostBuild => post_build_modules()
             .iter()
             .map(|m| m.id().to_string())
