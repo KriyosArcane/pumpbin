@@ -109,10 +109,10 @@ impl Markers {
     /// binary-mode and 9 bytes in decimal mode.
     fn randomized(binary_size_holder: bool) -> Self {
         const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut mk = |len: usize| -> String {
             (0..len)
-                .map(|_| ALPHABET[rng.gen_range(0..ALPHABET.len())] as char)
+                .map(|_| ALPHABET[rng.random_range(0..ALPHABET.len())] as char)
                 .collect()
         };
         Self {
@@ -581,7 +581,7 @@ mod tests {
             .join("\n");
         assert!(
             !code.contains("CreateThread"),
-            "Windows scaffold must not call CreateThread (OpSec regression)"
+            "Windows scaffold must not call CreateThread"
         );
         assert!(
             !cargo_toml.contains("Win32_System_Threading"),

@@ -4,12 +4,37 @@ use chrono::Local;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{generate, Shell};
 use dirs::home_dir;
+use owo_colors::OwoColorize;
 use pumpbin::plugin::Plugin;
 use pumpbin::{BinaryType, Platform, PluginConfigField, ShellcodeSaveType};
 use std::collections::BTreeMap;
 use std::ops::Not;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+fn use_color() -> bool {
+    std::io::IsTerminal::is_terminal(&std::io::stderr()) && std::env::var_os("NO_COLOR").is_none()
+}
+
+macro_rules! pb_info {
+    ($label:expr, $target:expr, $($arg:tt)*) => {
+        if use_color() {
+            eprintln!("{}  {:<20}  {}  {} {}", "PB".cyan(), $label, $target, "[*]".cyan(), format_args!($($arg)*));
+        } else {
+            eprintln!("PB  {:<20}  {}  [*] {}", $label, $target, format_args!($($arg)*));
+        }
+    };
+}
+
+macro_rules! pb_ok {
+    ($label:expr, $target:expr, $($arg:tt)*) => {
+        if use_color() {
+            eprintln!("{}  {:<20}  {}  {} {}", "PB".cyan(), $label, $target, "[+]".green(), format_args!($($arg)*));
+        } else {
+            eprintln!("PB  {:<20}  {}  [+] {}", $label, $target, format_args!($($arg)*));
+        }
+    };
+}
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -109,11 +134,12 @@ impl From<CompletionShell> for Shell {
 #[derive(Subcommand)]
 #[allow(clippy::large_enum_variant)]
 enum Commands {
-    /// Generate an implant from a plugin and shellcode
+    /// Generate an implant from a loader pack and shellcode
+    #[command(next_help_heading = "Generate")]
     Generate {
-        /// Path to the .b1n plugin pack (or a crate directory containing
+        /// Path to the .b1n loader pack (or a crate directory containing
         /// a packed .b1n).
-        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
+        #[arg(short = 'p', long = "pack", value_name = "PACK", value_hint = clap::ValueHint::FilePath)]
         plugin: PathBuf,
 
         /// Shellcode file (.bin) or remote URL.
@@ -147,7 +173,6 @@ enum Commands {
         /// Override module config key-values (repeatable).
         #[arg(
             long = "module-config",
-            alias = "plugin-config",
             value_name = "KEY=VALUE",
             help_heading = "Advanced"
         )]
@@ -155,9 +180,10 @@ enum Commands {
     },
 
     /// Generate multiple implants from a directory of shellcodes
+    #[command(next_help_heading = "Generate")]
     Batch {
-        /// Path to the PumpBin plugin (.b1n)
-        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
+        /// Path to the PumpBin loader pack (.b1n)
+        #[arg(short = 'p', long = "pack", value_name = "PACK", value_hint = clap::ValueHint::FilePath)]
         plugin: PathBuf,
 
         /// Path to the directory containing shellcode (.bin) files
@@ -178,22 +204,24 @@ enum Commands {
         #[arg(short, long, value_hint = clap::ValueHint::DirPath)]
         output_dir: Option<PathBuf>,
 
+        /// File extension to match in the shellcode directory (without
+        /// the leading dot). Default: "bin".
+        #[arg(long, default_value = "bin")]
+        extension: String,
+
         /// Override module config key-values (repeatable), e.g. --module-config padding_mb=8
-        #[arg(
-            long = "module-config",
-            alias = "plugin-config",
-            value_name = "KEY=VALUE"
-        )]
+        #[arg(long = "module-config", value_name = "KEY=VALUE")]
         module_config: Vec<String>,
     },
 
-    /// Create a new .b1n plugin pack from template binary and module(s)
+    /// Create a new .b1n loader pack from template binary and module(s)
+    #[command(next_help_heading = "Create")]
     CreateB1n {
         /// Output .b1n file path
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: PathBuf,
 
-        /// Plugin pack name
+        /// Loader pack name
         #[arg(long)]
         name: String,
 
@@ -201,8 +229,12 @@ enum Commands {
         #[arg(long, default_value = "pumpbin-cli")]
         author: String,
 
-        /// Plugin pack version string
-        #[arg(long = "plugin-version", default_value = "0.1.0")]
+        /// Loader pack version string
+        #[arg(
+            long = "pack-version",
+            value_name = "PACK_VERSION",
+            default_value = "0.1.0"
+        )]
         plugin_version: String,
 
         /// Description
@@ -279,6 +311,7 @@ enum Commands {
     /// Example:
     ///   pumpbin-cli stamp loader.exe payload.bin
     ///   pumpbin-cli stamp loader.exe payload.bin --save-b1n loader.b1n
+    #[command(next_help_heading = "Generate")]
     Stamp {
         /// Compiled loader binary (PE, ELF, or Mach-O).
         /// Must contain a shellcode placeholder (default: $$SHELLCODE$$).
@@ -300,10 +333,14 @@ enum Commands {
         #[arg(long = "post", value_name = "ID[:K=V,K=V]")]
         post: Vec<String>,
 
-        /// Also write the intermediate .b1n to this path for reuse
+        /// Also write the intermediate .b1n pack to this path for reuse
         /// with `pumpbin-cli generate`.
         #[arg(long, value_hint = clap::ValueHint::FilePath)]
         save_b1n: Option<PathBuf>,
+
+        /// Preview what would be stamped without writing output files.
+        #[arg(long)]
+        dry_run: bool,
 
         // --- Advanced ---
         /// Target platform (windows, linux, darwin).
@@ -339,6 +376,7 @@ enum Commands {
     /// from `<crate-dir>/Cargo.toml` for the loader config. The
     /// modern replacement for the generated `pumpbin-pack.sh` —
     /// cross-platform (no bash), one command instead of two.
+    #[command(next_help_heading = "Create")]
     Pack {
         /// Path to the scaffolded loader crate. Defaults to the current
         /// directory.
@@ -362,9 +400,9 @@ enum Commands {
         skip_build: bool,
     },
 
-    /// Inspect a .b1n plugin pack or a compiled loader binary.
+    /// Inspect a .b1n loader pack or a compiled loader binary.
     ///
-    /// For .b1n files: shows plugin name, supported platforms, embedded
+    /// For .b1n files: shows pack name, supported platforms, embedded
     /// modules, and config schema. Use `--diff` to compare two packs.
     ///
     /// For loader binaries (PE/ELF/Mach-O): checks whether PumpBin
@@ -372,8 +410,9 @@ enum Commands {
     ///
     /// Use `--verify` to also check authenticode and PE checksum on a
     /// generated implant.
+    #[command(next_help_heading = "Inspect")]
     Inspect {
-        /// Path to a .b1n plugin pack or a compiled loader/implant binary.
+        /// Path to a .b1n loader pack or a compiled loader/implant binary.
         binary: PathBuf,
 
         /// Check authenticode signature and PE checksum (for generated
@@ -399,6 +438,7 @@ enum Commands {
     /// base64). Pure formatting; no donut wrapping, no msfvenom
     /// shimming. Useful for embedding shellcode in source code that
     /// gets compiled outside the PumpBin implant flow.
+    #[command(next_help_heading = "Inspect")]
     Convert {
         /// Path to the input shellcode file.
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
@@ -413,11 +453,12 @@ enum Commands {
 
     /// Build an implant from a pumpbin.toml profile file.
     ///
-    /// The profile captures plugin source, target platform/binary type,
+    /// The profile captures pack source, target platform/binary type,
     /// shellcode source (file/url/base64/hex), module config overrides,
     /// and output path. See `pumpbin::profile` module docs for the
     /// full schema. v1.3.0 first lands the profile flow; `--json` output
     /// and SBOM emission come in follow-up chips.
+    #[command(next_help_heading = "Generate")]
     Build {
         /// Path to the pumpbin.toml profile.
         #[arg(short = 'f', long, value_hint = clap::ValueHint::FilePath)]
@@ -428,7 +469,7 @@ enum Commands {
     ///
     /// `pumpbin-cli module list` — show all installed modules.
     /// `pumpbin-cli module test <ID>` — run a module against a sample input.
-    #[command(subcommand)]
+    #[command(subcommand, next_help_heading = "Inspect")]
     Module(ModuleCommands),
 
     /// Scaffold a new PumpBin-ready loader crate. Writes a Cargo crate
@@ -444,6 +485,7 @@ enum Commands {
     /// `$$99999$$` ASCII markers for a unique-per-build pair so the
     /// pre-stamp template binary doesn't carry stable static
     /// signatures across operator builds.
+    #[command(next_help_heading = "Create")]
     NewLoader {
         /// Path to write the new crate to. Must not exist.
         dest: PathBuf,
@@ -508,6 +550,7 @@ enum Commands {
     /// yara`, `brew install yara`, `pacman -S yara`). Exits 0 if clean,
     /// non-zero with matched rule names if any hits. Use this before
     /// deploying to a sandbox/lab to avoid round-trips for static hits.
+    #[command(next_help_heading = "Inspect")]
     Check {
         /// Path to the artifact (PE, ELF, or any binary).
         artifact: std::path::PathBuf,
@@ -527,6 +570,7 @@ enum Commands {
     /// `trustmebro` / `pe-version-info from_donor=` source) versus
     /// catalog-signed-only (the signature lives in a separate `.cat`
     /// file and cannot be grafted onto another PE).
+    #[command(next_help_heading = "Inspect")]
     ListDonors {
         /// Directory to scan (non-recursive by default).
         path: std::path::PathBuf,
@@ -541,6 +585,7 @@ enum Commands {
     },
 
     /// Print shell completion script to stdout
+    #[command(next_help_heading = "Shell")]
     Completions {
         /// Target shell
         #[arg(value_enum)]
@@ -600,6 +645,21 @@ enum ModuleCommands {
 }
 
 fn main() -> Result<()> {
+    std::panic::set_hook(Box::new(|info| {
+        let msg = info
+            .payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| info.payload().downcast_ref::<String>().map(|s| s.as_str()))
+            .unwrap_or("unknown panic");
+        let loc = info
+            .location()
+            .map(|l| format!(" ({}:{})", l.file(), l.line()))
+            .unwrap_or_default();
+        eprintln!("pumpbin-cli: PANIC{loc}: {msg}");
+        eprintln!("This is a bug. Please report it at https://github.com/pumpbin/pumpbin/issues");
+    }));
+
     let cli = Cli::parse();
 
     // Install tracing subscriber driven by --no-log / --log-level flags
@@ -627,6 +687,10 @@ fn main() -> Result<()> {
     result
 }
 
+/// Exit codes:
+///   0 — success
+///   1 — error (bad input, I/O failure, plugin error)
+///   2 — partial / matches (YARA hits found, batch partial success)
 fn dispatch(cli: &Cli) -> Result<()> {
     match &cli.command {
         Commands::Generate {
@@ -646,7 +710,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
             let plugin_label = plugin_path
                 .file_name()
                 .and_then(|s| s.to_str())
-                .unwrap_or("plugin");
+                .unwrap_or("pack");
 
             let plugin_buf = std::fs::read(&plugin_path)?;
             let mut plugin_obj = Plugin::decode_from_slice(&plugin_buf)?;
@@ -668,16 +732,12 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 }
             );
 
-            eprintln!(
-                "PB  {:<20}  {}  [*] loading plugin",
-                plugin_label, target_label
-            );
-
-            plugin_obj.validate_for_generation(parsed_platform, parsed_binary_type)?;
+            pb_info!(plugin_label, target_label, "loading pack");
 
             let bin = plugin_obj
                 .bins()
                 .get_that_binary(parsed_platform, parsed_binary_type)
+                .map(|b| b.to_vec())
                 .ok_or(anyhow!(
                     "Failed to retrieve binary for platform/type combination"
                 ))?;
@@ -691,16 +751,19 @@ fn dispatch(cli: &Cli) -> Result<()> {
             //   --post <id>               plain id
             //   --post <id>:<k=v,k=v>    id with comma-separated args
             for entry in post {
-                if let Some((id, args)) = entry.split_once(':') {
-                    plugin_obj.plugins.modules_mut().push(id.to_string());
-                    runtime_config.insert(format!("post:{id}"), args.to_string());
-                } else {
-                    plugin_obj.plugins.modules_mut().push(entry.clone());
+                let (id, args) = parse_post_entry(entry)?;
+                plugin_obj.plugins.modules_mut().push(id.clone());
+                if !args.is_empty() {
+                    runtime_config.insert(format!("post:{id}"), encode_post_args(&args));
                 }
             }
             let schema_fields = plugin_schema_fields(&plugin_obj);
             let runtime_config =
                 normalize_runtime_config_for_schema(runtime_config, &schema_fields)?;
+            plugin_obj.validate_for_generation(parsed_platform, parsed_binary_type)?;
+            plugin_obj
+                .plugins()
+                .validate_module_config(Some(&runtime_config))?;
 
             // Resolve output path before dry-run so we can show it in the preview.
             let output_path = if let Some(out) = output {
@@ -726,7 +789,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
             if *dry_run {
                 println!("DRY RUN: nothing will be written\n");
                 println!(
-                    "  Plugin:       {} (v{})",
+                    "  Pack:         {} (v{})",
                     plugin_obj.info().plugin_name(),
                     plugin_obj.info().version()
                 );
@@ -763,15 +826,17 @@ fn dispatch(cli: &Cli) -> Result<()> {
             let sc_size = std::fs::metadata(shellcode).map(|m| m.len()).unwrap_or(0);
             let chain = plugin_obj.plugins.modules().to_vec();
             if chain.is_empty() {
-                eprintln!(
-                    "PB  {:<20}  {}  [*] injecting shellcode ({} B)",
-                    plugin_label, target_label, sc_size
-                );
-            } else {
-                eprintln!(
-                    "PB  {:<20}  {}  [*] injecting shellcode ({} B) + {}",
+                pb_info!(
                     plugin_label,
                     target_label,
+                    "injecting shellcode ({} B)",
+                    sc_size
+                );
+            } else {
+                pb_info!(
+                    plugin_label,
+                    target_label,
+                    "injecting shellcode ({} B) + {}",
                     sc_size,
                     chain.join(", ")
                 );
@@ -788,12 +853,27 @@ fn dispatch(cli: &Cli) -> Result<()> {
             let display_path = output_path
                 .canonicalize()
                 .unwrap_or_else(|_| output_path.clone());
-            eprintln!(
-                "PB  {:<20}  {}  [+] wrote {}",
+            pb_ok!(
                 plugin_label,
                 target_label,
+                "wrote {}",
                 display_path.display()
             );
+            if !cli.json {
+                println!("{}", display_path.display());
+            }
+
+            if cli.json {
+                #[derive(serde::Serialize)]
+                struct GenerateResult {
+                    output: String,
+                    bytes: usize,
+                }
+                emit_json_ok(GenerateResult {
+                    output: display_path.display().to_string(),
+                    bytes: bin.len(),
+                });
+            }
 
             Ok(())
         }
@@ -803,6 +883,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
             platform,
             binary_type,
             output_dir,
+            extension,
             module_config,
         } => {
             tracing::info!("Starting automated Batch generation");
@@ -811,8 +892,12 @@ fn dispatch(cli: &Cli) -> Result<()> {
             let explicit_binary_type = binary_type.as_deref().map(parse_binary_type).transpose()?;
 
             let plugin_path = resolve_plugin_path(plugin)?;
+            let plugin_label = plugin_path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("pack");
 
-            tracing::info!(plugin = ?plugin_path, "Loading plugin");
+            tracing::info!(pack = ?plugin_path, "Loading pack");
             let plugin_buf = std::fs::read(&plugin_path)?;
             let plugin_obj = Plugin::decode_from_slice(&plugin_buf)?;
             let runtime_config = parse_module_config(module_config)?;
@@ -831,8 +916,24 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 );
             }
 
+            let target_label = format!(
+                "{}/{}",
+                match parsed_platform {
+                    Platform::Windows => "win",
+                    Platform::Linux => "linux",
+                    Platform::Darwin => "darwin",
+                },
+                match parsed_binary_type {
+                    BinaryType::Executable => "exe",
+                    BinaryType::DynamicLibrary => "lib",
+                }
+            );
+
             tracing::info!(%parsed_platform, %parsed_binary_type, "Validating plugin for target");
             plugin_obj.validate_for_generation(parsed_platform, parsed_binary_type)?;
+            plugin_obj
+                .plugins()
+                .validate_module_config(Some(&runtime_config))?;
 
             let save_type = if plugin_obj.replace().size_holder().is_some() {
                 ShellcodeSaveType::Local
@@ -859,106 +960,146 @@ fn dispatch(cli: &Cli) -> Result<()> {
             tracing::info!(directory = ?directory, "Scanning directory for shellcode files");
             let entries = std::fs::read_dir(directory)?;
 
-            let mut success_count = 0;
-            let mut fail_count = 0;
+            let ext_filter = extension.as_str();
 
+            // Collect matching files first so we know the total for progress.
+            let mut bin_files: Vec<PathBuf> = Vec::new();
+            let mut seen_extensions: std::collections::BTreeSet<String> =
+                std::collections::BTreeSet::new();
             for entry in entries {
                 let entry = entry?;
                 let path = entry.path();
-
                 if path.is_file() {
-                    let is_bin =
-                        path.extension().and_then(|ext| ext.to_str()).unwrap_or("") == "bin";
-                    if is_bin {
-                        tracing::info!(file = ?path.file_name().unwrap_or_default(), "Processing shellcode");
-
-                        let bin = plugin_obj
-                            .bins()
-                            .get_that_binary(parsed_platform, parsed_binary_type)
-                            .ok_or(anyhow!(
-                                "Failed to retrieve binary for platform/type combination"
-                            ))?;
-
-                        let data = match std::fs::read(&path) {
-                            Ok(d) => d,
-                            Err(e) => {
-                                tracing::warn!(file = ?path, error = %e, "Failed to read shellcode");
-                                fail_count += 1;
-                                continue;
-                            }
-                        };
-
-                        if data.is_empty() {
-                            tracing::warn!(file = ?path, "Shellcode file is empty");
-                            fail_count += 1;
-                            continue;
-                        }
-                        if data
-                            .windows(b"$$SHELLCODE$$".len())
-                            .any(|w| w == b"$$SHELLCODE$$")
-                        {
-                            tracing::warn!(file = ?path, "Shellcode file contains placeholder");
-                            fail_count += 1;
-                            continue;
-                        }
-
-                        let shellcode_src = path.to_string_lossy().to_string();
-                        if let Err(e) = plugin_obj.validate_shellcode_source(&shellcode_src) {
-                            tracing::warn!(file = ?path, error = %e, "Invalid shellcode source");
-                            fail_count += 1;
-                            continue;
-                        }
-
-                        let plugin_clone = plugin_obj.clone();
-
-                        let bin = match plugin_clone.replace_binary(
-                            bin,
-                            shellcode_src,
-                            vec![],
-                            Some(&runtime_config),
-                        ) {
-                            Ok(b) => b,
-                            Err(e) => {
-                                tracing::warn!(file = ?path, error = %e, "Failed to inject shellcode");
-                                fail_count += 1;
-                                continue;
-                            }
-                        };
-
-                        let now = Local::now();
-                        let timestamp = now.format("%H%M%S").to_string();
-                        let plugin_name_sanitized = plugin_clone
-                            .info()
-                            .plugin_name()
-                            .to_lowercase()
-                            .replace(' ', "_");
-                        let shellcode_name = path
-                            .file_stem()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .to_lowercase()
-                            .replace(' ', "_");
-                        let ext = ext_for_output(parsed_platform, parsed_binary_type);
-
-                        let filename = format!(
-                            "{}_{}_{}.{}",
-                            plugin_name_sanitized, shellcode_name, timestamp, ext
-                        );
-                        let output_path = out_dir.join(filename);
-
-                        if let Err(e) = pumpbin::utils::atomic_write(&output_path, &bin) {
-                            tracing::warn!(file = ?path, error = %e, "Failed to save generated binary");
-                            fail_count += 1;
-                            continue;
-                        }
-
-                        tracing::info!(
-                            output = ?output_path.file_name().unwrap_or_default(),
-                            "Saved generated implant"
-                        );
-                        success_count += 1;
+                    let file_ext = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
+                    if file_ext == ext_filter {
+                        bin_files.push(path);
+                    } else if !file_ext.is_empty() {
+                        seen_extensions.insert(file_ext.to_string());
                     }
                 }
+            }
+
+            if bin_files.is_empty() {
+                let diag = if seen_extensions.is_empty() {
+                    format!(
+                        "Batch found zero .{ext_filter} files in {}. The directory contains no files with extensions.",
+                        directory.display()
+                    )
+                } else {
+                    format!(
+                        "Batch found zero .{ext_filter} files in {}. Extensions found: {}. \
+                         Use --extension to match a different extension.",
+                        directory.display(),
+                        seen_extensions
+                            .iter()
+                            .map(|e| format!(".{e}"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                };
+                bail!("{}", diag);
+            }
+
+            let total = bin_files.len();
+            let mut success_count = 0;
+            let mut fail_count = 0;
+
+            for (idx_0, path) in bin_files.iter().enumerate() {
+                let idx = idx_0 + 1;
+                let progress_filename = path.file_name().unwrap_or_default().to_string_lossy();
+                eprintln!(
+                    "PB  {:<20}  {}  [*] {}/{} {}",
+                    plugin_label, target_label, idx, total, progress_filename
+                );
+
+                tracing::info!(file = ?path.file_name().unwrap_or_default(), "Processing shellcode");
+
+                let bin = plugin_obj
+                    .bins()
+                    .get_that_binary(parsed_platform, parsed_binary_type)
+                    .map(|b| b.to_vec())
+                    .ok_or(anyhow!(
+                        "Failed to retrieve binary for platform/type combination"
+                    ))?;
+
+                let data = match std::fs::read(path) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        tracing::warn!(file = ?path, error = %e, "Failed to read shellcode");
+                        fail_count += 1;
+                        continue;
+                    }
+                };
+
+                if data.is_empty() {
+                    tracing::warn!(file = ?path, "Shellcode file is empty");
+                    fail_count += 1;
+                    continue;
+                }
+                if data
+                    .windows(b"$$SHELLCODE$$".len())
+                    .any(|w| w == b"$$SHELLCODE$$")
+                {
+                    tracing::warn!(file = ?path, "Shellcode file contains placeholder");
+                    fail_count += 1;
+                    continue;
+                }
+
+                let shellcode_src = path.to_string_lossy().to_string();
+                if let Err(e) = plugin_obj.validate_shellcode_source(&shellcode_src) {
+                    tracing::warn!(file = ?path, error = %e, "Invalid shellcode source");
+                    fail_count += 1;
+                    continue;
+                }
+
+                let plugin_clone = plugin_obj.clone();
+
+                let bin = match plugin_clone.replace_binary(
+                    bin,
+                    shellcode_src,
+                    vec![],
+                    Some(&runtime_config),
+                ) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        tracing::warn!(file = ?path, error = %e, "Failed to inject shellcode");
+                        fail_count += 1;
+                        continue;
+                    }
+                };
+
+                let now = Local::now();
+                let timestamp = now.format("%H%M%S").to_string();
+                let plugin_name_sanitized = plugin_clone
+                    .info()
+                    .plugin_name()
+                    .to_lowercase()
+                    .replace(' ', "_");
+                let shellcode_name = path
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_lowercase()
+                    .replace(' ', "_");
+                let ext = ext_for_output(parsed_platform, parsed_binary_type);
+
+                let filename = format!(
+                    "{}_{}_{}.{}",
+                    plugin_name_sanitized, shellcode_name, timestamp, ext
+                );
+                let output_path = out_dir.join(filename);
+
+                if let Err(e) = pumpbin::utils::atomic_write(&output_path, &bin) {
+                    tracing::warn!(file = ?path, error = %e, "Failed to save generated binary");
+                    fail_count += 1;
+                    continue;
+                }
+
+                tracing::info!(
+                    output = ?output_path.file_name().unwrap_or_default(),
+                    "Saved generated implant"
+                );
+                success_count += 1;
             }
 
             tracing::info!(
@@ -977,8 +1118,9 @@ fn dispatch(cli: &Cli) -> Result<()> {
             match (success_count, fail_count) {
                 (0, _) => bail!(
                     "Batch produced zero implants (checked directory: {}). \
-                     Confirm the directory contains .bin shellcode files.",
-                    directory.display()
+                     Confirm the directory contains .{} shellcode files.",
+                    directory.display(),
+                    ext_filter
                 ),
                 (_, 0) => Ok(()),
                 (_, _) => bail!(
@@ -1040,11 +1182,10 @@ fn dispatch(cli: &Cli) -> Result<()> {
             // post_modules accepts both `--post id` and `--post id:k=v,k=v`
             let mut resolved_post_modules = vec![];
             for entry in post_modules {
-                if let Some((id, args)) = entry.split_once(':') {
-                    resolved_post_modules.push(id.to_string());
-                    cfg.insert(format!("post:{id}"), args.to_string());
-                } else {
-                    resolved_post_modules.push(entry.clone());
+                let (id, args) = parse_post_entry(entry)?;
+                resolved_post_modules.push(id.clone());
+                if !args.is_empty() {
+                    cfg.insert(format!("post:{id}"), encode_post_args(&args));
                 }
             }
 
@@ -1070,7 +1211,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
             pumpbin::utils::atomic_write(output, &data)
                 .with_context(|| format!("failed to write output .b1n: {}", output.display()))?;
 
-            tracing::info!(output = %output.display(), "Created .b1n plugin pack");
+            tracing::info!(output = %output.display(), "Created .b1n loader pack");
             Ok(())
         }
         Commands::Stamp {
@@ -1082,6 +1223,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
             marker,
             size_holder,
             save_b1n,
+            dry_run,
             post,
             name,
         } => {
@@ -1182,11 +1324,10 @@ fn dispatch(cli: &Cli) -> Result<()> {
 
             let mut runtime_config = parse_module_config(&[])?;
             for entry in post {
-                if let Some((id, args)) = entry.split_once(':') {
-                    plugin_obj.plugins.modules_mut().push(id.to_string());
-                    runtime_config.insert(format!("post:{id}"), args.to_string());
-                } else {
-                    plugin_obj.plugins.modules_mut().push(entry.clone());
+                let (id, args) = parse_post_entry(entry)?;
+                plugin_obj.plugins.modules_mut().push(id.clone());
+                if !args.is_empty() {
+                    runtime_config.insert(format!("post:{id}"), encode_post_args(&args));
                 }
             }
 
@@ -1198,6 +1339,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
             let bin = plugin_obj
                 .bins()
                 .get_that_binary(resolved_platform, resolved_binary_type)
+                .map(|b| b.to_vec())
                 .ok_or_else(|| anyhow!("failed to retrieve binary for platform/type"))?;
 
             plugin_obj.validate_shellcode_source(shellcode)?;
@@ -1205,10 +1347,53 @@ fn dispatch(cli: &Cli) -> Result<()> {
             let schema_fields = plugin_schema_fields(&plugin_obj);
             let runtime_config =
                 normalize_runtime_config_for_schema(runtime_config, &schema_fields)?;
+            plugin_obj
+                .plugins()
+                .validate_module_config(Some(&runtime_config))?;
 
-            let sc_bytes = std::fs::read(shellcode.as_str()).unwrap_or_default();
+            let sc_bytes = std::fs::read(shellcode.as_str())
+                .with_context(|| format!("failed to read shellcode: {}", shellcode))?;
             let sc_size = sc_bytes.len();
             let chain = plugin_obj.plugins.modules().to_vec();
+
+            let output_path = if let Some(out) = output {
+                out.clone()
+            } else {
+                let ext = ext_for_output(resolved_platform, resolved_binary_type);
+                let base = name.to_lowercase().replace(' ', "_");
+                let candidate = PathBuf::from(format!("{base}.{ext}"));
+                if candidate.exists() {
+                    let ts = Local::now().format("%Y%m%d_%H%M%S").to_string();
+                    PathBuf::from(format!("{base}_{ts}.{ext}"))
+                } else {
+                    candidate
+                }
+            };
+
+            if *dry_run {
+                println!("DRY RUN: nothing will be written\n");
+                println!("  Loader:       {}", loader.display());
+                println!("  Pack:         {}", name);
+                println!(
+                    "  Target:       {} / {}",
+                    resolved_platform, resolved_binary_type
+                );
+                println!("  Output:       {}", output_path.display());
+                if let Some(b1n_path) = save_b1n {
+                    println!("  Save pack:    {}", b1n_path.display());
+                }
+                println!("  Shellcode:    {shellcode} ({sc_size} B)");
+                if chain.is_empty() {
+                    println!("  Module chain: (none)");
+                } else {
+                    println!("  Module chain: {}", chain.join(" -> "));
+                }
+                for (k, v) in &runtime_config {
+                    println!("  Config:       {k} = {v}");
+                }
+                return Ok(());
+            }
+
             if chain.is_empty() {
                 eprintln!(
                     "PB  {:<20}  {}  [*] injecting shellcode ({} B)",
@@ -1227,20 +1412,6 @@ fn dispatch(cli: &Cli) -> Result<()> {
             let implant =
                 plugin_obj.replace_binary(bin, shellcode.clone(), vec![], Some(&runtime_config))?;
 
-            let output_path = if let Some(out) = output {
-                out.clone()
-            } else {
-                let ext = ext_for_output(resolved_platform, resolved_binary_type);
-                let base = name.to_lowercase().replace(' ', "_");
-                let candidate = PathBuf::from(format!("{base}.{ext}"));
-                if candidate.exists() {
-                    let ts = Local::now().format("%Y%m%d_%H%M%S").to_string();
-                    PathBuf::from(format!("{base}_{ts}.{ext}"))
-                } else {
-                    candidate
-                }
-            };
-
             pumpbin::utils::atomic_write(&output_path, &implant)
                 .with_context(|| format!("writing implant to '{}'", output_path.display()))?;
             let display_path = output_path
@@ -1252,6 +1423,22 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 target_label,
                 display_path.display()
             );
+            if !cli.json {
+                println!("{}", display_path.display());
+            }
+
+            if cli.json {
+                #[derive(serde::Serialize)]
+                struct StampResult {
+                    output: String,
+                    bytes: usize,
+                }
+                emit_json_ok(StampResult {
+                    output: display_path.display().to_string(),
+                    bytes: implant.len(),
+                });
+            }
+
             Ok(())
         }
         Commands::Pack {
@@ -1382,7 +1569,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
             let profile = pumpbin::Profile::from_toml(profile)?;
             tracing::info!(
                 schema = %profile.schema,
-                plugin = ?profile.plugin.source,
+                pack = ?profile.pack.source,
                 platform = %profile.target.platform,
                 binary_type = %profile.target.binary_type,
                 "Profile loaded"
@@ -1434,21 +1621,6 @@ fn dispatch(cli: &Cli) -> Result<()> {
                     .any(|m| m.id() == id)
                 {
                     Some(WireKind::Encrypt)
-                } else if pumpbin::modules::format_encrypted_modules()
-                    .iter()
-                    .any(|m| m.id() == id)
-                {
-                    Some(WireKind::FormatEncrypted)
-                } else if pumpbin::modules::format_url_modules()
-                    .iter()
-                    .any(|m| m.id() == id)
-                {
-                    Some(WireKind::FormatUrl)
-                } else if pumpbin::modules::upload_remote_modules()
-                    .iter()
-                    .any(|m| m.id() == id)
-                {
-                    Some(WireKind::UploadRemote)
                 } else if pumpbin::modules::post_build_modules()
                     .iter()
                     .any(|m| m.id() == id)
@@ -1465,7 +1637,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
 
                 let result: Vec<u8> = match kind {
                     WireKind::Encrypt => {
-                        let out = pumpbin::modules::dispatch::encrypt(id, &payload)?;
+                        let out = pumpbin::modules::dispatch::encrypt(id, args, &payload)?;
                         eprintln!(
                             "module '{id}' encrypted {} → {} bytes; {} pass entries:",
                             payload.len(),
@@ -1474,15 +1646,15 @@ fn dispatch(cli: &Cli) -> Result<()> {
                         );
                         for p in &out.pass {
                             eprintln!(
-                                "  holder={}  replace_by={}",
+                                "  holder={}  replace_by=<{} bytes>",
                                 String::from_utf8_lossy(&p.holder),
-                                bytes_short(&p.replace_by)
+                                p.replace_by.len()
                             );
                         }
                         out.encrypted
                     }
                     WireKind::FormatEncrypted => {
-                        let out = pumpbin::modules::dispatch::format_encrypted(id, &payload)?;
+                        let out = pumpbin::modules::dispatch::format_encrypted(id, args, &payload)?;
                         eprintln!(
                             "module '{id}' reformatted {} → {} bytes; {} pass entries:",
                             payload.len(),
@@ -1491,9 +1663,9 @@ fn dispatch(cli: &Cli) -> Result<()> {
                         );
                         for p in &out.pass {
                             eprintln!(
-                                "  holder={}  replace_by={}",
+                                "  holder={}  replace_by=<{} bytes>",
                                 String::from_utf8_lossy(&p.holder),
-                                bytes_short(&p.replace_by)
+                                p.replace_by.len()
                             );
                         }
                         out.formatted
@@ -1501,10 +1673,10 @@ fn dispatch(cli: &Cli) -> Result<()> {
                     WireKind::FormatUrl => {
                         let url = std::str::from_utf8(&payload)
                             .map_err(|e| anyhow!("format-url payload must be UTF-8: {e}"))?;
-                        pumpbin::modules::dispatch::format_url(id, url)?.into_bytes()
+                        pumpbin::modules::dispatch::format_url(id, args, url)?.into_bytes()
                     }
                     WireKind::UploadRemote => {
-                        pumpbin::modules::dispatch::upload_remote(id, &payload)?.into_bytes()
+                        pumpbin::modules::dispatch::upload_remote(id, args, &payload)?.into_bytes()
                     }
                     WireKind::PostBuild => {
                         let before = payload.clone();
@@ -1620,68 +1792,51 @@ fn dispatch(cli: &Cli) -> Result<()> {
     }
 }
 
-/// One row of `list-modules` output. Owned so we can build it
-/// uniformly for built-ins (static-string traits) and externals
-/// (owned manifest fields).
-#[derive(serde::Serialize)]
-struct ModuleRow {
-    id: String,
-    source: String,
-    description: String,
-    kind: String,
-    /// `(key, type, required, default, description)` for every arg.
-    args: Vec<ArgRow>,
-}
-
-#[derive(serde::Serialize)]
-struct ArgRow {
-    key: String,
-    arg_type: String,
-    required: bool,
-    default: Option<String>,
-    description: String,
-}
-
 fn list_modules(show_options: bool, only_id: Option<&str>, json: bool) -> Result<()> {
-    use pumpbin::modules::external::{registry, wire::WireKind};
-    use pumpbin::modules::{
-        encrypt_modules, format_encrypted_modules, format_url_modules, post_build_modules,
-        upload_remote_modules,
-    };
+    use pumpbin::modules::external::registry;
 
     let ext = registry();
+    let descriptors = pumpbin::modules::descriptors();
 
-    let print_section = |title: &str, rows: &[ModuleRow]| {
-        let filtered: Vec<&ModuleRow> = rows
+    let print_section = |title: &str, kind: &str| {
+        let filtered: Vec<_> = descriptors
             .iter()
-            .filter(|r| only_id.is_none_or(|want| r.id == want))
+            .filter(|descriptor| descriptor.kind == kind)
+            .filter(|descriptor| only_id.is_none_or(|want| descriptor.id == want))
             .collect();
         if filtered.is_empty() {
             return;
         }
         println!("{title}:");
-        for r in filtered {
-            println!("  {} ({}) - {}", r.id, r.source, r.description);
+        for descriptor in filtered {
+            println!(
+                "  {} ({}) - {}",
+                descriptor.id, descriptor.source, descriptor.description
+            );
             if show_options {
-                if r.args.is_empty() {
+                let constraints = descriptor.constraints.display_strings();
+                if !constraints.is_empty() {
+                    println!("    constraints: {}", constraints.join(", "));
+                }
+                if descriptor.args.is_empty() {
                     println!("    (no documented args)");
                 } else {
-                    for a in &r.args {
-                        let req = if a.required { " (required)" } else { "" };
-                        let dflt = a
+                    for arg in &descriptor.args {
+                        let req = if arg.required { " (required)" } else { "" };
+                        let dflt = arg
                             .default
                             .as_deref()
                             .map(|d| format!(" [default: {d}]"))
                             .unwrap_or_default();
                         println!(
                             "    {key}: {ty}{req}{dflt}",
-                            key = a.key,
-                            ty = a.arg_type,
+                            key = arg.key,
+                            ty = arg.arg_type,
                             req = req,
                             dflt = dflt,
                         );
-                        if !a.description.is_empty() {
-                            println!("        {}", a.description);
+                        if !arg.description.is_empty() {
+                            println!("        {}", arg.description);
                         }
                     }
                 }
@@ -1689,142 +1844,32 @@ fn list_modules(show_options: bool, only_id: Option<&str>, json: bool) -> Result
         }
     };
 
-    let mut found_any = false;
+    let found_any = only_id
+        .map(|want| descriptors.iter().any(|descriptor| descriptor.id == want))
+        .unwrap_or_else(|| !descriptors.is_empty());
 
-    let mut encrypt_rows: Vec<ModuleRow> = encrypt_modules()
-        .iter()
-        .map(|m| ModuleRow {
-            id: m.id().to_string(),
-            source: "built-in".to_string(),
-            description: m.description().to_string(),
-            kind: "encrypt".to_string(),
-            args: m.args().into_iter().map(arg_from_spec).collect(),
-        })
-        .collect();
-    for m in ext.all().filter(|m| m.kind() == WireKind::Encrypt) {
-        encrypt_rows.push(external_row(m, "encrypt"));
-    }
-    if let Some(want) = only_id {
-        if encrypt_rows.iter().any(|r| r.id == want) {
-            found_any = true;
-        }
-    } else if !encrypt_rows.is_empty() {
-        found_any = true;
-    }
-    if !json {
-        print_section("encrypt", &encrypt_rows);
-    }
-
-    let mut fe_rows: Vec<ModuleRow> = format_encrypted_modules()
-        .iter()
-        .map(|m| ModuleRow {
-            id: m.id().to_string(),
-            source: "built-in".to_string(),
-            description: m.description().to_string(),
-            kind: "format-encrypted".to_string(),
-            args: m.args().into_iter().map(arg_from_spec).collect(),
-        })
-        .collect();
-    for m in ext.all().filter(|m| m.kind() == WireKind::FormatEncrypted) {
-        fe_rows.push(external_row(m, "format-encrypted"));
-    }
-    if let Some(want) = only_id {
-        if fe_rows.iter().any(|r| r.id == want) {
-            found_any = true;
-        }
-    }
-    if !json {
-        print_section("format_encrypted", &fe_rows);
-    }
-
-    let mut url_rows: Vec<ModuleRow> = format_url_modules()
-        .iter()
-        .map(|m| ModuleRow {
-            id: m.id().to_string(),
-            source: "built-in".to_string(),
-            description: m.description().to_string(),
-            kind: "format-url".to_string(),
-            args: m.args().into_iter().map(arg_from_spec).collect(),
-        })
-        .collect();
-    for m in ext.all().filter(|m| m.kind() == WireKind::FormatUrl) {
-        url_rows.push(external_row(m, "format-url"));
-    }
-    if let Some(want) = only_id {
-        if url_rows.iter().any(|r| r.id == want) {
-            found_any = true;
-        }
-    }
-    if !json {
-        print_section("format_url", &url_rows);
-    }
-
-    let mut ur_rows: Vec<ModuleRow> = upload_remote_modules()
-        .iter()
-        .map(|m| ModuleRow {
-            id: m.id().to_string(),
-            source: "built-in".to_string(),
-            description: m.description().to_string(),
-            kind: "upload-remote".to_string(),
-            args: m.args().into_iter().map(arg_from_spec).collect(),
-        })
-        .collect();
-    for m in ext.all().filter(|m| m.kind() == WireKind::UploadRemote) {
-        ur_rows.push(external_row(m, "upload-remote"));
-    }
-    if let Some(want) = only_id {
-        if ur_rows.iter().any(|r| r.id == want) {
-            found_any = true;
-        }
-    }
-    if !json {
-        print_section("upload_remote", &ur_rows);
-    }
-
-    let mut pb_rows: Vec<ModuleRow> = post_build_modules()
-        .iter()
-        .map(|m| ModuleRow {
-            id: m.id().to_string(),
-            source: "built-in".to_string(),
-            description: m.description().to_string(),
-            kind: "post-build".to_string(),
-            args: m.args().into_iter().map(arg_from_spec).collect(),
-        })
-        .collect();
-    for m in ext.all().filter(|m| m.kind() == WireKind::PostBuild) {
-        pb_rows.push(external_row(m, "post-build"));
-    }
-    if let Some(want) = only_id {
-        if pb_rows.iter().any(|r| r.id == want) {
-            found_any = true;
-        }
-    }
     if json {
-        // Collect all rows into a single flat JSON array before any
-        // print_section call takes ownership of the Vecs.
-        let all_rows: Vec<&ModuleRow> = encrypt_rows
+        let rows: Vec<_> = descriptors
             .iter()
-            .chain(fe_rows.iter())
-            .chain(url_rows.iter())
-            .chain(ur_rows.iter())
-            .chain(pb_rows.iter())
-            .filter(|r| only_id.is_none_or(|want| r.id == want))
+            .filter(|descriptor| only_id.is_none_or(|want| descriptor.id == want))
             .collect();
-        emit_json_ok(all_rows);
+        emit_json_ok(rows);
         for w in ext.warnings() {
             eprintln!("warning: {w}");
         }
         return Ok(());
     }
 
-    if !json {
-        print_section("post_build", &pb_rows);
-    }
+    print_section("encrypt", "encrypt");
+    print_section("format_encrypted", "format-encrypted");
+    print_section("format_url", "format-url");
+    print_section("upload_remote", "upload-remote");
+    print_section("post_build", "post-build");
 
     if let Some(want) = only_id {
         if !found_any {
             return Err(anyhow!(
-                "list-modules: no module with id '{want}'. Drop --id to see what's installed."
+                "module list: no module with id '{want}'. Drop --id to see what's installed."
             ));
         }
     }
@@ -1833,59 +1878,6 @@ fn list_modules(show_options: bool, only_id: Option<&str>, json: bool) -> Result
         eprintln!("warning: {w}");
     }
     Ok(())
-}
-
-fn arg_from_spec(s: pumpbin::modules::ArgSpec) -> ArgRow {
-    ArgRow {
-        key: s.key.to_string(),
-        arg_type: s.arg_type.to_string(),
-        required: s.required,
-        default: s.default.map(|d| d.to_string()),
-        description: s.description.to_string(),
-    }
-}
-
-fn external_row(m: &pumpbin::modules::external::ExternalModule, kind: &str) -> ModuleRow {
-    ModuleRow {
-        id: m.id().to_string(),
-        source: format!("external: {}", m.manifest_path.display()),
-        description: m.description().to_string(),
-        kind: kind.to_string(),
-        args: m
-            .manifest
-            .args
-            .iter()
-            .map(|a| ArgRow {
-                key: a.key.clone(),
-                arg_type: if a.arg_type.is_empty() {
-                    "string".to_string()
-                } else {
-                    a.arg_type.clone()
-                },
-                required: a.required,
-                default: a.default.clone(),
-                description: a.description.clone(),
-            })
-            .collect(),
-    }
-}
-
-/// Render a byte string for human display. ASCII-printable verbatim,
-/// non-printable as `0x..` hex. Truncates at 32 bytes with an ellipsis.
-fn bytes_short(b: &[u8]) -> String {
-    let take = b.len().min(32);
-    let mut out = String::new();
-    for &byte in &b[..take] {
-        if byte.is_ascii_graphic() || byte == b' ' {
-            out.push(byte as char);
-        } else {
-            out.push_str(&format!("\\x{byte:02x}"));
-        }
-    }
-    if b.len() > take {
-        out.push_str(&format!("... ({} bytes)", b.len()));
-    }
-    out
 }
 
 fn yara_check(
@@ -1948,7 +1940,7 @@ fn yara_check(
         for m in &matches {
             println!("  {m}");
         }
-        Err(anyhow!("{} YARA rule(s) matched", matches.len()))
+        std::process::exit(2)
     }
 }
 
@@ -2401,11 +2393,11 @@ fn pack_crate(
 
 fn parse_platform(s: &str) -> Result<Platform> {
     match s.to_lowercase().as_str() {
-        "windows" => Ok(Platform::Windows),
+        "windows" | "win" => Ok(Platform::Windows),
         "linux" => Ok(Platform::Linux),
-        "darwin" => Ok(Platform::Darwin),
+        "darwin" | "macos" | "osx" | "mac" => Ok(Platform::Darwin),
         _ => Err(anyhow!(
-            "Invalid platform '{}'. Expected: windows, linux, darwin",
+            "Invalid platform '{}'. Expected: windows (win), linux, darwin (macos/osx)",
             s
         )),
     }
@@ -2430,8 +2422,11 @@ fn detect_platform_from_binary(bytes: &[u8]) -> Option<Platform> {
 fn parse_binary_type(s: &str) -> Result<BinaryType> {
     match s.to_lowercase().as_str() {
         "exe" => Ok(BinaryType::Executable),
-        "lib" => Ok(BinaryType::DynamicLibrary),
-        _ => Err(anyhow!("Invalid target type '{}'. Expected: exe, lib", s)),
+        "lib" | "dll" | "so" | "dylib" | "shared" => Ok(BinaryType::DynamicLibrary),
+        _ => Err(anyhow!(
+            "Invalid target type '{}'. Expected: exe, lib (dll/so/dylib)",
+            s
+        )),
     }
 }
 
@@ -2482,28 +2477,79 @@ fn parse_module_config(entries: &[String]) -> Result<BTreeMap<String, String>> {
     Ok(map)
 }
 
+fn parse_post_entry(entry: &str) -> Result<(String, Vec<String>)> {
+    let (id, args) = match entry.split_once(':') {
+        Some((id, args)) => (id.trim(), parse_inline_post_args(args)?),
+        None => (entry.trim(), Vec::new()),
+    };
+
+    if id.is_empty() {
+        bail!("Invalid --post value '{}': empty module id", entry);
+    }
+
+    Ok((id.to_string(), args))
+}
+
+fn parse_inline_post_args(input: &str) -> Result<Vec<String>> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+
+    for raw in input.split(',') {
+        let part = raw.trim();
+        if part.is_empty() {
+            continue;
+        }
+
+        if looks_like_key_value_arg(part) {
+            if !current.is_empty() {
+                args.push(current);
+            }
+            current = part.to_string();
+        } else if current.is_empty() {
+            bail!("Invalid --post args '{}': expected key=value", input);
+        } else {
+            current.push(',');
+            current.push_str(part);
+        }
+    }
+
+    if !current.is_empty() {
+        args.push(current);
+    }
+
+    Ok(args)
+}
+
+fn looks_like_key_value_arg(part: &str) -> bool {
+    let Some((key, _)) = part.split_once('=') else {
+        return false;
+    };
+    !key.is_empty()
+        && key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+fn encode_post_args(args: &[String]) -> String {
+    args.join(";")
+}
+
 fn parse_post_module_config_entry(entry: &str) -> Result<(usize, String, String)> {
-    let (idx_raw, kv) = entry.split_once(':').ok_or_else(|| {
-        anyhow!(
-            "Invalid --post-module-config '{}'. Expected IDX:KEY=VALUE",
-            entry
-        )
-    })?;
+    let (idx_raw, kv) = entry
+        .split_once(':')
+        .ok_or_else(|| anyhow!("Invalid --post-config '{}'. Expected IDX:KEY=VALUE", entry))?;
 
     let idx = idx_raw
         .parse::<usize>()
-        .map_err(|_| anyhow!("Invalid post-module index '{}' in '{}'.", idx_raw, entry))?;
+        .map_err(|_| anyhow!("Invalid post-config index '{}' in '{}'.", idx_raw, entry))?;
 
-    let (key, value) = kv.split_once('=').ok_or_else(|| {
-        anyhow!(
-            "Invalid --post-module-config '{}'. Expected IDX:KEY=VALUE",
-            entry
-        )
-    })?;
+    let (key, value) = kv
+        .split_once('=')
+        .ok_or_else(|| anyhow!("Invalid --post-config '{}'. Expected IDX:KEY=VALUE", entry))?;
 
     let key = key.trim();
     if key.is_empty() {
-        bail!("Invalid --post-module-config '{}': empty key", entry);
+        bail!("Invalid --post-config '{}': empty key", entry);
     }
 
     Ok((idx, key.to_string(), value.to_string()))
@@ -3025,4 +3071,49 @@ fn find_all_occurrences(haystack: &[u8], needle: &[u8]) -> Vec<usize> {
     }
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_post_entry_splits_multiple_key_value_args() {
+        let (id, args) = parse_post_entry("pe-version-info:CompanyName=Acme,ProductName=Demo")
+            .expect("post entry should parse");
+
+        assert_eq!(id, "pe-version-info");
+        assert_eq!(
+            args,
+            vec![
+                "CompanyName=Acme".to_string(),
+                "ProductName=Demo".to_string()
+            ]
+        );
+        assert_eq!(encode_post_args(&args), "CompanyName=Acme;ProductName=Demo");
+    }
+
+    #[test]
+    fn parse_post_entry_keeps_commas_inside_arg_values() {
+        let (id, args) =
+            parse_post_entry("byte-patch:patches=4831d2:4833d2,4831c0:4833c0,mode=first")
+                .expect("post entry should parse");
+
+        assert_eq!(id, "byte-patch");
+        assert_eq!(
+            args,
+            vec![
+                "patches=4831d2:4833d2,4831c0:4833c0".to_string(),
+                "mode=first".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_post_entry_rejects_arg_without_key() {
+        let err = parse_post_entry("byte-patch:4831d2:4833d2")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("expected key=value"), "got: {err}");
+    }
 }

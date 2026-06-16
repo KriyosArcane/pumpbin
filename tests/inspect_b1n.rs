@@ -58,8 +58,7 @@ fn inspect_reports_plugin_metadata() {
     assert_eq!(report.platforms.len(), 1);
     assert_eq!(report.platforms[0].name, "Windows");
     assert_eq!(report.platforms[0].binary_types, vec!["exe"]);
-    assert_eq!(report.modules.len(), 0); // fixture has no WASM modules
-    assert_eq!(report.legacy_module_count, 0);
+    assert_eq!(report.modules.len(), 0);
 }
 
 #[test]

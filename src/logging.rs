@@ -1,4 +1,4 @@
-//! `tracing` initialization for both PumpBin binaries (GUI and CLI).
+//! `tracing` initialization for the PumpBin CLI.
 //!
 //! Pre-1.1.6 PumpBin had `tracing`-shaped intentions in the plan but no
 //! initialized subscriber, so `tracing::info!()` calls would have been
@@ -22,8 +22,7 @@
 //!
 //! # Idempotency
 //!
-//! `init()` is safe to call from both `pumpbin` (GUI) and `pumpbin-cli`
-//! main(). The second call is a no-op (we install the subscriber via
+//! `init()` is safe to call more than once. The second call is a no-op (we install the subscriber via
 //! `try_init` which returns Err if one is already set). This matters when
 //! tests link the library and a test invocation transitively calls into
 //! code that calls `init()`.
@@ -35,8 +34,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
-/// Configuration passed by the binary entry point. Both GUI and CLI build
-/// one of these from environment + flags before calling `init`.
+/// Configuration passed by the binary entry point before calling `init`.
 #[derive(Debug, Clone)]
 pub struct LoggingConfig {
     /// Disable the JSON file sink entirely. Console layer still installed.
@@ -102,44 +100,39 @@ pub fn init(config: LoggingConfig) -> std::io::Result<()> {
         .with(filter)
         .with(console_layer);
 
-    // Conditionally add the JSON file layer.
-    if config.no_log_file {
-        let _ = registry.try_init();
-        return Ok(());
-    }
-
-    let log_dir = config.log_dir_override.or_else(default_log_dir);
-    let Some(log_dir) = log_dir else {
-        // No data dir available (rare on weird platforms). Console only.
-        let _ = registry.try_init();
-        return Ok(());
+    // Build the JSON file layer as an Option — None acts as a no-op layer
+    // (tracing-subscriber implements Layer for Option<L>), so all failure
+    // cases collapse into a single try_init() call.
+    let json_layer = if config.no_log_file {
+        None
+    } else {
+        config
+            .log_dir_override
+            .or_else(default_log_dir)
+            .and_then(|log_dir| {
+                std::fs::create_dir_all(&log_dir)
+                    .map_err(|e| {
+                        eprintln!("pumpbin: cannot create log dir {}: {e}", log_dir.display());
+                    })
+                    .ok()?;
+                let log_path = log_dir.join(format!("{}.jsonl", build_id()));
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&log_path)
+                    .map_err(|e| {
+                        eprintln!("pumpbin: cannot open log file {}: {e}", log_path.display());
+                    })
+                    .ok()
+            })
+            .map(|file| {
+                tracing_subscriber::fmt::layer()
+                    .with_writer(std::sync::Mutex::new(file))
+                    .json()
+                    .with_target(true)
+                    .with_timer(SystemTime)
+            })
     };
-
-    if std::fs::create_dir_all(&log_dir).is_err() {
-        // Can't create the dir (permission, disk full). Console only — don't
-        // fail the whole binary just because the log file can't be opened.
-        let _ = registry.try_init();
-        return Ok(());
-    }
-
-    let log_path = log_dir.join(format!("{}.jsonl", build_id()));
-    let file = match std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-    {
-        Ok(f) => f,
-        Err(_) => {
-            let _ = registry.try_init();
-            return Ok(());
-        }
-    };
-
-    let json_layer = tracing_subscriber::fmt::layer()
-        .with_writer(std::sync::Mutex::new(file))
-        .json()
-        .with_target(true)
-        .with_timer(SystemTime);
 
     let _ = registry.with(json_layer).try_init();
     Ok(())

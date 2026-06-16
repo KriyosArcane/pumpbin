@@ -16,8 +16,9 @@ use anyhow::{anyhow, bail, Result};
 use std::fs;
 
 use crate::modules::post_build::parse_kv_args;
-use crate::modules::{ArgSpec, PostBuildModule};
+use crate::modules::{ArgSpec, ModuleConstraints, PostBuildModule};
 use crate::pe::read_security_dir;
+use crate::Platform;
 
 const SECURITY_DATA_DIR_INDEX: usize = 4;
 
@@ -36,6 +37,13 @@ impl PostBuildModule for CertGraft {
         vec![ArgSpec::new("donor", "path")
             .required()
             .described("Path to a donor PE with an embedded Authenticode signature")]
+    }
+
+    fn constraints(&self) -> ModuleConstraints {
+        ModuleConstraints {
+            requires_platform: Some(Platform::Windows),
+            ..Default::default()
+        }
     }
 
     fn apply(&self, args: &[String], implant: &mut Vec<u8>) -> Result<()> {

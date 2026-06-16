@@ -17,7 +17,7 @@
 //! ```toml
 //! schema = "pumpbin.profile/v1"
 //!
-//! [plugin]
+//! [pack]
 //! source = "/path/to/plugin.b1n"
 //!
 //! [target]
@@ -45,6 +45,7 @@
 use crate::error::PumpBinError;
 use crate::plugin::Plugin;
 use crate::{BinaryType, Platform, ShellcodeSaveType};
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -57,7 +58,7 @@ pub struct Profile {
     /// Schema identifier. Must equal `PROFILE_SCHEMA` (currently
     /// `"pumpbin.profile/v1"`). Mismatch refuses load.
     pub schema: String,
-    pub plugin: PluginRef,
+    pub pack: PluginRef,
     pub target: TargetSpec,
     pub shellcode: ShellcodeSource,
     /// Module config overrides. Keys + values flow through to
@@ -69,7 +70,7 @@ pub struct Profile {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PluginRef {
-    /// Filesystem path to a `.b1n` plugin pack.
+    /// Filesystem path to a `.b1n` loader pack.
     pub source: PathBuf,
 }
 
@@ -117,12 +118,11 @@ impl Profile {
         let profile: Profile = toml::from_str(&raw)
             .map_err(|e| anyhow::anyhow!("Profile {} is not valid TOML: {}", path.display(), e))?;
         if profile.schema != PROFILE_SCHEMA {
-            anyhow::bail!(
-                "Profile {} has schema {:?}, but host expects {:?}",
-                path.display(),
-                profile.schema,
-                PROFILE_SCHEMA
-            );
+            return Err(PumpBinError::ProfileSchemaUnsupported {
+                schema: profile.schema,
+                expected: PROFILE_SCHEMA.to_string(),
+            }
+            .into());
         }
         Ok(profile)
     }
@@ -137,39 +137,29 @@ impl Profile {
     /// shellcode_src. Base64 / Hex decode to a tempfile and pass the
     /// tempfile path (Local mode).
     pub fn execute(&self) -> anyhow::Result<BuildArtifact> {
-        // v1.4.0: load the operator-wide OPSEC profile and enforce its
-        // gates *before* any build work. Today's only enforced gate is
-        // builds.require_sbom; the network policy fields ship in v1.4.0
-        // for parsing but enforcement lands in a follow-up Phase 2 chip.
-        if let Some(opsec) = crate::opsec::load_opsec()? {
-            if opsec.builds.require_sbom && !self.output.sbom {
-                anyhow::bail!(
-                    "OPSEC profile (`require_sbom = true`) refuses builds without \
-                     `output.sbom = true` in the profile. Set it or relax the OPSEC \
-                     policy at ~/.config/pumpbin/opsec.toml."
-                );
-            }
-        }
-
         let platform = parse_platform(&self.target.platform)?;
         let binary_type = parse_binary_type(&self.target.binary_type)?;
 
-        let plugin_bytes = std::fs::read(&self.plugin.source).map_err(|e| {
+        let plugin_bytes = std::fs::read(&self.pack.source).map_err(|e| {
             anyhow::anyhow!(
                 "Failed to read plugin {}: {}\n\
                  hint: run `pumpbin-cli create-b1n --help` to build a \
-                 plugin pack from a loader template, or copy one of the \
+                 loader pack from a loader template, or copy one of the \
                  fixture .b1n files under pumpbin/tests/fixtures/qa/.",
-                self.plugin.source.display(),
+                self.pack.source.display(),
                 e
             )
         })?;
         let plugin = Plugin::decode_from_slice(&plugin_bytes)?;
 
         plugin.validate_for_generation(platform, binary_type)?;
+        plugin
+            .plugins()
+            .validate_module_config(Some(&self.module_config))?;
         let bin = plugin
             .bins()
             .get_that_binary(platform, binary_type)
+            .map(|b| b.to_vec())
             .ok_or_else(|| PumpBinError::BinaryNotInPlugin {
                 platform: platform.to_string(),
                 bin_type: binary_type.to_string(),
@@ -235,9 +225,10 @@ impl Profile {
         // the URL bytes (it's what gets embedded in the implant anyway).
         let shellcode_for_sbom: Vec<u8> = match &self.shellcode {
             ShellcodeSource::Url { url } => url.as_bytes().to_vec(),
-            _ => std::fs::read(&shellcode_src).unwrap_or_default(),
+            _ => std::fs::read(&shellcode_src).context("re-reading shellcode for SBOM hash")?,
         };
 
+        let shellcode_src_for_sbom = shellcode_src.clone();
         let bin = plugin.replace_binary(bin, shellcode_src, vec![], runtime_config)?;
         let bytes_written = bin.len();
 
@@ -248,19 +239,22 @@ impl Profile {
             let sbom_path = sbom_companion_path(&self.output.path);
             let build_id = build_id_for_run();
             let duration_ms = build_start.elapsed().as_millis();
-            let sbom = crate::sbom::build_sbom(
-                build_id,
-                &self.plugin.source,
-                &plugin_bytes,
-                plugin.info().plugin_name(),
-                plugin.info().version(),
-                plugin.plugins().modules(),
-                &shellcode_for_sbom,
-                &self.module_config,
-                &self.output.path,
-                bytes_written,
+            let sbom = crate::sbom::build_sbom(&crate::sbom::SbomInputs {
+                build_id: &build_id,
+                plugin_path: &self.pack.source,
+                plugin_bytes: &plugin_bytes,
+                shellcode_src: &shellcode_src_for_sbom,
+                shellcode_bytes: &shellcode_for_sbom,
+                output_path: &self.output.path,
+                platform: &self.target.platform,
+                binary_type: &self.target.binary_type,
+                plugin_name: plugin.info().plugin_name(),
+                plugin_version: plugin.info().version(),
+                config: &self.module_config,
+                modules: plugin.plugins().modules(),
+                output_bytes: bytes_written,
                 duration_ms,
-            );
+            });
             crate::sbom::write_sbom(&sbom, &sbom_path)?;
             Some(sbom_path)
         } else {
@@ -297,9 +291,12 @@ fn parse_platform(s: &str) -> anyhow::Result<Platform> {
         "windows" => Ok(Platform::Windows),
         "linux" => Ok(Platform::Linux),
         "darwin" | "macos" => Ok(Platform::Darwin),
-        other => {
-            anyhow::bail!("Unknown platform {other:?}. Expected one of: windows, linux, darwin.")
+        other => Err(PumpBinError::ProfileFieldInvalid {
+            field: "target.platform",
+            value: other.to_string(),
+            expected: "windows, linux, darwin",
         }
+        .into()),
     }
 }
 
@@ -307,7 +304,12 @@ fn parse_binary_type(s: &str) -> anyhow::Result<BinaryType> {
     match s.to_ascii_lowercase().as_str() {
         "exe" | "executable" => Ok(BinaryType::Executable),
         "lib" | "dll" | "so" | "dylib" => Ok(BinaryType::DynamicLibrary),
-        other => anyhow::bail!("Unknown binary type {other:?}. Expected one of: exe, lib."),
+        other => Err(PumpBinError::ProfileFieldInvalid {
+            field: "target.binary_type",
+            value: other.to_string(),
+            expected: "exe, lib",
+        }
+        .into()),
     }
 }
 

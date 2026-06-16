@@ -125,13 +125,10 @@ fn discover() -> Registry {
     reg
 }
 
-/// Ordered list of directories to scan, lowest-priority first.
-/// Later entries take precedence on duplicate ids (rationale: user
-/// drop-in should be able to shadow shipped built-ins).
-///
-/// Actually we keep first-wins ("kept" in warnings) so shipped
-/// modules can't be hijacked by a silently-dropped user override.
-/// Operators who want to replace a built-in should rename it.
+/// Ordered list of directories to scan.
+/// First-wins on duplicate ids: shipped modules cannot be hijacked
+/// by a silently-dropped user override. Operators who want to
+/// replace a built-in should rename it.
 fn discovery_roots() -> Vec<PathBuf> {
     let mut out = Vec::new();
 

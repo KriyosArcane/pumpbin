@@ -12,6 +12,16 @@ fn main() {
         .run()
         .expect("schema compiler command");
 
+    // Re-run when module directories change (new modules added/removed).
+    for dir in &[
+        "src/modules/encrypt",
+        "src/modules/format_url",
+        "src/modules/post_build",
+        "src/modules/external",
+    ] {
+        println!("cargo:rerun-if-changed={}", dir);
+    }
+
     #[cfg(target_os = "windows")]
     {
         let mut res = winresource::WindowsResource::new();

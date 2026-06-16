@@ -1,0 +1,14 @@
+name = "xor-demo-encrypt"
+description = "Demo encrypt module: XOR shellcode with a single-byte key"
+kind = "encrypt"
+version = "0.1.0"
+protocol = 1
+platforms = ["any"]
+executable = "xor_demo_encrypt.py"
+
+[[args]]
+key = "key"
+type = "string"
+required = false
+default = "0xaa"
+description = "Single-byte XOR key as hex, for example 0xaa"

@@ -111,24 +111,6 @@ pub enum PumpBinError {
     #[error("[PB-E0013] Shellcode size string is {got} bytes but the size_holder is {holder_len}")]
     SizeStringTooLong { got: usize, holder_len: usize },
 
-    // ── Plugin registry (plugin.rs Plugins) ──
-    /// PB-E0014 — the CONFIG_FILE_PATH OnceLock wasn't initialized before
-    /// the registry was touched. Indicates a startup-ordering bug, not a
-    /// user input error.
-    #[error("[PB-E0014] PumpBin config path is unavailable ({what})")]
-    ConfigPathUnavailable { what: &'static str },
-
-    /// PB-E0015 — `Plugins::get(name)` couldn't find the named plugin.
-    #[error("[PB-E0015] Plugin {name:?} not found in registry")]
-    PluginNotFound { name: String },
-
-    // ── WASM dispatch (plugin_system.rs) ──
-    /// PB-E0016 — a WASM module call (encrypt_shellcode, format_url_remote,
-    /// post_binary, etc.) returned an error. Wraps the underlying extism
-    /// error string.
-    #[error("[PB-E0016] WASM module call {hook:?} failed: {detail}")]
-    WasmCallFailed { hook: String, detail: String },
-
     // ── Maker validation (maker.rs check_generate) ──
     /// PB-E0017 — a required Maker form field is empty.
     #[error("[PB-E0017] Maker field {field:?} is empty")]
@@ -148,35 +130,48 @@ pub enum PumpBinError {
     #[error("[PB-E0020] Maker max_len is invalid: {reason}")]
     MakerMaxLenInvalid { reason: &'static str },
 
-    // ── WASM policy (plugin_system.rs, v1.1.7) ──
-    /// PB-E0021 — a WASM module attempted to contact a host that's not
-    /// on the module's declared `allowed_hosts` list. With the default
-    /// empty allowlist this means any network access at all is refused.
-    /// To grant access, declare it in the plugin's `RuntimeConfig`.
-    #[error("[PB-E0021] WASM module {module:?} denied access to host {host:?}")]
-    WasmHostDenied { module: String, host: String },
+    // ── Profile validation (profile.rs) ──
+    /// PB-E0024 — profile `schema` field doesn't match the host's expected
+    /// schema version. The user needs to update the profile or upgrade
+    /// PumpBin.
+    #[error("[PB-E0024] Profile schema {schema:?} is not supported; host expects {expected:?}")]
+    ProfileSchemaUnsupported { schema: String, expected: String },
 
-    /// PB-E0022 — a WASM module declared an SDK version the host doesn't
-    /// support. v1.1.7 introduced strict SDK-version checking; plugins
-    /// built against a future SDK can't load on older hosts.
-    #[error(
-        "[PB-E0022] WASM module {module:?} targets SDK version {declared}, but host supports {host_version}. \
-         Either rebuild the plugin against SDK {host_version} or upgrade PumpBin."
-    )]
-    WasmSdkVersionMismatch {
-        module: String,
-        declared: u32,
-        host_version: u32,
+    /// PB-E0025 — a profile field (platform, binary_type, save type, etc.)
+    /// contains a value that can't be parsed into its target enum.
+    #[error("[PB-E0025] Invalid profile field {field}: {value:?} (expected one of: {expected})")]
+    ProfileFieldInvalid {
+        field: &'static str,
+        value: String,
+        expected: &'static str,
     },
 
-    /// PB-E0023 — a WASM module's declared `timeout_ms` falls outside the
-    /// host's accepted bounds (1..=600_000). Set a reasonable value or
-    /// remove the field to use the 3000 ms default.
+    // ── Pack / B1nBuilder assembly (pack.rs) ──
+    /// PB-E0026 — explicit max_len exceeds measured padding capacity.
     #[error(
-        "[PB-E0023] WASM module {module:?} declared timeout_ms={timeout_ms}; \
-         valid range is 1..=600000 ms (10 minutes)"
+        "[PB-E0026] max_len {max_len} exceeds the {capacity} bytes of padding measured \
+         after `{prefix}` in the template"
     )]
-    WasmTimeoutInvalid { module: String, timeout_ms: u64 },
+    MaxLenExceedsCapacity {
+        max_len: u64,
+        capacity: usize,
+        prefix: String,
+    },
+
+    /// PB-E0027 — auto-detection found zero padding after the prefix.
+    #[error(
+        "[PB-E0027] could not auto-detect placeholder capacity (no padding \
+         after `{prefix}` in template). Set max_len explicitly."
+    )]
+    CapacityAutoDetectFailed { prefix: String },
+
+    // ── General I/O ──
+    /// PB-E0028 — an I/O operation failed on a known path.
+    #[error("[PB-E0028] I/O error on {path}: {source}")]
+    IoFailed {
+        path: String,
+        source: std::io::Error,
+    },
 }
 
 impl PumpBinError {
@@ -198,16 +193,15 @@ impl PumpBinError {
             Self::MaxLenZero => "PB-E0011",
             Self::ShellcodeTooLong { .. } => "PB-E0012",
             Self::SizeStringTooLong { .. } => "PB-E0013",
-            Self::ConfigPathUnavailable { .. } => "PB-E0014",
-            Self::PluginNotFound { .. } => "PB-E0015",
-            Self::WasmCallFailed { .. } => "PB-E0016",
             Self::MakerFieldEmpty { .. } => "PB-E0017",
             Self::MakerSourcePrefixCollision => "PB-E0018",
             Self::MakerPreflightFailed { .. } => "PB-E0019",
             Self::MakerMaxLenInvalid { .. } => "PB-E0020",
-            Self::WasmHostDenied { .. } => "PB-E0021",
-            Self::WasmSdkVersionMismatch { .. } => "PB-E0022",
-            Self::WasmTimeoutInvalid { .. } => "PB-E0023",
+            Self::ProfileSchemaUnsupported { .. } => "PB-E0024",
+            Self::ProfileFieldInvalid { .. } => "PB-E0025",
+            Self::MaxLenExceedsCapacity { .. } => "PB-E0026",
+            Self::CapacityAutoDetectFailed { .. } => "PB-E0027",
+            Self::IoFailed { .. } => "PB-E0028",
         }
     }
 }

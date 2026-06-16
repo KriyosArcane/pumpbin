@@ -1,0 +1,16 @@
+schema = "pumpbin.profile/v1"
+
+[pack]
+source = "loader.b1n"           # Path to the .b1n loader pack
+
+[target]
+platform = "windows"            # windows, linux, or darwin
+binary_type = "exe"             # exe or lib
+
+[shellcode]
+source = "file"                 # file, url, base64, or hex
+path = "payload.bin"            # Path to raw shellcode
+
+[output]
+path = "implant.exe"            # Output file path
+# sbom = false                  # Set to true for SBOM generation

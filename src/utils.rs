@@ -1,84 +1,7 @@
-#[cfg(feature = "gui")]
-use iced::{
-    advanced::graphics::image::image_rs::ImageFormat,
-    window::{self, Level, Position},
-    Font, Pixels, Settings, Size, Task,
-};
 use memchr::memmem;
 use rand::RngCore;
-#[cfg(feature = "gui")]
-use rfd::{AsyncMessageDialog, MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 use std::iter;
 use thiserror::Error;
-
-#[cfg(feature = "gui")]
-pub const JETBRAINS_MONO_FONT: Font = Font::with_name("JetBrainsMono NF");
-
-#[cfg(feature = "gui")]
-pub fn error_dialog(error: anyhow::Error) {
-    MessageDialog::new()
-        .set_buttons(MessageButtons::Ok)
-        .set_description(error.to_string())
-        .set_level(MessageLevel::Error)
-        .set_title("PumpBin")
-        .show();
-}
-
-#[cfg(feature = "gui")]
-pub fn message_dialog(message: String, level: MessageLevel) -> Task<MessageDialogResult> {
-    let dialog = AsyncMessageDialog::new()
-        .set_buttons(MessageButtons::Ok)
-        .set_description(message)
-        .set_level(level)
-        .set_title("PumpBin")
-        .show();
-    Task::future(dialog)
-}
-
-#[cfg(feature = "gui")]
-pub fn confirm_dialog(message: String, title: String) -> Task<MessageDialogResult> {
-    let dialog = AsyncMessageDialog::new()
-        .set_buttons(MessageButtons::YesNo)
-        .set_description(message)
-        .set_level(MessageLevel::Warning)
-        .set_title(title)
-        .show();
-    Task::future(dialog)
-}
-
-#[cfg(feature = "gui")]
-pub fn settings() -> Settings {
-    Settings {
-        fonts: vec![include_bytes!("../assets/JetBrainsMonoNerdFont-Regular.ttf").into()],
-        default_font: JETBRAINS_MONO_FONT,
-        default_text_size: Pixels(13.0),
-        antialiasing: true,
-        ..Default::default()
-    }
-}
-
-#[cfg(feature = "gui")]
-pub fn window_settings() -> window::Settings {
-    let size = Size::new(1200.0, 800.0);
-
-    window::Settings {
-        size,
-        position: Position::Centered,
-        min_size: Some(size),
-        visible: true,
-        resizable: true,
-        decorations: true,
-        transparent: false,
-        level: Level::Normal,
-        icon: window::icon::from_file_data(
-            include_bytes!("../logo/icon.png"),
-            Some(ImageFormat::Png),
-        )
-        .ok(),
-        exit_on_close_request: true,
-        ..Default::default()
-    }
-}
 
 #[derive(Debug, Error)]
 pub enum ReplaceError {
@@ -94,7 +17,7 @@ pub fn replace(
     replace_by: &[u8],
     max_len: usize,
 ) -> Result<(), ReplaceError> {
-    replace_with_rng(bin, holder, replace_by, max_len, &mut rand::thread_rng())
+    replace_with_rng(bin, holder, replace_by, max_len, &mut rand::rng())
 }
 
 /// Same as [`replace`] but with an explicit RNG. Used by golden-output tests
@@ -215,7 +138,7 @@ pub fn recompute_pe_checksum(bin: &mut [u8]) -> bool {
 }
 
 pub fn random_id_lowercase(len: usize) -> String {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let chars: Vec<char> = "abcdefghijklmnopqrstuvwxyz0123456789".chars().collect();
     (0..len)
         .map(|_| {
@@ -223,4 +146,49 @@ pub fn random_id_lowercase(len: usize) -> String {
             chars[idx]
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replace_basic() {
+        let mut bin = b"AAAA$$SHELLCODE$$BBBB".to_vec();
+        let holder = b"$$SHELLCODE$$";
+        replace(&mut bin, holder, b"\xcc\xc3", holder.len()).unwrap();
+        assert_eq!(&bin[4..6], b"\xcc\xc3");
+        assert_eq!(&bin[0..4], b"AAAA");
+        assert_eq!(&bin[4 + holder.len()..], b"BBBB");
+    }
+
+    #[test]
+    fn replace_holder_not_found() {
+        let mut bin = b"no holder here".to_vec();
+        let err = replace(&mut bin, b"$$MISSING$$", b"x", 11).unwrap_err();
+        assert!(matches!(err, ReplaceError::HolderNotFound(_)));
+    }
+
+    #[test]
+    fn replace_too_long() {
+        let mut bin = b"$$XX$$".to_vec();
+        let err = replace(&mut bin, b"$$XX$$", b"toolongdata", 6).unwrap_err();
+        assert!(matches!(err, ReplaceError::ReplacementTooLong(11, 6)));
+    }
+
+    #[test]
+    fn replace_exact_fit() {
+        let holder = b"HOLDER";
+        let mut bin = b"xxHOLDERxx".to_vec();
+        replace(&mut bin, holder, b"ABCDEF", holder.len()).unwrap();
+        assert_eq!(&bin[2..8], b"ABCDEF");
+    }
+
+    #[test]
+    fn replace_empty_replacement() {
+        let holder = b"$$H$$";
+        let mut bin = b"A$$H$$B".to_vec();
+        replace(&mut bin, holder, b"", holder.len()).unwrap();
+        assert_ne!(&bin[1..6], holder);
+    }
 }

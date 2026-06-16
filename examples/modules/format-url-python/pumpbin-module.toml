@@ -1,0 +1,14 @@
+name = "url-prefix-demo"
+description = "Demo format-url module: prepend a prefix to the remote payload URL"
+kind = "format-url"
+version = "0.1.0"
+protocol = 1
+platforms = ["any"]
+executable = "url_prefix_demo.py"
+
+[[args]]
+key = "prefix"
+type = "string"
+required = false
+default = ""
+description = "String to prepend to the URL"

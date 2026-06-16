@@ -3,12 +3,11 @@
 //! The bug: `replace_binary` previously did
 //!     pass = output.pass().to_vec();
 //! inside the Local branch, unconditionally overwriting any caller-supplied
-//! `Pass` entries with whatever `run_encrypt_shellcode` returned. When the GUI
-//! pre-encrypted shellcode in a separate flow and then handed the resulting
-//! Pass list into `replace_binary`, those entries were silently dropped and
-//! the implant ran with un-substituted holders in the binary.
+//! `Pass` entries with whatever `run_encrypt_shellcode` returned. When callers
+//! handed precomputed Pass entries into `replace_binary`, those entries were
+//! silently dropped and the implant ran with un-substituted holders in the binary.
 //!
-//! This test builds a synthetic Plugin with no WASM modules (so
+//! This test builds a synthetic Plugin with no encrypt module (so
 //! `run_encrypt_shellcode` returns an empty Pass list and the plaintext
 //! shellcode), supplies two caller-side Pass entries whose holders are
 //! present in the template, and asserts both holders got replaced.
@@ -70,6 +69,7 @@ fn caller_supplied_pass_entries_survive_replace_binary() {
     let template_bin = plugin
         .bins()
         .get_that_binary(Platform::Windows, BinaryType::Executable)
+        .map(|b| b.to_vec())
         .unwrap();
 
     // Write the shellcode to a tempfile because Plugin uses ShellcodeSaveType::Local

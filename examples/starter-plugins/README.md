@@ -1,6 +1,6 @@
 # Starter plugins
 
-Two ready-to-use `.b1n` plugin packs to get a new PumpBin user from
+Two ready-to-use `.b1n` loader packs to get a new PumpBin user from
 zero to a working implant in 30 seconds.
 
 | File         | Target              | Loader technique                              | Size   |
@@ -23,7 +23,7 @@ msfvenom -p windows/x64/exec CMD=calc.exe -f raw -o payload.bin
 cat > pumpbin.toml <<'EOF'
 schema = "pumpbin.profile/v1"
 
-[plugin]
+[pack]
 source = "examples/starter-plugins/windows.b1n"
 
 [target]
@@ -55,7 +55,7 @@ cp tests/fixtures/qa/linux_sentinel.bin payload.bin
 
 cat > pumpbin.toml <<'EOF'
 schema = "pumpbin.profile/v1"
-[plugin]
+[pack]
 source = "examples/starter-plugins/linux.b1n"
 [target]
 platform = "linux"
@@ -82,17 +82,19 @@ msfvenom, etc.).
 To ship something that survives basic AV, compose an encryption
 module into the build:
 
-```toml
-[shellcode]
-source = "file"
-path = "payload.bin"
-
-[[modules]]
-wasm = "plugin-examples/aes-gcm-encrypt/target/wasm32-wasip1/release/aes_gcm_encrypt.wasm"
+```bash
+pumpbin-cli stamp loader.exe payload.bin --encrypt-module aes-gcm
 ```
 
-See `plugin-examples/aes-gcm-encrypt/` for the reference encryption
-module and `book/` for the full module-chain documentation.
+Or apply a post-build byte-patch in the same command:
+
+```bash
+pumpbin-cli stamp loader.exe payload.bin \
+    --encrypt-module aes-gcm \
+    --post byte-patch:patches=4831d2:4833d2
+```
+
+See `book/` for the full module-chain documentation.
 
 ## Rebuilding the starter plugins
 

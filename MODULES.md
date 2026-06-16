@@ -15,6 +15,8 @@ PumpBin scans these paths at startup:
 
 First match wins on duplicate IDs. A drop-in cannot shadow a built-in. A bad manifest logs a warning and skips that module. All other modules continue working.
 
+PumpBin normalizes built-in modules and external manifests into one descriptor model. The same descriptor powers `module list`, JSON output, arg validation, defaults, and constraint display. Target constraints from built-in modules are checked before generation, and incompatible post-build modules are rejected before the chain runs.
+
 ## Module structure
 
 ```
@@ -27,7 +29,7 @@ my-module/
 
 ```toml
 name        = "my-module"
-description = "One-line description shown in list-modules"
+description = "One-line description shown in module list"
 kind        = "post-build"
 version     = "0.1.0"
 protocol    = 1
@@ -52,8 +54,8 @@ description = "all or first"
 
 | Field | Required | Notes |
 |-------|----------|-------|
-| `name` | yes | Unique ID. Used in `--post` and `list-modules`. |
-| `description` | yes | One line. Shown in `list-modules`. |
+| `name` | yes | Unique ID. Used in `--post` and `module list`. |
+| `description` | yes | One line. Shown in `module list`. |
 | `kind` | yes | `encrypt`, `format-encrypted`, `format-url`, `upload-remote`, or `post-build`. |
 | `version` | no | Freeform string. SemVer by convention. |
 | `protocol` | no | Defaults to 1. |
@@ -107,6 +109,10 @@ def parse_args(header):
 
 Treat unknown keys as errors. Treat missing required keys as errors.
 
+PumpBin also validates declared args before dispatch. If your manifest declares `[[args]]`, unknown args, missing required args, basic type mismatches, defaults, and file/path checks are handled before the executable runs. If your manifest has no `[[args]]`, PumpBin allows arbitrary args so quick scripts stay easy.
+
+For non-post phases, pass runtime args with `--module-config module:<id>.<key>=<value>`. Post-build shorthand uses `--post <id:key=value>` for operator-appended modules, and baked post-build chains can use `--post-config <idx:key=value>` for index-precise config.
+
 ### Response headers
 
 Success:
@@ -153,16 +159,23 @@ Any language with stdin/stdout and JSON handles this in around 30 lines.
 
 ### Python
 
-See [examples/modules/post-build-python/](examples/modules/post-build-python/) for a complete working template with `parse_args`, `read_frame`, `write_frame`, and error handling.
+See these examples for complete working templates with `parse_args`, `read_frame`, `write_frame`, and error handling:
+
+- [examples/modules/post-build-python/](examples/modules/post-build-python/) for a `post-build` transform.
+- [examples/modules/encrypt-python/](examples/modules/encrypt-python/) for an `encrypt` transform.
+- [examples/modules/format-url-python/](examples/modules/format-url-python/) for a `format-url` transform.
 
 ### Rust
 
 ```rust
-use pumpbin_module_sdk::{post_build, Result};
+use pumpbin_module_sdk::{arg, parse_args, post_build, Result};
 
 fn main() -> Result<()> {
     post_build(|args, implant| {
-        // mutate implant bytes here
+        let args = parse_args(args)?;
+        let marker = arg(&args, "marker").unwrap_or("0xAA");
+
+        // mutate implant bytes here, using marker if desired
         Ok(())
     })
 }
@@ -170,7 +183,7 @@ fn main() -> Result<()> {
 
 See [examples/modules/post-build-rust/](examples/modules/post-build-rust/) for the full Cargo template.
 
-The SDK is optional. Hand-roll the framing if you prefer zero dependencies.
+The SDK is optional. Hand-roll the framing if you prefer zero dependencies. For Rust modules, the SDK provides the wire protocol entry points plus tiny arg helpers: `parse_args`, `arg`, and `required_arg`.
 
 ## Development loop
 
@@ -180,19 +193,26 @@ mkdir -p ~/.config/pumpbin/modules/my-module
 cp my-module pumpbin-module.toml ~/.config/pumpbin/modules/my-module/
 
 # 2. Verify discovery
-pumpbin-cli list-modules
+pumpbin-cli module list
 
 # 3. Check arg schema
-pumpbin-cli list-modules --options --id my-module
+pumpbin-cli module list --options --id my-module
 
 # 4. Test in isolation
-pumpbin-cli module-test my-module --input sample.bin --output out.bin
+pumpbin-cli module test my-module --input sample.bin --output out.bin
 
 # 5. Debug the wire frames
-pumpbin-cli module-test my-module --input sample.bin --output out.bin --debug
+pumpbin-cli module test my-module --input sample.bin --output out.bin --debug
 
 # 6. Use in the pipeline
-pumpbin-cli generate -p loader.b1n -s sc.bin --post my-module:key=value
+pumpbin-cli generate --pack loader.b1n --shellcode sc.bin --post my-module:key=value
+```
+
+For non-post modules, scope args by module id:
+
+```bash
+pumpbin-cli generate --pack loader.b1n --shellcode sc.bin \
+    --module-config module:xor-demo-encrypt.key=0x41
 ```
 
 ## Baking a default chain into a .b1n
@@ -215,6 +235,8 @@ config = { from_donor = "/path/to/signed.exe" }
 
 `pumpbin-cli pack` reads this and bakes the chain into the `.b1n`. Operators run `generate` with no `--post` flags.
 
+Encryption modules run before shellcode is stamped. Post-build modules run after the implant is stamped. Use `--encrypt-module <id>` for the former and `--post <id[:k=v,k=v]>` for the latter.
+
 **Option B: create-b1n flags (any loader)**
 
 ```bash
@@ -224,21 +246,23 @@ pumpbin-cli create-b1n \
     --name myloader \
     --platform windows \
     --type exe \
-    --src-prefix '$$SHELLCODE$$' \
+    --marker '$$SHELLCODE$$' \
     --size-holder '$$99999$$' \
-    --post-module cert-graft \
-    --post-module-config 0:donor=/path/to/signed.exe
+    --encrypt-module aes-gcm \
+    --post cert-graft:donor=/path/to/signed.exe
 ```
 
 Explicit `--post` args on `generate` append to the baked chain. They do not replace it.
 
+Inline `--post id:k=v` args are keyed by module id. If you append the same post-build module more than once and need different args for each instance, use a baked chain plus `--post-config IDX:KEY=VALUE`, where `IDX` is the zero-based post-build step index.
+
 ## Discovering installed modules
 
 ```bash
-pumpbin-cli list-modules                       # IDs and descriptions
-pumpbin-cli list-modules --options             # includes arg schema
-pumpbin-cli list-modules --options --id <id>   # single module
-pumpbin-cli list-modules --json                # machine-readable
+pumpbin-cli module list                       # IDs and descriptions
+pumpbin-cli module list --options             # includes arg schema
+pumpbin-cli module list --options --id <id>   # single module
+pumpbin-cli module list --json                # machine-readable
 ```
 
 ## Trust model

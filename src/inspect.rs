@@ -1,17 +1,15 @@
-//! `.b1n` plugin pack introspection.
+//! `.b1n` loader pack introspection.
 //!
-//! Pumpbin plugin packs are opaque-by-default (capnp + zlib blob). v1.3.1
+//! PumpBin loader packs are opaque-by-default (capnp + zlib blob). v1.3.1
 //! exposes a structured `inspect` API: load a `.b1n`, dump everything an
 //! operator needs to know before adding it to their registry — plugin
-//! info, replace config, supported platforms, embedded WASM modules
-//! (with sha256 + declared runtime policy), and the config schema each
-//! module exports.
+//! info, replace config, supported platforms, and module ids.
 //!
 //! Plain-text output for now; `--json` versioned shape lands in a
 //! follow-up chip alongside the generic `--json` CLI flag.
 
 use crate::plugin::Plugin;
-use crate::plugin_system::{PluginConfigField, RuntimeConfig};
+use crate::plugin_system::PluginConfigField;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -40,7 +38,6 @@ pub struct InspectReport {
     pub upload_remote_module: Option<String>,
     /// Post-build modules (run after shellcode injection, in order).
     pub modules: Vec<ModuleReport>,
-    pub legacy_module_count: usize,
 }
 
 fn ser_bytes_as_lossy_string<S: serde::Serializer>(bytes: &[u8], s: S) -> Result<S::Ok, S::Error> {
@@ -66,12 +63,8 @@ pub struct PlatformReport {
 #[derive(Debug, Clone, Serialize)]
 pub struct ModuleReport {
     pub index: usize,
-    /// Module id (post-2.0). Pre-2.0 this was a sha256 of the wasm bytes.
+    /// Module id.
     pub id: String,
-    /// Always `None` in v2.0; native modules don't yet declare per-module
-    /// runtime policies. Kept on the wire for backwards-compat consumers.
-    pub runtime: Option<RuntimeConfig>,
-    /// Always empty in v2.0; module config schema discovery TBD post-Step 7.
     pub config_fields: Vec<PluginConfigField>,
 }
 
@@ -83,19 +76,6 @@ pub fn inspect(path: impl AsRef<Path>) -> anyhow::Result<InspectReport> {
 
     let modules = inspect_modules(&plugin);
     let platforms = inspect_platforms(&plugin);
-
-    // Pre-v1.1.7 single-WASM fallback fields. Surface their presence so
-    // operators know a plugin pre-dates the unified `modules: Vec<...>`
-    // shape (informational; the legacy fields still work).
-    let legacy_module_count = [
-        plugin.plugins().encrypt_shellcode().is_some(),
-        plugin.plugins().format_encrypted_shellcode().is_some(),
-        plugin.plugins().format_url_remote().is_some(),
-        plugin.plugins().upload_final_shellcode_remote().is_some(),
-    ]
-    .iter()
-    .filter(|x| **x)
-    .count();
 
     Ok(InspectReport {
         path: path.to_path_buf(),
@@ -119,7 +99,6 @@ pub fn inspect(path: impl AsRef<Path>) -> anyhow::Result<InspectReport> {
             .upload_final_shellcode_remote()
             .map(|s| s.to_string()),
         modules,
-        legacy_module_count,
     })
 }
 
@@ -156,7 +135,6 @@ fn inspect_modules(plugin: &Plugin) -> Vec<ModuleReport> {
         .map(|(idx, id)| ModuleReport {
             index: idx,
             id: id.clone(),
-            runtime: None,
             config_fields: Vec::new(),
         })
         .collect()
@@ -168,7 +146,7 @@ pub fn render_text(report: &InspectReport) -> String {
     let mut s = String::new();
 
     let _ = writeln!(s, "Path:        {}", report.path.display());
-    let _ = writeln!(s, "Plugin:      {}", report.plugin_name);
+    let _ = writeln!(s, "Pack:        {}", report.plugin_name);
     let _ = writeln!(s, "Author:      {}", report.author);
     let _ = writeln!(s, "Version:     {}", report.plugin_version);
     let _ = writeln!(s, "Save type:   {}", report.save_type);
@@ -224,15 +202,6 @@ pub fn render_text(report: &InspectReport) -> String {
     let _ = writeln!(s, "\nModules ({}):", report.modules.len());
     for m in &report.modules {
         let _ = writeln!(s, "  [{}] id={}", m.index, m.id);
-        if let Some(rt) = &m.runtime {
-            let _ = writeln!(
-                s,
-                "      runtime: timeout_ms={} allowed_hosts={:?} on_error={:?} sdk_version={:?}",
-                rt.timeout_ms, rt.allowed_hosts, rt.on_error, rt.sdk_version
-            );
-        } else {
-            let _ = writeln!(s, "      runtime: <unset, defaults applied at runtime>");
-        }
         if !m.config_fields.is_empty() {
             let _ = writeln!(s, "      config fields:");
             for f in &m.config_fields {
@@ -243,18 +212,6 @@ pub fn render_text(report: &InspectReport) -> String {
     }
     if report.modules.is_empty() {
         let _ = writeln!(s, "  <none>");
-    }
-
-    if report.legacy_module_count > 0 {
-        let _ = writeln!(
-            s,
-            "\nLegacy single-WASM fields populated: {}",
-            report.legacy_module_count
-        );
-        let _ = writeln!(
-            s,
-            "  (Pre-v1.1.7 plugin shape; still works, but consider rebuilding under modules[])"
-        );
     }
     s
 }
@@ -325,4 +282,92 @@ pub fn render_diff(left: &InspectReport, right: &InspectReport) -> String {
         let _ = writeln!(s, "no differences");
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::{Plugin, PluginBins, PluginInfo, PluginPlugins, PluginReplace};
+
+    /// Build a minimal fixture plugin, encode it to a temp .b1n, return
+    /// the path. Mirrors the pattern from tests/inspect_b1n.rs.
+    fn write_fixture(name: &str, dir: &tempfile::TempDir) -> std::path::PathBuf {
+        let mut bins = PluginBins::default();
+        let mut template = vec![0xAAu8; 64];
+        template.extend_from_slice(b"$$SHELLCODE$$");
+        template.extend(std::iter::repeat_n(b'0', 4096 - b"$$SHELLCODE$$".len()));
+        template.extend_from_slice(b"$$99999$$");
+        *bins.windows.executable_mut() = Some(template);
+
+        let plugin = Plugin {
+            version: "1.0.0".into(),
+            info: PluginInfo {
+                plugin_name: name.into(),
+                author: "unit-tests".into(),
+                version: "0.1.0".into(),
+                desc: "inline unit test fixture".into(),
+            },
+            replace: PluginReplace {
+                src_prefix: b"$$SHELLCODE$$".to_vec(),
+                size_holder: Some(b"$$99999$$".to_vec()),
+                max_len: 4096,
+            },
+            bins,
+            plugins: PluginPlugins::default(),
+        };
+
+        let bytes = plugin.encode_to_vec().unwrap();
+        let path = dir.path().join(format!("{name}.b1n"));
+        std::fs::write(&path, &bytes).unwrap();
+        path
+    }
+
+    #[test]
+    fn inspect_roundtrip_from_b1n() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_fixture("inspect-unit", &dir);
+
+        let report = inspect(&path).expect("inspect must succeed on valid .b1n");
+
+        assert_eq!(report.plugin_name, "inspect-unit");
+        assert_eq!(report.author, "unit-tests");
+        assert_eq!(report.plugin_version, "0.1.0");
+        assert_eq!(report.description, "inline unit test fixture");
+        assert_eq!(report.src_prefix, b"$$SHELLCODE$$".to_vec());
+        assert_eq!(report.size_holder, Some(b"$$99999$$".to_vec()));
+        assert_eq!(report.max_len, 4096);
+        assert_eq!(report.platforms.len(), 1);
+        assert_eq!(report.platforms[0].name, "Windows");
+    }
+
+    #[test]
+    fn render_text_has_expected_sections() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_fixture("render-unit", &dir);
+        let report = inspect(&path).unwrap();
+        let text = render_text(&report);
+
+        // Key section headers and field labels
+        for needle in [
+            "Pack:",
+            "Author:",
+            "Version:",
+            "Save type:",
+            "src_prefix:",
+            "max_len:",
+            "Pipeline hooks:",
+            "Platforms (",
+            "Modules (",
+        ] {
+            assert!(
+                text.contains(needle),
+                "render_text must contain section {needle:?}; got:\n{text}"
+            );
+        }
+
+        // Fixture-specific values
+        assert!(text.contains("render-unit"));
+        assert!(text.contains("unit-tests"));
+        assert!(text.contains("Windows"));
+    }
 }

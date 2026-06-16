@@ -1,10 +1,7 @@
-//! Tests for `PluginReplace::preflight_template`, the shared helper that both
-//! the Maker GUI (src/maker.rs) and the CLI `create-b1n` subcommand
-//! (src/bin/pumpbin-cli.rs) call before encoding a `.b1n`.
+//! Tests for `PluginReplace::preflight_template`, the helper the CLI
+//! `create-b1n` subcommand calls before encoding a `.b1n`.
 //!
-//! Pre-1.1.3 the Maker enforced template preflight inline and the CLI
-//! skipped it entirely, producing silently-broken `.b1n` files. The shared
-//! helper closes that drift.
+//! This catches silently-broken `.b1n` files before `generate` time.
 
 use pumpbin::plugin::PluginReplace;
 use pumpbin::PumpBinError;

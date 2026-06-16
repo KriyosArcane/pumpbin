@@ -9,8 +9,9 @@
 use anyhow::{anyhow, Result};
 
 use crate::modules::post_build::parse_kv_args;
-use crate::modules::{ArgSpec, PostBuildModule};
+use crate::modules::{ArgSpec, ModuleConstraints, PostBuildModule};
 use crate::pe::{patch_version_info, read_version_info};
+use crate::Platform;
 
 const VALID_KEYS: &[&str] = &[
     "CompanyName",
@@ -37,6 +38,13 @@ impl PostBuildModule for PeVersionInfo {
 
     fn description(&self) -> &'static str {
         "Patch VS_VERSION_INFO StringFileInfo entries in a PE"
+    }
+
+    fn constraints(&self) -> ModuleConstraints {
+        ModuleConstraints {
+            requires_platform: Some(Platform::Windows),
+            ..Default::default()
+        }
     }
 
     fn args(&self) -> Vec<ArgSpec> {

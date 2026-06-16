@@ -5,14 +5,14 @@
 //! The `B1nBuilder` owns the plugin-assembly logic that both CLI paths
 //! call into. Adding new fields here is the single edit point for both.
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::plugin::{Plugin, PluginInfo, PluginReplace};
 use crate::{BinaryType, Platform, ShellcodeSaveType};
 
-/// Inputs to assemble a `.b1n` plugin pack. Field meanings mirror the
+/// Inputs to assemble a `.b1n` loader pack. Field meanings mirror the
 /// `pumpbin-cli create-b1n` CLI flags one-for-one — see that subcommand
 /// for the operator-facing names.
 pub struct B1nBuilder {
@@ -96,25 +96,21 @@ impl B1nBuilder {
         plugin.replace.max_len = match max_len_override {
             Some(explicit) => {
                 if explicit > detected_capacity as u64 && detected_capacity > 0 {
-                    bail!(
-                        "max_len {} exceeds the {} bytes of padding measured \
-                         after `{}` in the template. Stamped shellcodes larger \
-                         than the padding run would overflow into adjacent \
-                         template bytes and corrupt the loader.",
-                        explicit,
-                        detected_capacity,
-                        src_prefix,
-                    );
+                    return Err(crate::error::PumpBinError::MaxLenExceedsCapacity {
+                        max_len: explicit,
+                        capacity: detected_capacity,
+                        prefix: src_prefix,
+                    }
+                    .into());
                 }
                 explicit
             }
             None => {
                 if detected_capacity == 0 {
-                    bail!(
-                        "could not auto-detect placeholder capacity (no padding \
-                         after `{}` in template). Set max_len explicitly.",
-                        src_prefix,
-                    );
+                    return Err(crate::error::PumpBinError::CapacityAutoDetectFailed {
+                        prefix: src_prefix,
+                    }
+                    .into());
                 }
                 detected_capacity as u64
             }

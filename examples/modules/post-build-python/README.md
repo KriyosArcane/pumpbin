@@ -8,21 +8,21 @@ no dependencies, ~50 lines of Python.
 ```
 cp -r post-build-python ~/.config/pumpbin/modules/uppercase-strings
 chmod +x ~/.config/pumpbin/modules/uppercase-strings/uppercase_strings.py
-pumpbin-cli list-modules        # should list uppercase-strings
+pumpbin-cli module list         # should list uppercase-strings
 ```
 
 ## Test in isolation (no implant needed)
 
 ```
 echo "hello world" > /tmp/in
-pumpbin-cli module-test uppercase-strings -i /tmp/in -o /tmp/out
+pumpbin-cli module test uppercase-strings -i /tmp/in -o /tmp/out
 cat /tmp/out                     # → HELLO WORLD
 ```
 
 ## Use in a generate pipeline
 
 ```
-pumpbin-cli generate -p loader.b1n -s sc.bin --platform linux -t exe \
+pumpbin-cli generate --pack loader.b1n --shellcode sc.bin --platform linux -t exe \
     -o implant --post uppercase-strings
 ```
 

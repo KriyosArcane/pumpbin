@@ -17,11 +17,18 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn cli_path() -> Option<PathBuf> {
+    if let Some(path) = option_env!("CARGO_BIN_EXE_pumpbin-cli") {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+
     let candidates = [
-        "target/release/pumpbin-cli",
         "target/debug/pumpbin-cli",
-        "../target/release/pumpbin-cli",
         "../target/debug/pumpbin-cli",
+        "target/release/pumpbin-cli",
+        "../target/release/pumpbin-cli",
     ];
     for c in &candidates {
         let p = PathBuf::from(c);
@@ -83,7 +90,7 @@ fn batch_empty_dir_exits_nonzero() {
     std::fs::create_dir(&out_dir).unwrap();
 
     let status = Command::new(&cli)
-        .args(["batch", "--plugin"])
+        .args(["batch", "--pack"])
         .arg(&b1n)
         .args(["--directory"])
         .arg(&empty_dir)
@@ -114,7 +121,7 @@ fn batch_dir_of_non_bin_files_exits_nonzero() {
     std::fs::create_dir(&out_dir).unwrap();
 
     let status = Command::new(&cli)
-        .args(["batch", "--plugin"])
+        .args(["batch", "--pack"])
         .arg(&b1n)
         .args(["--directory"])
         .arg(&sc_dir)
@@ -144,7 +151,7 @@ fn batch_with_valid_shellcode_succeeds() {
     std::fs::create_dir(&out_dir).unwrap();
 
     let status = Command::new(&cli)
-        .args(["batch", "--plugin"])
+        .args(["batch", "--pack"])
         .arg(&b1n)
         .args(["--directory"])
         .arg(&sc_dir)
@@ -158,6 +165,43 @@ fn batch_with_valid_shellcode_succeeds() {
         "batch with valid input must exit 0; got {:?}",
         status
     );
+}
+
+#[test]
+fn generate_json_stdout_is_single_json_document() {
+    let Some(cli) = skip_if_no_binary() else {
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let b1n = build_local_b1n(&cli, &tmp);
+    let shellcode = tmp.path().join("payload.bin");
+    std::fs::write(&shellcode, vec![0x90u8; 64]).unwrap();
+    let output_path = tmp.path().join("implant.exe");
+
+    let output = Command::new(&cli)
+        .args(["--json", "generate", "--pack"])
+        .arg(&b1n)
+        .args(["--shellcode"])
+        .arg(&shellcode)
+        .args(["--output"])
+        .arg(&output_path)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "generate --json failed: stderr={} stdout={}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout),
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout must be UTF-8 JSON");
+    let value: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("stdout must be one JSON document, got {stdout:?}: {e}"));
+    assert_eq!(value["schema"], "pumpbin.cli/v1");
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["data"]["output"], output_path.display().to_string());
+    assert!(output_path.is_file());
 }
 
 #[test]

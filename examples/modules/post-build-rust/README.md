@@ -12,29 +12,31 @@ cargo build --release
 mkdir -p ~/.config/pumpbin/modules/marker-append
 cp target/release/marker-append      ~/.config/pumpbin/modules/marker-append/
 cp pumpbin-module.toml               ~/.config/pumpbin/modules/marker-append/
-pumpbin-cli list-modules             # → marker-append (external: ...)
+pumpbin-cli module list              # → marker-append (external: ...)
 ```
 
 ## Test in isolation
 
 ```
 echo "hello" > /tmp/in
-pumpbin-cli module-test marker-append -i /tmp/in -o /tmp/out
+pumpbin-cli module test marker-append -i /tmp/in -o /tmp/out
 hexdump -C /tmp/out    # last byte is 0xAA
 ```
 
 Pass an arg:
 
 ```
-pumpbin-cli module-test marker-append -i /tmp/in -o /tmp/out --arg marker=0xCC
+pumpbin-cli module test marker-append -i /tmp/in -o /tmp/out --arg marker=0xCC
 hexdump -C /tmp/out    # last byte is 0xCC
 ```
+
+The Rust SDK exposes `parse_args`, `arg`, and `required_arg` helpers so modules do not need to hand-parse the `Vec<String>` from the wire protocol.
 
 ## Use in a generate pipeline
 
 ```
-pumpbin-cli generate -p loader.b1n -s sc.bin --platform linux -t exe \
-    -o implant --post marker-append --post-arg marker-append=marker=0xBB
+pumpbin-cli generate --pack loader.b1n --shellcode sc.bin --platform linux -t exe \
+    -o implant --post marker-append:marker=0xBB
 ```
 
 ## Adapting

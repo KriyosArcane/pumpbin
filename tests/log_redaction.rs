@@ -115,6 +115,7 @@ fn shellcode_bytes_never_appear_in_tracing_output() {
     let bin = plugin
         .bins()
         .get_that_binary(Platform::Windows, BinaryType::Executable)
+        .map(|b| b.to_vec())
         .unwrap();
 
     let dir = tempfile::tempdir().unwrap();

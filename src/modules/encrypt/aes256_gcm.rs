@@ -13,6 +13,7 @@ use aes_gcm::{
     AeadCore, Aes256Gcm,
 };
 use anyhow::{anyhow, Result};
+use zeroize::Zeroize;
 
 use crate::modules::EncryptModule;
 use crate::plugin_system::{EncryptShellcodeOutput, Pass};
@@ -32,14 +33,14 @@ impl EncryptModule for AesGcm {
     }
 
     fn encrypt(&self, shellcode: &[u8]) -> Result<EncryptShellcodeOutput> {
-        let key = Aes256Gcm::generate_key(&mut OsRng);
-        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+        let mut key = Aes256Gcm::generate_key(&mut OsRng);
+        let mut nonce = Aes256Gcm::generate_nonce(&mut OsRng);
         let cipher = Aes256Gcm::new(&key);
         let encrypted = cipher
             .encrypt(&nonce, shellcode)
             .map_err(|e| anyhow!("AES-GCM encrypt failed: {e}"))?;
 
-        Ok(EncryptShellcodeOutput {
+        let output = EncryptShellcodeOutput {
             encrypted,
             pass: vec![
                 Pass {
@@ -51,7 +52,12 @@ impl EncryptModule for AesGcm {
                     replace_by: nonce.to_vec(),
                 },
             ],
-        })
+        };
+
+        key.zeroize();
+        nonce.zeroize();
+
+        Ok(output)
     }
 }
 

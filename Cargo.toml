@@ -12,48 +12,35 @@ keywords = ["implant", "shellcode", "loader", "red-team", "cli"]
 categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
-rfd = { version = "0.14", optional = true }
 dirs = "5.0.1"
-open = { version = "5.3", optional = true }
-bincode = { version = "2.0", default-features = false, features = ["alloc", "derive", "std"] }
 anyhow = "1.0"
-thiserror = "1.0"
+thiserror = "2.0"
 chrono = "0.4"
-rand = "0.8"
+rand = "0.9"
 memchr = "2.7"
 capnp = "0.24"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 base64 = "0.22"
 flate2 = "1.0"
-iced_aw = { version = "0.11", default-features = false, features = ["menu"], optional = true }
-
-iced = { version = "0.13", default-features = false, features = ["wgpu", "tiny-skia", "advanced", "svg", "tokio", "image"], optional = true }
 clap = { version = "4.5", features = ["derive"] }
 clap_complete = "4.5"
 tempfile = "3.10"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt", "json", "ansi", "std"] }
+libc = "0.2"
+owo-colors = "4"
 zeroize = { version = "1.8.2", features = ["derive"] }
 toml = { version = "1.1.2", features = ["parse"] }
 sha2 = "0.10"
 aes-gcm = "0.10"
 
 [features]
-# CLI-only is the default. GUI is opt-in via `--features gui` so iced /
-# iced_aw / rfd / wgpu stop being pulled into the default build cone
-# while the GUI is frozen pending the CLI rewrite.
 default = []
-gui = ["dep:iced", "dep:iced_aw", "dep:rfd", "dep:open"]
 
 [[bin]]
 name = "pumpbin-cli"
 path = "src/bin/pumpbin-cli.rs"
-
-[[bin]]
-name = "pumpbin"
-path = "src/main.rs"
-required-features = ["gui"]
 
 [package.metadata.winresource]
 LegalCopyright = "Copyright (c) 2024 b1n <b1n@b1n.io>"
@@ -62,7 +49,7 @@ LegalCopyright = "Copyright (c) 2024 b1n <b1n@b1n.io>"
 winresource = "0.1.17"
 
 [dev-dependencies]
-rand_chacha = "0.3"
+rand_chacha = "0.9"
 sha2 = "0.10"
 tempfile = "3.10"
 
@@ -75,14 +62,6 @@ opt-level = 3
 lto = true
 codegen-units = 1
 
-# Slim the dev / test target tree. Each test binary was statically
-# linking the full DWARF for wasmtime + cranelift, ballooning
-# target/debug to ~16 GB on a fresh build (~500 MB per test binary,
-# 17 test binaries). `line-tables-only` keeps panic/backtrace info
-# while dropping per-type debug info; `unpacked` split-debuginfo
-# moves the remaining DWARF into sibling .dwo/.dwp files instead of
-# embedding in the binary. Together they shrink target/debug ~5x
-# with no source change and no measurable behavior change for tests.
 [profile.dev]
 debug = "line-tables-only"
 split-debuginfo = "unpacked"
@@ -90,12 +69,3 @@ split-debuginfo = "unpacked"
 [profile.test]
 debug = "line-tables-only"
 split-debuginfo = "unpacked"
-
-# NOTE: v1.4.6 attempted to pin extism to git HEAD to pull wasmtime
-# 43 here, but the patch silently no-op'd — upstream extism's HEAD
-# Cargo.toml declares `version = "0.0.0+replaced-by-ci"` (a CI
-# placeholder), which the resolver cannot match against pumpbin's
-# `^1.4` requirement. The graph kept resolving to the registry
-# `extism 1.21.0` -> `wasmtime 41.0.4`, leaving the advisory chain
-# unaddressed. See deny.toml's RUSTSEC-2026-0114 ignore for the
-# real status.

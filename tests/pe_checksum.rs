@@ -137,7 +137,7 @@ fn end_to_end_stamped_pe_self_verifies() {
         format!(
             r#"
 schema = "pumpbin.profile/v1"
-[plugin]
+[pack]
 source = "{repo}/examples/starter-plugins/windows.b1n"
 [target]
 platform = "windows"

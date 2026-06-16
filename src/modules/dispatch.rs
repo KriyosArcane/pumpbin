@@ -1,28 +1,33 @@
 //! Module dispatch by string id.
 //!
-//! Lookup order, per kind:
-//!   1. Static (compiled-in) registry — shipped built-ins.
-//!   2. External (folder-autodetect) registry — user drop-ins.
-//!
-//! First match wins. Unknown ids return a clear error listing what
+//! Lookup checks built-ins where they exist, then external user drop-ins.
+//! Unknown ids return a clear error listing what
 //! IS available so operators can fix typos.
 
 use anyhow::{anyhow, Result};
+use std::collections::BTreeMap;
+use std::path::Path;
 
 use crate::modules::external::{self, wire::WireKind};
 use crate::modules::{
-    encrypt_modules, format_encrypted_modules, format_url_modules, post_build_modules,
-    upload_remote_modules, FormatEncryptedOutput,
+    encrypt_modules, post_build_modules, FormatEncryptedOutput, ModuleArg, ModuleKind,
 };
 use crate::plugin_system::EncryptShellcodeOutput;
 
-pub fn encrypt(id: &str, shellcode: &[u8]) -> Result<EncryptShellcodeOutput> {
+pub fn encrypt(id: &str, args: &[String], shellcode: &[u8]) -> Result<EncryptShellcodeOutput> {
     if let Some(m) = encrypt_modules().iter().find(|m| m.id() == id) {
+        let descriptor = crate::modules::descriptor_for(ModuleKind::Encrypt, id)
+            .ok_or_else(|| anyhow!("module descriptor not found for '{id}'"))?;
+        let _args = validate_descriptor_args(id, args, &descriptor)?;
         return m.encrypt(shellcode);
     }
     if let Some(ext) = external::registry().get(id) {
         if ext.kind() == WireKind::Encrypt {
-            let (resp, body) = external::invoke(ext, WireKind::Encrypt, &[], shellcode)?;
+            tracing::debug!(module = id, "invoking encrypt module");
+            let descriptor = crate::modules::descriptor_for(ModuleKind::Encrypt, id)
+                .ok_or_else(|| anyhow!("module descriptor not found for '{id}'"))?;
+            let args = validate_descriptor_args(id, args, &descriptor)?;
+            let (resp, body) = external::invoke(ext, WireKind::Encrypt, &args, shellcode)?;
             let pass = resp
                 .pass
                 .iter()
@@ -33,20 +38,29 @@ pub fn encrypt(id: &str, shellcode: &[u8]) -> Result<EncryptShellcodeOutput> {
                 pass,
             });
         }
+        return Err(anyhow!(
+            "module '{id}' exists but is kind {:?}, not encrypt",
+            ext.kind()
+        ));
     }
     Err(anyhow!(
-        "encrypt module not found: '{id}' (available: {:?})",
-        available_ids_for(WireKind::Encrypt)
+        "encrypt module not found: '{}' (available: {})",
+        id,
+        available_ids_for(WireKind::Encrypt).join(", ")
     ))
 }
 
-pub fn format_encrypted(id: &str, encrypted: &[u8]) -> Result<FormatEncryptedOutput> {
-    if let Some(m) = format_encrypted_modules().iter().find(|m| m.id() == id) {
-        return m.format(encrypted);
-    }
+pub fn format_encrypted(
+    id: &str,
+    args: &[String],
+    encrypted: &[u8],
+) -> Result<FormatEncryptedOutput> {
     if let Some(ext) = external::registry().get(id) {
         if ext.kind() == WireKind::FormatEncrypted {
-            let (resp, body) = external::invoke(ext, WireKind::FormatEncrypted, &[], encrypted)?;
+            let descriptor = crate::modules::descriptor_for(ModuleKind::FormatEncrypted, id)
+                .ok_or_else(|| anyhow!("module descriptor not found for '{id}'"))?;
+            let args = validate_descriptor_args(id, args, &descriptor)?;
+            let (resp, body) = external::invoke(ext, WireKind::FormatEncrypted, &args, encrypted)?;
             let pass = resp
                 .pass
                 .iter()
@@ -57,63 +71,90 @@ pub fn format_encrypted(id: &str, encrypted: &[u8]) -> Result<FormatEncryptedOut
                 pass,
             });
         }
+        return Err(anyhow!(
+            "module '{id}' exists but is kind {:?}, not format_encrypted",
+            ext.kind()
+        ));
     }
     Err(anyhow!(
-        "format_encrypted module not found: '{id}' (available: {:?})",
-        available_ids_for(WireKind::FormatEncrypted)
+        "format_encrypted module not found: '{}' (available: {})",
+        id,
+        available_ids_for(WireKind::FormatEncrypted).join(", ")
     ))
 }
 
-pub fn format_url(id: &str, url: &str) -> Result<String> {
-    if let Some(m) = format_url_modules().iter().find(|m| m.id() == id) {
-        return m.format(url);
-    }
+pub fn format_url(id: &str, args: &[String], url: &str) -> Result<String> {
     if let Some(ext) = external::registry().get(id) {
         if ext.kind() == WireKind::FormatUrl {
-            let (resp, _body) = external::invoke(ext, WireKind::FormatUrl, &[], url.as_bytes())?;
+            let descriptor = crate::modules::descriptor_for(ModuleKind::FormatUrl, id)
+                .ok_or_else(|| anyhow!("module descriptor not found for '{id}'"))?;
+            let args = validate_descriptor_args(id, args, &descriptor)?;
+            let (resp, _body) = external::invoke(ext, WireKind::FormatUrl, &args, url.as_bytes())?;
             return resp
                 .string
                 .ok_or_else(|| anyhow!("format_url module '{id}' returned no string in response"));
         }
+        return Err(anyhow!(
+            "module '{id}' exists but is kind {:?}, not format_url",
+            ext.kind()
+        ));
     }
     Err(anyhow!(
-        "format_url module not found: '{id}' (available: {:?})",
-        available_ids_for(WireKind::FormatUrl)
+        "format_url module not found: '{}' (available: {})",
+        id,
+        available_ids_for(WireKind::FormatUrl).join(", ")
     ))
 }
 
-pub fn upload_remote(id: &str, shellcode: &[u8]) -> Result<String> {
-    if let Some(m) = upload_remote_modules().iter().find(|m| m.id() == id) {
-        return m.upload(shellcode);
-    }
+pub fn upload_remote(id: &str, args: &[String], shellcode: &[u8]) -> Result<String> {
     if let Some(ext) = external::registry().get(id) {
         if ext.kind() == WireKind::UploadRemote {
-            let (resp, _body) = external::invoke(ext, WireKind::UploadRemote, &[], shellcode)?;
+            let descriptor = crate::modules::descriptor_for(ModuleKind::UploadRemote, id)
+                .ok_or_else(|| anyhow!("module descriptor not found for '{id}'"))?;
+            let args = validate_descriptor_args(id, args, &descriptor)?;
+            let (resp, _body) = external::invoke(ext, WireKind::UploadRemote, &args, shellcode)?;
             return resp
                 .string
                 .ok_or_else(|| anyhow!("upload_remote module '{id}' returned no string"));
         }
+        return Err(anyhow!(
+            "module '{id}' exists but is kind {:?}, not upload_remote",
+            ext.kind()
+        ));
     }
     Err(anyhow!(
-        "upload_remote module not found: '{id}' (available: {:?})",
-        available_ids_for(WireKind::UploadRemote)
+        "upload_remote module not found: '{}' (available: {})",
+        id,
+        available_ids_for(WireKind::UploadRemote).join(", ")
     ))
 }
 
 pub fn post_build(id: &str, args: &[String], implant: &mut Vec<u8>) -> Result<()> {
     if let Some(m) = post_build_modules().iter().find(|m| m.id() == id) {
-        return m.apply(args, implant);
+        let descriptor = crate::modules::descriptor_for(ModuleKind::PostBuild, id)
+            .ok_or_else(|| anyhow!("module descriptor not found for '{id}'"))?;
+        let args = validate_descriptor_args(id, args, &descriptor)?;
+        return m.apply(&args, implant);
     }
     if let Some(ext) = external::registry().get(id) {
         if ext.kind() == WireKind::PostBuild {
-            let (_resp, body) = external::invoke(ext, WireKind::PostBuild, args, implant)?;
+            tracing::debug!(module = id, "invoking post-build module");
+            let descriptor = crate::modules::descriptor_for(ModuleKind::PostBuild, id)
+                .ok_or_else(|| anyhow!("module descriptor not found for '{id}'"))?;
+            let args = validate_descriptor_args(id, args, &descriptor)?;
+            let (_resp, body) = external::invoke(ext, WireKind::PostBuild, &args, implant)?;
             *implant = body;
             return Ok(());
         }
+        return Err(anyhow!(
+            "module '{id}' exists but is kind {:?}, not post_build",
+            ext.kind()
+        ));
     }
     Err(anyhow!(
-        "post_build module not found: '{id}' (available: {:?})",
-        available_ids_for(WireKind::PostBuild)
+        "post_build module not found: '{}' (available: {})",
+        id,
+        available_ids_for(WireKind::PostBuild).join(", ")
     ))
 }
 
@@ -123,18 +164,7 @@ fn available_ids_for(kind: WireKind) -> Vec<String> {
             .iter()
             .map(|m| m.id().to_string())
             .collect(),
-        WireKind::FormatEncrypted => format_encrypted_modules()
-            .iter()
-            .map(|m| m.id().to_string())
-            .collect(),
-        WireKind::FormatUrl => format_url_modules()
-            .iter()
-            .map(|m| m.id().to_string())
-            .collect(),
-        WireKind::UploadRemote => upload_remote_modules()
-            .iter()
-            .map(|m| m.id().to_string())
-            .collect(),
+        WireKind::FormatEncrypted | WireKind::FormatUrl | WireKind::UploadRemote => Vec::new(),
         WireKind::PostBuild => post_build_modules()
             .iter()
             .map(|m| m.id().to_string())
@@ -148,20 +178,151 @@ fn available_ids_for(kind: WireKind) -> Vec<String> {
     out
 }
 
+pub fn validate_args_only(kind: ModuleKind, id: &str, args: &[String]) -> Result<Vec<String>> {
+    let descriptor = crate::modules::descriptor_for(kind, id).ok_or_else(|| {
+        anyhow!(
+            "{} module not found: '{}'",
+            kind.as_str().replace('-', "_"),
+            id
+        )
+    })?;
+    validate_descriptor_args(id, args, &descriptor)
+}
+
+fn validate_descriptor_args(
+    module_id: &str,
+    args: &[String],
+    descriptor: &crate::modules::ModuleDescriptor,
+) -> Result<Vec<String>> {
+    validate_args(
+        module_id,
+        args,
+        &descriptor.args,
+        descriptor.allows_arbitrary_args_without_schema(),
+    )
+}
+
+fn validate_args(
+    module_id: &str,
+    args: &[String],
+    rules: &[ModuleArg],
+    allow_arbitrary_without_schema: bool,
+) -> Result<Vec<String>> {
+    if rules.is_empty() {
+        if allow_arbitrary_without_schema || args.is_empty() {
+            return Ok(args.to_vec());
+        }
+        return Err(anyhow!(
+            "module '{module_id}' does not declare any args, but got: {}",
+            args.join(", ")
+        ));
+    }
+
+    let mut values = BTreeMap::new();
+    for arg in args {
+        let (key, value) = arg
+            .split_once('=')
+            .ok_or_else(|| anyhow!("module '{module_id}': expected key=value arg, got '{arg}'"))?;
+        let key = key.trim();
+        if key.is_empty() {
+            return Err(anyhow!("module '{module_id}': empty arg key in '{arg}'"));
+        }
+        values.insert(key.to_string(), value.to_string());
+    }
+
+    for key in values.keys() {
+        if !rules.iter().any(|rule| rule.key == *key) {
+            let valid = rules
+                .iter()
+                .map(|rule| rule.key.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(anyhow!(
+                "module '{module_id}': unknown arg '{key}' (valid: {valid})"
+            ));
+        }
+    }
+
+    for rule in rules {
+        if !values.contains_key(&rule.key) {
+            if let Some(default) = &rule.default {
+                values.insert(rule.key.clone(), default.clone());
+            }
+        }
+        let Some(value) = values.get_mut(&rule.key) else {
+            if rule.required {
+                return Err(anyhow!(
+                    "module '{module_id}': missing required arg '{}'. Run `pumpbin-cli module list --options --id {module_id}`.",
+                    rule.key
+                ));
+            }
+            continue;
+        };
+        if rule.required && value.trim().is_empty() {
+            return Err(anyhow!(
+                "module '{module_id}': required arg '{}' cannot be empty",
+                rule.key
+            ));
+        }
+        validate_arg_type(module_id, &rule.key, &rule.arg_type, value)?;
+    }
+
+    Ok(values
+        .into_iter()
+        .filter(|(_, value)| !value.is_empty())
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect())
+}
+
+fn validate_arg_type(module_id: &str, key: &str, arg_type: &str, value: &mut String) -> Result<()> {
+    match arg_type.to_ascii_lowercase().as_str() {
+        "" | "string" => Ok(()),
+        "number" => {
+            value.parse::<f64>().map_err(|_| {
+                anyhow!("module '{module_id}': arg '{key}' expects a number, got '{value}'")
+            })?;
+            Ok(())
+        }
+        "boolean" | "bool" => {
+            let normalized = match value.to_ascii_lowercase().as_str() {
+                "1" | "true" | "yes" | "on" => "true",
+                "0" | "false" | "no" | "off" => "false",
+                _ => {
+                    return Err(anyhow!(
+                        "module '{module_id}': arg '{key}' expects a boolean, got '{value}'"
+                    ));
+                }
+            };
+            *value = normalized.to_string();
+            Ok(())
+        }
+        "path" | "file" | "file_path" => {
+            if Path::new(value).is_file() {
+                Ok(())
+            } else {
+                Err(anyhow!(
+                    "module '{module_id}': arg '{key}' points to missing file '{value}'"
+                ))
+            }
+        }
+        _ => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn encrypt_unknown_id_errors() {
-        let err = encrypt("does-not-exist", b"x").unwrap_err();
+        let err = encrypt("does-not-exist", &[], b"x").unwrap_err();
         assert!(err.to_string().contains("encrypt module not found"));
     }
 
     #[test]
     fn encrypt_aes_gcm_roundtrips() {
         let shellcode = b"\xcc\xcc\xcc\xc3";
-        let out = encrypt("aes-gcm", shellcode).unwrap();
+        let out = encrypt("aes-gcm", &[], shellcode).unwrap();
         assert!(!out.encrypted.is_empty());
         assert_eq!(out.pass.len(), 2);
     }
@@ -171,5 +332,32 @@ mod tests {
         let mut buf = Vec::new();
         let err = post_build("does-not-exist", &[], &mut buf).unwrap_err();
         assert!(err.to_string().contains("post_build module not found"));
+    }
+
+    #[test]
+    fn post_build_required_args_are_validated_before_apply() {
+        let mut buf = Vec::new();
+        let err = post_build("byte-patch", &[], &mut buf)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("missing required arg 'patches'"), "got: {err}");
+    }
+
+    #[test]
+    fn post_build_unknown_args_are_rejected() {
+        let mut buf = Vec::new();
+        let args = vec!["patches=aa:bb".to_string(), "typo=true".to_string()];
+        let err = post_build("byte-patch", &args, &mut buf)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unknown arg 'typo'"), "got: {err}");
+    }
+
+    #[test]
+    fn post_build_defaults_are_applied() {
+        let mut buf = vec![0xaa, 0xaa];
+        let args = vec!["patches=aa:bb".to_string()];
+        post_build("byte-patch", &args, &mut buf).unwrap();
+        assert_eq!(buf, vec![0xbb, 0xbb]);
     }
 }

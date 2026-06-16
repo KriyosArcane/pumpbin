@@ -24,11 +24,14 @@
 //! ```
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 pub const PROTOCOL_VERSION: u32 = 1;
+
+pub type Args = BTreeMap<String, String>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -75,6 +78,32 @@ impl WirePass {
     }
 }
 
+/// Parse host-supplied `key=value` strings into a map.
+/// Values may contain `=`; only the first `=` splits the pair.
+pub fn parse_args(args: &[String]) -> Result<Args> {
+    let mut parsed = BTreeMap::new();
+    for arg in args {
+        let Some((key, value)) = arg.split_once('=') else {
+            return Err(format!("expected key=value, got: {arg}").into());
+        };
+        if key.trim().is_empty() {
+            return Err(format!("empty arg key in: {arg}").into());
+        }
+        parsed.insert(key.trim().to_string(), value.to_string());
+    }
+    Ok(parsed)
+}
+
+/// Return an optional arg value by key.
+pub fn arg<'a>(args: &'a Args, key: &str) -> Option<&'a str> {
+    args.get(key).map(String::as_str)
+}
+
+/// Return a required arg value by key.
+pub fn required_arg<'a>(args: &'a Args, key: &str) -> Result<&'a str> {
+    arg(args, key).ok_or_else(|| format!("missing required arg: {key}").into())
+}
+
 // ── public entry points (one per kind) ────────────────────────────────
 
 /// Drive a **post-build** module: read implant bytes from stdin,
@@ -88,14 +117,23 @@ where
         write_error(&format!("{e}"))?;
         return Err(e);
     }
-    write_response(ResponseHeader { protocol: PROTOCOL_VERSION, ..Default::default() }, &payload)
+    write_response(
+        ResponseHeader {
+            protocol: PROTOCOL_VERSION,
+            ..Default::default()
+        },
+        &payload,
+    )
 }
 
 /// Drive an **encrypt** module. The closure returns the encrypted
 /// bytes and any number of placeholder-replacement `Pass` entries.
 pub fn encrypt<F>(f: F) -> Result<()>
 where
-    F: FnOnce(&[String], &[u8]) -> std::result::Result<(Vec<u8>, Vec<WirePass>), Box<dyn std::error::Error>>,
+    F: FnOnce(
+        &[String],
+        &[u8],
+    ) -> std::result::Result<(Vec<u8>, Vec<WirePass>), Box<dyn std::error::Error>>,
 {
     let (header, payload) = read_request(Kind::Encrypt)?;
     match f(&header.args, &payload) {
@@ -143,7 +181,10 @@ where
 /// reshape introduces.
 pub fn format_encrypted<F>(f: F) -> Result<()>
 where
-    F: FnOnce(&[String], &[u8]) -> std::result::Result<(Vec<u8>, Vec<WirePass>), Box<dyn std::error::Error>>,
+    F: FnOnce(
+        &[String],
+        &[u8],
+    ) -> std::result::Result<(Vec<u8>, Vec<WirePass>), Box<dyn std::error::Error>>,
 {
     let (header, payload) = read_request(Kind::FormatEncrypted)?;
     match f(&header.args, &payload) {
@@ -261,4 +302,22 @@ fn hex_encode(bytes: &[u8]) -> String {
         s.push_str(&format!("{b:02x}"));
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_args_splits_on_first_equals() {
+        let args = vec!["name=value=with=equals".to_string()];
+        let parsed = parse_args(&args).unwrap();
+        assert_eq!(arg(&parsed, "name"), Some("value=with=equals"));
+    }
+
+    #[test]
+    fn required_arg_errors_when_missing() {
+        let parsed = Args::new();
+        assert!(required_arg(&parsed, "donor").is_err());
+    }
 }

@@ -1,13 +1,6 @@
-use std::{
-    collections::HashMap,
-    fs, iter,
-    ops::Not,
-    path::{Path, PathBuf},
-    sync::OnceLock,
-};
+use std::{collections::BTreeMap, fs, iter, ops::Not, path::Path};
 
 use anyhow;
-use bincode::{decode_from_slice, encode_to_vec, Decode, Encode};
 use capnp::{
     io::Write,
     message::{self, ReaderOptions},
@@ -16,9 +9,6 @@ use capnp::{
 use flate2::Compression;
 
 use crate::{plugin_capnp, utils, BinaryType, Platform, ShellcodeSaveType};
-
-const BINCODE_PLUGINS_CONFIG: bincode::config::Configuration = bincode::config::standard();
-pub static CONFIG_FILE_PATH: OnceLock<PathBuf> = OnceLock::new();
 
 #[derive(Debug, Default, Clone)]
 pub struct PluginInfo {
@@ -67,11 +57,9 @@ impl PluginReplace {
     }
 
     /// Confirm that a candidate template binary contains every placeholder
-    /// this replace-config will look for at generate-time. Used by both the
-    /// Maker GUI (preflight before saving a .b1n) and the CLI `create-b1n`
-    /// subcommand (preflight before encoding). Pre-1.1.3 the Maker enforced
-    /// this and the CLI did not, producing silently-broken .b1n files that
-    /// failed only later at `generate` time.
+    /// this replace-config will look for at generate-time. Used by the CLI
+    /// `create-b1n` subcommand before encoding so broken .b1n files fail
+    /// before `generate` time.
     ///
     /// Local mode requires both `src_prefix` and `size_holder` to be present
     /// in the template. Remote mode only requires `src_prefix` (the URL is
@@ -184,7 +172,7 @@ impl PluginBins {
         platforms
     }
 
-    pub fn get_that_binary(&self, platform: Platform, bin_type: BinaryType) -> Option<Vec<u8>> {
+    pub fn get_that_binary(&self, platform: Platform, bin_type: BinaryType) -> Option<&[u8]> {
         let platform_bins = match platform {
             Platform::Windows => self.windows(),
             Platform::Linux => self.linux(),
@@ -192,8 +180,20 @@ impl PluginBins {
         };
 
         match bin_type {
-            BinaryType::Executable => platform_bins.executable().cloned(),
-            BinaryType::DynamicLibrary => platform_bins.dynamic_library().cloned(),
+            BinaryType::Executable => platform_bins.executable().map(|v| v.as_slice()),
+            BinaryType::DynamicLibrary => platform_bins.dynamic_library().map(|v| v.as_slice()),
+        }
+    }
+
+    pub fn has_binary(&self, platform: Platform, bin_type: BinaryType) -> bool {
+        let platform_bins = match platform {
+            Platform::Windows => self.windows(),
+            Platform::Linux => self.linux(),
+            Platform::Darwin => self.darwin(),
+        };
+        match bin_type {
+            BinaryType::Executable => platform_bins.executable().is_some(),
+            BinaryType::DynamicLibrary => platform_bins.dynamic_library().is_some(),
         }
     }
 
@@ -228,7 +228,7 @@ impl PluginBins {
             .copied()
             .filter(|(p, _)| platform.is_none_or(|want| *p == want))
             .filter(|(_, b)| binary_type.is_none_or(|want| *b == want))
-            .filter(|(p, b)| self.get_that_binary(*p, *b).is_some())
+            .filter(|(p, b)| self.has_binary(*p, *b))
             .collect();
 
         match candidates.as_slice() {
@@ -236,7 +236,7 @@ impl PluginBins {
                 // Help the operator: list what the .b1n actually has.
                 let available: Vec<String> = PRIORITY
                     .iter()
-                    .filter(|(p, b)| self.get_that_binary(*p, *b).is_some())
+                    .filter(|(p, b)| self.has_binary(*p, *b))
                     .map(|(p, b)| {
                         let bt = match b {
                             BinaryType::Executable => "exe",
@@ -293,15 +293,73 @@ pub struct PluginPlugins {
 }
 
 impl PluginPlugins {
-    #[tracing::instrument(skip(self, _runtime_config), fields(path = %path.display(), module = ?self.encrypt_shellcode()))]
+    pub fn validate_module_config(
+        &self,
+        runtime_config: Option<&BTreeMap<String, String>>,
+    ) -> anyhow::Result<()> {
+        let config = self.merged_runtime_config(runtime_config);
+
+        if let Some(id) = self.encrypt_shellcode() {
+            let args = module_config_args(&config, id);
+            crate::modules::dispatch::validate_args_only(
+                crate::modules::ModuleKind::Encrypt,
+                id,
+                &args,
+            )?;
+        }
+        if let Some(id) = self.format_encrypted_shellcode() {
+            let args = module_config_args(&config, id);
+            crate::modules::dispatch::validate_args_only(
+                crate::modules::ModuleKind::FormatEncrypted,
+                id,
+                &args,
+            )?;
+        }
+        if let Some(id) = self.format_url_remote() {
+            let args = module_config_args(&config, id);
+            crate::modules::dispatch::validate_args_only(
+                crate::modules::ModuleKind::FormatUrl,
+                id,
+                &args,
+            )?;
+        }
+        if let Some(id) = self.upload_final_shellcode_remote() {
+            let args = module_config_args(&config, id);
+            crate::modules::dispatch::validate_args_only(
+                crate::modules::ModuleKind::UploadRemote,
+                id,
+                &args,
+            )?;
+        }
+        for (idx, id) in self.modules().iter().enumerate() {
+            let mut args = post_chain_config_args(&config, idx);
+            if args.is_empty() {
+                args = config
+                    .get(&format!("post:{id}"))
+                    .map(|s| split_stored_post_args(s))
+                    .unwrap_or_default();
+            }
+            crate::modules::dispatch::validate_args_only(
+                crate::modules::ModuleKind::PostBuild,
+                id,
+                &args,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    #[tracing::instrument(skip(self, runtime_config), fields(path = %path.display(), module = ?self.encrypt_shellcode()))]
     pub fn run_encrypt_shellcode(
         &self,
         path: &Path,
-        _runtime_config: Option<&std::collections::BTreeMap<String, String>>,
+        runtime_config: Option<&std::collections::BTreeMap<String, String>>,
     ) -> anyhow::Result<crate::plugin_system::EncryptShellcodeOutput> {
         let shellcode = fs::read(path)?;
         if let Some(id) = self.encrypt_shellcode() {
-            return crate::modules::dispatch::encrypt(id, &shellcode);
+            let config = self.merged_runtime_config(runtime_config);
+            let args = module_config_args(&config, id);
+            return crate::modules::dispatch::encrypt(id, &args, &shellcode);
         }
         Ok(crate::plugin_system::EncryptShellcodeOutput {
             encrypted: shellcode,
@@ -309,30 +367,43 @@ impl PluginPlugins {
         })
     }
 
-    #[tracing::instrument(skip(self, shellcode, _runtime_config), fields(shellcode_len = shellcode.len(), module = ?self.format_encrypted_shellcode()))]
+    #[tracing::instrument(skip(self, shellcode, runtime_config), fields(shellcode_len = shellcode.len(), module = ?self.format_encrypted_shellcode()))]
     pub fn run_format_encrypted_shellcode(
         &self,
         shellcode: &[u8],
-        _runtime_config: Option<&std::collections::BTreeMap<String, String>>,
-    ) -> anyhow::Result<crate::plugin_system::FormatEncryptedShellcodeOutput> {
+        runtime_config: Option<&std::collections::BTreeMap<String, String>>,
+    ) -> anyhow::Result<(
+        crate::plugin_system::FormatEncryptedShellcodeOutput,
+        Vec<crate::plugin_system::Pass>,
+    )> {
         if let Some(id) = self.format_encrypted_shellcode() {
-            let out = crate::modules::dispatch::format_encrypted(id, shellcode)?;
-            return Ok(crate::plugin_system::FormatEncryptedShellcodeOutput {
-                formatted_shellcode: out.formatted,
-            });
+            let config = self.merged_runtime_config(runtime_config);
+            let args = module_config_args(&config, id);
+            let out = crate::modules::dispatch::format_encrypted(id, &args, shellcode)?;
+            return Ok((
+                crate::plugin_system::FormatEncryptedShellcodeOutput {
+                    formatted_shellcode: out.formatted,
+                },
+                out.pass,
+            ));
         }
-        Ok(crate::plugin_system::FormatEncryptedShellcodeOutput {
-            formatted_shellcode: shellcode.to_vec(),
-        })
+        Ok((
+            crate::plugin_system::FormatEncryptedShellcodeOutput {
+                formatted_shellcode: shellcode.to_vec(),
+            },
+            vec![],
+        ))
     }
 
     pub fn run_format_url_remote(
         &self,
         url: &str,
-        _runtime_config: Option<&std::collections::BTreeMap<String, String>>,
+        runtime_config: Option<&std::collections::BTreeMap<String, String>>,
     ) -> anyhow::Result<crate::plugin_system::FormatUrlRemoteOutput> {
         if let Some(id) = self.format_url_remote() {
-            let formatted = crate::modules::dispatch::format_url(id, url)?;
+            let config = self.merged_runtime_config(runtime_config);
+            let args = module_config_args(&config, id);
+            let formatted = crate::modules::dispatch::format_url(id, &args, url)?;
             return Ok(crate::plugin_system::FormatUrlRemoteOutput {
                 formatted_url: formatted,
             });
@@ -345,10 +416,12 @@ impl PluginPlugins {
     pub fn run_upload_final_shellcode_remote(
         &self,
         final_shellcode: &[u8],
-        _runtime_config: Option<&std::collections::BTreeMap<String, String>>,
+        runtime_config: Option<&std::collections::BTreeMap<String, String>>,
     ) -> anyhow::Result<crate::plugin_system::UploadFinalShellcodeRemoteOutput> {
         if let Some(id) = self.upload_final_shellcode_remote() {
-            let url = crate::modules::dispatch::upload_remote(id, final_shellcode)?;
+            let config = self.merged_runtime_config(runtime_config);
+            let args = module_config_args(&config, id);
+            let url = crate::modules::dispatch::upload_remote(id, &args, final_shellcode)?;
             return Ok(crate::plugin_system::UploadFinalShellcodeRemoteOutput {
                 final_shellcode_url: url,
             });
@@ -356,23 +429,21 @@ impl PluginPlugins {
         Ok(crate::plugin_system::UploadFinalShellcodeRemoteOutput::default())
     }
 
-    /// Run all `post_binary` hooks: WASM modules are chained in order, then
     /// Chain every post_binary module in order, returning the final bytes.
     ///
     /// Pre-1.1.2 this method also ran a host-side `host_self_sign` path that
     /// generated an ephemeral self-signed RSA cert on every build and shelled
     /// out to `openssl` + `osslsigncode`. That path was deleted because (1) a
-    /// fresh per-build cert pollutes operator OPSEC with a unique signer
-    /// identity, (2) the cert never chained to a real CA so it added no trust
+    /// fresh per-build cert creates a unique signer identity, (2) the cert
+    /// never chained to a real CA so it added no trust
     /// value, and (3) embedding a signing tool inside the core forced
     /// `openssl`/`osslsigncode` as hard host dependencies. Signing now lives in
     /// dedicated post_binary plugins (osslsigncode, signtool, blob-steal)
     /// shipped under `plugin-examples/signers/` from v1.2.0.
     /// Run every module id listed in `self.modules()` as a `PostBuildModule`
-    /// in order. Each step mutates `binary` in place; the per-module
-    /// argument vector is taken from `runtime_config["post:<id>"]`
-    /// when present (semicolon-separated `key=value` list); otherwise
-    /// the module gets zero args.
+    /// in order. Each step mutates `binary` in place. Per-module args come
+    /// from baked `post_chain.<idx>.config.<key>` entries first, with
+    /// runtime `post:<id>` entries used for operator-appended modules.
     #[tracing::instrument(skip(self, binary, runtime_config), fields(binary_len = binary.len(), modules_count = self.modules().len()))]
     pub fn run_post_binary(
         &self,
@@ -380,20 +451,70 @@ impl PluginPlugins {
         runtime_config: Option<&std::collections::BTreeMap<String, String>>,
     ) -> anyhow::Result<Vec<u8>> {
         let mut out = binary;
-        for id in self.modules() {
-            let args: Vec<String> = runtime_config
-                .and_then(|cfg| cfg.get(&format!("post:{id}")))
-                .map(|s| {
-                    s.split(';')
-                        .filter(|p| !p.is_empty())
-                        .map(String::from)
-                        .collect()
-                })
-                .unwrap_or_default();
+        let config = self.merged_runtime_config(runtime_config);
+        for (idx, id) in self.modules().iter().enumerate() {
+            let mut args = post_chain_config_args(&config, idx);
+            if args.is_empty() {
+                args = config
+                    .get(&format!("post:{id}"))
+                    .map(|s| split_stored_post_args(s))
+                    .unwrap_or_default();
+            }
             crate::modules::dispatch::post_build(id, &args, &mut out)?;
         }
         Ok(out)
     }
+
+    fn merged_runtime_config(
+        &self,
+        runtime_config: Option<&BTreeMap<String, String>>,
+    ) -> BTreeMap<String, String> {
+        let mut config: BTreeMap<String, String> = self.plugin_config().iter().cloned().collect();
+        if let Some(runtime_config) = runtime_config {
+            for (key, value) in runtime_config {
+                config.insert(key.clone(), value.clone());
+            }
+        }
+        config
+    }
+}
+
+fn post_chain_config_args(config: &BTreeMap<String, String>, idx: usize) -> Vec<String> {
+    let prefix = format!("post_chain.{idx}.config.");
+    config
+        .iter()
+        .filter_map(|(key, value)| {
+            key.strip_prefix(&prefix)
+                .map(|arg_key| format!("{arg_key}={value}"))
+        })
+        .collect()
+}
+
+fn module_config_args(config: &BTreeMap<String, String>, module_id: &str) -> Vec<String> {
+    let prefix = format!("module:{module_id}.");
+    let mut args = config
+        .iter()
+        .filter_map(|(key, value)| {
+            key.strip_prefix(&prefix)
+                .map(|arg_key| format!("{arg_key}={value}"))
+        })
+        .collect::<Vec<_>>();
+
+    if args.is_empty() {
+        args = config
+            .get(&format!("module:{module_id}"))
+            .map(|s| split_stored_post_args(s))
+            .unwrap_or_default();
+    }
+
+    args
+}
+
+fn split_stored_post_args(args: &str) -> Vec<String> {
+    args.split(';')
+        .filter(|part| !part.trim().is_empty())
+        .map(|part| part.trim().to_string())
+        .collect()
 }
 
 impl PluginPlugins {
@@ -461,8 +582,12 @@ impl Plugin {
         decoder.write_all(data)?;
         let decompressed = decoder.finish()?;
 
-        let message =
-            serialize_packed::read_message(decompressed.as_slice(), ReaderOptions::new())?;
+        let message = serialize_packed::read_message(
+            decompressed.as_slice(),
+            *ReaderOptions::new()
+                .traversal_limit_in_words(Some(64 * 1024 * 1024))
+                .nesting_limit(64),
+        )?;
         let plugin = message.get_root::<plugin_capnp::plugin::Reader>()?;
 
         let info = plugin.get_info()?;
@@ -664,11 +789,65 @@ impl Plugin {
         let mut buf = Vec::new();
         serialize_packed::write_message(&mut buf, &message)?;
 
-        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), Compression::best());
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), Compression::new(6));
         encoder.write_all(buf.as_slice())?;
         let compressed = encoder.finish()?;
 
         anyhow::Ok(compressed)
+    }
+
+    /// Check all referenced module ids against the dispatch registries.
+    /// Returns a `Vec` of human-readable warning strings for ids that
+    /// don't resolve. Non-fatal: modules may be installed later.
+    pub fn validate_module_ids(&self) -> Vec<String> {
+        use crate::modules::{encrypt_modules, external, post_build_modules};
+
+        let mut warnings = Vec::new();
+
+        let can_resolve =
+            |id: &str, slot: &str, check_static: &dyn Fn(&str) -> bool| -> Option<String> {
+                if check_static(id) {
+                    return None;
+                }
+                if external::registry().get(id).is_some() {
+                    return None;
+                }
+                Some(format!(
+                "module id '{id}' referenced by '{slot}' is not registered in any dispatch registry"
+            ))
+            };
+
+        if let Some(id) = self.plugins().encrypt_shellcode() {
+            if let Some(w) = can_resolve(id, "encrypt_shellcode", &|id| {
+                encrypt_modules().iter().any(|m| m.id() == id)
+            }) {
+                warnings.push(w);
+            }
+        }
+        if let Some(id) = self.plugins().format_encrypted_shellcode() {
+            if let Some(w) = can_resolve(id, "format_encrypted_shellcode", &|_| false) {
+                warnings.push(w);
+            }
+        }
+        if let Some(id) = self.plugins().format_url_remote() {
+            if let Some(w) = can_resolve(id, "format_url_remote", &|_| false) {
+                warnings.push(w);
+            }
+        }
+        if let Some(id) = self.plugins().upload_final_shellcode_remote() {
+            if let Some(w) = can_resolve(id, "upload_final_shellcode_remote", &|_| false) {
+                warnings.push(w);
+            }
+        }
+        for (idx, id) in self.plugins().modules().iter().enumerate() {
+            if let Some(w) = can_resolve(id, &format!("modules[{idx}]"), &|id| {
+                post_build_modules().iter().any(|m| m.id() == id)
+            }) {
+                warnings.push(w);
+            }
+        }
+
+        warnings
     }
 
     pub fn save_type(&self) -> ShellcodeSaveType {
@@ -718,10 +897,8 @@ impl Plugin {
                     .into());
                 }
 
-                if data
-                    .windows(b"$$SHELLCODE$$".len())
-                    .any(|w| w == b"$$SHELLCODE$$")
-                {
+                let marker = self.replace().src_prefix();
+                if !marker.is_empty() && data.windows(marker.len()).any(|w| w == marker) {
                     return Err(PumpBinError::ShellcodeContainsPlaceholder {
                         path: shellcode_src.to_string(),
                     }
@@ -780,6 +957,48 @@ impl Plugin {
             return Err(PumpBinError::MaxLenZero.into());
         }
 
+        self.validate_post_module_constraints(platform, bin_type)?;
+
+        Ok(())
+    }
+
+    fn validate_post_module_constraints(
+        &self,
+        platform: Platform,
+        bin_type: BinaryType,
+    ) -> anyhow::Result<()> {
+        let chain = self.plugins().modules();
+        for id in chain {
+            let Some(descriptor) =
+                crate::modules::descriptor_for(crate::modules::ModuleKind::PostBuild, id)
+            else {
+                // Missing modules are reported by dispatch if/when the chain runs.
+                continue;
+            };
+
+            if let Some(required) = descriptor.constraints.requires_platform {
+                if required != platform {
+                    anyhow::bail!(
+                        "module '{id}' requires target platform {required}, but selected target is {platform}"
+                    );
+                }
+            }
+            if let Some(required) = descriptor.constraints.requires_binary_type {
+                if required != bin_type {
+                    anyhow::bail!(
+                        "module '{id}' requires target type {required}, but selected target type is {bin_type}"
+                    );
+                }
+            }
+            for incompatible in &descriptor.constraints.incompatible_with {
+                if chain.iter().any(|other| other == incompatible) {
+                    anyhow::bail!(
+                        "module '{id}' is incompatible with module '{incompatible}' in the same post-build chain"
+                    );
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -818,7 +1037,7 @@ impl Plugin {
 
                 // Merge plugin-supplied Pass entries with caller-supplied ones.
                 // Policy: caller wins on holder collision. Rationale: an operator
-                // who pre-encrypted in the GUI and passed the resulting Pass list
+                // who pre-encrypted and passed the resulting Pass list
                 // has already committed to specific replacement bytes; re-running
                 // encrypt_shellcode would generate a fresh key and silently
                 // invalidate their plaintext shellcode. (Pre-1.1.2 this method
@@ -832,9 +1051,15 @@ impl Plugin {
                     }
                 }
 
-                let final_shellcode = self
+                let (final_shellcode, format_pass) = self
                     .plugins()
                     .run_format_encrypted_shellcode(output.encrypted(), runtime_config)?;
+
+                for p in format_pass {
+                    if !caller_holders.contains(&p.holder) {
+                        pass.push(p);
+                    }
+                }
 
                 final_shellcode.formatted_shellcode().to_vec()
             }
@@ -849,6 +1074,8 @@ impl Plugin {
                 src
             }
         };
+
+        tracing::info!(encrypted_len = shellcode_bytes.len(), "shellcode processed");
 
         if shellcode_bytes.len() > self.replace().max_len() {
             return Err(crate::error::PumpBinError::ShellcodeTooLong {
@@ -870,9 +1097,12 @@ impl Plugin {
         )?;
 
         // Apply Pass replacements (encryption keys, nonces, etc.)
+        let pass_count = pass.len();
         for p in pass {
             utils::replace(&mut bin, p.holder(), p.replace_by(), p.holder().len())?;
         }
+
+        tracing::info!(pass_count, "pass entries applied");
 
         // Embed shellcode byte-count for local loaders.
         //
@@ -888,7 +1118,10 @@ impl Plugin {
         //     `$$99999$$` default and what every existing loader
         //     template parses.
         if save_type == ShellcodeSaveType::Local {
-            let size_holder = self.replace().size_holder().unwrap();
+            let size_holder = self
+                .replace()
+                .size_holder()
+                .ok_or(crate::error::PumpBinError::LocalRequiresSizeHolder)?;
             let size_bytes: Vec<u8> = if size_holder.len() == 4 {
                 let len = u32::try_from(shellcode_bytes.len()).map_err(|_| {
                     crate::error::PumpBinError::SizeStringTooLong {
@@ -924,6 +1157,8 @@ impl Plugin {
         // Run post_binary modules (signing, obfuscation, etc.)
         bin = self.plugins().run_post_binary(bin, runtime_config)?;
 
+        tracing::info!("post-build complete");
+
         // Recompute PE CheckSum if this output is a PE. Without this,
         // every stamped EXE keeps the template's stale CheckSum, which
         // (a) makes `pumpbin-cli verify` fail on PumpBin's own output,
@@ -954,71 +1189,6 @@ impl Plugin {
 
     pub fn plugins(&self) -> &PluginPlugins {
         &self.plugins
-    }
-}
-
-#[derive(Debug, Clone, Default, Encode, Decode, PartialEq, Eq)]
-pub struct Plugins(HashMap<String, Vec<u8>>);
-
-impl Plugins {
-    pub fn read_plugins() -> anyhow::Result<Plugins> {
-        let plugins_path =
-            CONFIG_FILE_PATH
-                .get()
-                .ok_or(crate::error::PumpBinError::ConfigPathUnavailable {
-                    what: "CONFIG_FILE_PATH was never initialized",
-                })?;
-
-        let buf = fs::read(plugins_path)?;
-        let (plugins, _) = decode_from_slice(buf.as_slice(), BINCODE_PLUGINS_CONFIG)?;
-        Ok(plugins)
-    }
-
-    pub fn update_plugins(&self) -> anyhow::Result<()> {
-        let buf = encode_to_vec(self, BINCODE_PLUGINS_CONFIG)?;
-        let plugins_path =
-            CONFIG_FILE_PATH
-                .get()
-                .ok_or(crate::error::PumpBinError::ConfigPathUnavailable {
-                    what: "CONFIG_FILE_PATH was never initialized",
-                })?;
-
-        if plugins_path.is_dir() {
-            fs::remove_dir(plugins_path)?;
-        }
-
-        utils::atomic_write(plugins_path, &buf)?;
-
-        Ok(())
-    }
-
-    pub fn get(&self, name: &str) -> anyhow::Result<Plugin> {
-        let buf = self
-            .0
-            .get(name)
-            .ok_or_else(|| crate::error::PumpBinError::PluginNotFound {
-                name: name.to_string(),
-            })?;
-
-        Plugin::decode_from_slice(buf)
-    }
-
-    pub fn get_sorted_names(&self) -> Vec<String> {
-        let mut names: Vec<String> = self.0.keys().map(|x| x.to_owned()).collect();
-        names.sort();
-        names
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    pub fn insert(&mut self, name: String, plugin: Vec<u8>) {
-        self.0.insert(name, plugin);
-    }
-
-    pub fn remove(&mut self, name: &str) {
-        self.0.remove(name);
     }
 }
 
@@ -1141,5 +1311,86 @@ mod tests {
                 .unwrap(),
             (Platform::Linux, BinaryType::Executable)
         );
+    }
+
+    #[test]
+    fn post_chain_config_args_are_extracted_by_index() {
+        let mut config = BTreeMap::new();
+        config.insert(
+            "post_chain.0.config.donor".to_string(),
+            "/tmp/a.exe".to_string(),
+        );
+        config.insert("post_chain.1.config.mode".to_string(), "first".to_string());
+        config.insert(
+            "post_chain.1.config.patches".to_string(),
+            "aa:bb".to_string(),
+        );
+
+        assert_eq!(
+            post_chain_config_args(&config, 0),
+            vec!["donor=/tmp/a.exe".to_string()]
+        );
+        assert_eq!(
+            post_chain_config_args(&config, 1),
+            vec!["mode=first".to_string(), "patches=aa:bb".to_string()]
+        );
+    }
+
+    #[test]
+    fn stored_post_args_split_on_semicolon() {
+        assert_eq!(
+            split_stored_post_args("patches=aa:bb;mode=first"),
+            vec!["patches=aa:bb".to_string(), "mode=first".to_string()]
+        );
+    }
+
+    #[test]
+    fn module_config_args_use_scoped_keys() {
+        let mut config = BTreeMap::new();
+        config.insert("module:demo.alpha".to_string(), "one".to_string());
+        config.insert("module:demo.beta".to_string(), "two".to_string());
+
+        assert_eq!(
+            module_config_args(&config, "demo"),
+            vec!["alpha=one".to_string(), "beta=two".to_string()]
+        );
+    }
+
+    fn plugin_with_post_module(id: &str) -> Plugin {
+        let mut bins = PluginBins::default();
+        *bins.windows.executable_mut() = Some(vec![0x00]);
+        *bins.linux.executable_mut() = Some(vec![0x00]);
+        let mut plugin = Plugin {
+            replace: PluginReplace {
+                src_prefix: b"$$SHELLCODE$$".to_vec(),
+                size_holder: Some(b"$$99999$$".to_vec()),
+                max_len: 16,
+            },
+            bins,
+            ..Default::default()
+        };
+        plugin.plugins.modules_mut().push(id.to_string());
+        plugin
+    }
+
+    #[test]
+    fn windows_only_post_module_rejects_linux_target() {
+        let plugin = plugin_with_post_module("cert-graft");
+        let err = plugin
+            .validate_for_generation(Platform::Linux, BinaryType::Executable)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("requires target platform Windows"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn windows_only_post_module_accepts_windows_target() {
+        let plugin = plugin_with_post_module("cert-graft");
+        plugin
+            .validate_for_generation(Platform::Windows, BinaryType::Executable)
+            .unwrap();
     }
 }

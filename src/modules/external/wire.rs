@@ -84,16 +84,16 @@ pub struct ManifestArg {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manifest {
     /// Module id. Must be unique across all installed modules. Used
-    /// in `--post`, `--encrypt`, `module-test`, etc.
+    /// in `--post`, `--encrypt`, `module test`, etc.
     pub name: String,
 
-    /// One-line description shown in `list-modules`.
+    /// One-line description shown in `module list`.
     pub description: String,
 
     /// Which hook this module implements.
     pub kind: WireKind,
 
-    /// Module's own version string. Free-form; used in `list-modules`
+    /// Module's own version string. Free-form; used in `module list`
     /// and error messages. Convention: SemVer.
     #[serde(default = "default_version")]
     pub version: String,
@@ -115,7 +115,7 @@ pub struct Manifest {
     /// (`#!/usr/bin/env python3` etc.).
     pub executable: String,
 
-    /// Optional arg schema. If present, `list-modules --options <id>`
+    /// Optional arg schema. If present, `module list --options --id <id>`
     /// renders it; if absent, the module accepts arbitrary `k=v` pairs.
     #[serde(default)]
     pub args: Vec<ManifestArg>,
@@ -203,20 +203,38 @@ impl WirePass {
 /// and the raw payload on both stdin and stdout. Returns
 /// `Ok(None)` only on clean EOF before the length prefix; any other
 /// EOF (mid-prefix or mid-payload) is an error.
+/// Maximum frame size: 256 MiB. Rejects length prefixes above this
+/// to prevent unbounded allocation from a malicious or buggy module.
+const MAX_FRAME_SIZE: usize = 256 * 1024 * 1024;
+
 pub fn read_frame<R: std::io::Read>(r: &mut R) -> std::io::Result<Option<Vec<u8>>> {
     let mut len_buf = [0u8; 4];
-    match r.read(&mut len_buf)? {
-        0 => return Ok(None),
-        4 => {}
-        n => {
-            // got 1..=3 bytes; refuse rather than guess
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                format!("read_frame: partial length prefix ({n} of 4 bytes)"),
-            ));
+    let mut filled = 0;
+    loop {
+        match r.read(&mut len_buf[filled..]) {
+            Ok(0) if filled == 0 => return Ok(None),
+            Ok(0) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    format!("read_frame: partial length prefix ({filled} of 4 bytes)"),
+                ));
+            }
+            Ok(n) => {
+                filled += n;
+                if filled == 4 {
+                    break;
+                }
+            }
+            Err(e) => return Err(e),
         }
     }
     let len = u32::from_le_bytes(len_buf) as usize;
+    if len > MAX_FRAME_SIZE {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("read_frame: length prefix {len} exceeds maximum ({MAX_FRAME_SIZE})"),
+        ));
+    }
     let mut buf = vec![0u8; len];
     r.read_exact(&mut buf)?;
     Ok(Some(buf))

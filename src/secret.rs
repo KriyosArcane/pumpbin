@@ -17,6 +17,18 @@
 //! patching `serde_json`'s scratch buffers, which is out of scope for the
 //! 1.x line.
 //!
+//! # Memory protection
+//!
+//! On Unix platforms, `SecretBuf` calls `mlock(2)` on construction to
+//! advise the kernel not to swap the buffer to disk. The call is
+//! best-effort — it may fail silently due to `RLIMIT_MEMLOCK` or
+//! insufficient privileges, in which case the buffer remains usable
+//! but is not swap-protected. On Windows (and other non-Unix targets),
+//! `mlock` is not attempted; buffer contents may be paged to disk
+//! under memory pressure. For high-sensitivity operations on any
+//! platform, consider running with swap disabled or on an encrypted
+//! swap partition.
+//!
 //! # What zeroize does (and doesn't) buy you
 //!
 //! Wiping `Vec<u8>` on drop prevents the most common leak vector — the
@@ -27,7 +39,7 @@
 //! one.
 
 use std::ops::{Deref, DerefMut};
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::Zeroize;
 
 /// Heap buffer that overwrites itself with zeros on drop.
 ///
@@ -35,11 +47,35 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 /// to `[u8]` so existing call sites that expect a `&[u8]` slice need no
 /// change. `Debug` redacts the contents to avoid accidental log leakage
 /// even when an `#[instrument]` annotation forgets to `skip()` it.
-#[derive(Default, Zeroize, ZeroizeOnDrop, Clone)]
+///
+/// On Unix, the backing allocation is `mlock`'d on a best-effort basis
+/// to prevent the kernel from swapping it to disk. `munlock` is called
+/// in `Drop` before the buffer is zeroized.
+#[derive(Default, Zeroize, Clone)]
 pub struct SecretBuf(Vec<u8>);
+
+/// Best-effort `mlock` — returns silently on failure or non-Unix platforms.
+#[cfg(unix)]
+fn try_mlock(buf: &[u8]) {
+    if !buf.is_empty() {
+        // SAFETY: pointer + len describe a valid, heap-allocated region.
+        unsafe { libc::mlock(buf.as_ptr().cast(), buf.len()) };
+    }
+}
+
+/// Best-effort `munlock` — returns silently on failure or non-Unix platforms.
+#[cfg(unix)]
+fn try_munlock(buf: &[u8]) {
+    if !buf.is_empty() {
+        // SAFETY: pointer + len describe a valid, heap-allocated region.
+        unsafe { libc::munlock(buf.as_ptr().cast(), buf.len()) };
+    }
+}
 
 impl SecretBuf {
     pub fn new(bytes: Vec<u8>) -> Self {
+        #[cfg(unix)]
+        try_mlock(&bytes);
         Self(bytes)
     }
 
@@ -58,20 +94,31 @@ impl SecretBuf {
     /// Consume self and return the inner `Vec`, **without** zeroizing.
     /// Useful when the bytes must cross a serde boundary; callers should
     /// re-wrap or zeroize the result manually.
-    pub fn into_vec(mut self) -> Vec<u8> {
+    #[deprecated(
+        note = "extracts inner Vec without zeroizing; prefer as_ref() or consuming the SecretBuf directly"
+    )]
+    pub fn into_vec_unzeroized(mut self) -> Vec<u8> {
         std::mem::take(&mut self.0)
     }
 }
 
 impl From<Vec<u8>> for SecretBuf {
     fn from(v: Vec<u8>) -> Self {
-        Self(v)
+        Self::new(v)
     }
 }
 
 impl From<&[u8]> for SecretBuf {
     fn from(s: &[u8]) -> Self {
-        Self(s.to_vec())
+        Self::new(s.to_vec())
+    }
+}
+
+impl Drop for SecretBuf {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        try_munlock(&self.0);
+        self.0.zeroize();
     }
 }
 

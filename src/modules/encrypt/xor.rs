@@ -2,9 +2,8 @@
 //! `plugin-examples/xor-encrypt` WASM plugin (single-byte variant).
 //!
 //! Loader contract:
-//!   - 7-byte placeholder `\x00\x00XOR\x00\x00`. The actual key is
-//!     written at offset 2 (the 'R' position); the surrounding zeros
-//!     are padding.
+//!   - 12-byte placeholder `$$XXXXXXXX$$`. The actual key byte
+//!     is written at offset 2; the remaining bytes are zeroed.
 //!
 //! A non-zero random key byte is generated per call.
 
@@ -14,7 +13,7 @@ use rand::RngCore;
 use crate::modules::EncryptModule;
 use crate::plugin_system::{EncryptShellcodeOutput, Pass};
 
-pub const KEY_HOLDER: &[u8; 7] = b"\x00\x00XOR\x00\x00";
+pub const KEY_HOLDER: &[u8; 12] = b"$$XXXXXXXX$$";
 
 pub struct Xor;
 
@@ -28,7 +27,7 @@ impl EncryptModule for Xor {
     }
 
     fn encrypt(&self, shellcode: &[u8]) -> Result<EncryptShellcodeOutput> {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut key = 0u8;
         while key == 0 {
             let mut b = [0u8; 1];
@@ -38,7 +37,7 @@ impl EncryptModule for Xor {
 
         let encrypted: Vec<u8> = shellcode.iter().map(|b| b ^ key).collect();
 
-        let mut replace = [0u8; 7];
+        let mut replace = [0u8; 12];
         replace[2] = key;
 
         Ok(EncryptShellcodeOutput {
@@ -62,7 +61,7 @@ mod tests {
         let out = m.encrypt(shellcode).unwrap();
         assert_eq!(out.pass.len(), 1);
         assert_eq!(out.pass[0].holder, KEY_HOLDER);
-        assert_eq!(out.pass[0].replace_by.len(), 7);
+        assert_eq!(out.pass[0].replace_by.len(), 12);
 
         let key = out.pass[0].replace_by[2];
         assert_ne!(key, 0);

@@ -1,23 +1,6 @@
 //! Data types shared across pumpbin (CLI, lib, modules, tests).
-//!
-//! Pre-v2.0.0 this module also hosted the Extism wasm dispatch
-//! surface (ResolvedPolicy, manifest_from_wasm_with_policy,
-//! build_plugin, resolve_policy, run_module, run_plugin,
-//! get_plugin_config_schema, EventManager). All of that was deleted
-//! when wasm plugins were replaced with native Rust modules
-//! (`crate::modules::*`). Dispatch now lives in
-//! `crate::modules::dispatch`.
 
 use serde::{Deserialize, Serialize};
-
-// ── Schema types ─────────────────────────────────────────────────────────────
-//
-// Native modules don't currently declare schemas; these types are
-// retained because the GUI maker and CLI still render config forms
-// from `Vec<PluginConfigField>` and we don't want to churn that
-// surface in this PR. `get_plugin_config_schema` is a stub that
-// returns `Ok(None)` for every module id — Step 7+ will wire up
-// per-module schemas.
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct PluginConfigField {
@@ -34,59 +17,33 @@ pub struct PluginConfigField {
     pub options: Vec<String>,
 }
 
-/// Retained for binary-format provenance. Pre-v2.0.0 this was bumped
-/// on every host-helper ABI change; in v2.0 there is no host-helper
-/// ABI. Old .b1n files that pin a higher value get a clear decode
-/// error elsewhere.
-pub const PUMPBIN_SDK_VERSION: u32 = 2;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RuntimeConfig {
-    #[serde(default)]
-    pub timeout_ms: u64,
-    #[serde(default)]
-    pub allowed_hosts: Vec<String>,
-    #[serde(default)]
-    pub on_error: OnError,
-    #[serde(default)]
-    pub sdk_version: Option<u32>,
-}
-
-impl Default for RuntimeConfig {
-    fn default() -> Self {
-        Self {
-            timeout_ms: 3000,
-            allowed_hosts: Vec::new(),
-            on_error: OnError::default(),
-            sdk_version: Some(PUMPBIN_SDK_VERSION),
-        }
-    }
-}
-
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OnError {
-    #[default]
-    Abort,
-    Skip,
-}
-
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct PluginConfigSchema {
     #[serde(default)]
     pub version: u32,
     #[serde(default)]
     pub fields: Vec<PluginConfigField>,
-    #[serde(default)]
-    pub runtime: Option<RuntimeConfig>,
 }
 
-/// v1.x compatibility stub. Pre-v2.0.0 this loaded a wasm module via
-/// Extism and called its `plugin_schema` export; that path is gone.
-/// Native modules don't yet expose a runtime-discoverable schema, so
-/// callers get `Ok(None)` and fall back to their own defaults.
-pub fn get_plugin_config_schema(_module_id: &str) -> anyhow::Result<Option<PluginConfigSchema>> {
-    Ok(None)
+pub fn get_plugin_config_schema(module_id: &str) -> anyhow::Result<Option<PluginConfigSchema>> {
+    Ok(crate::modules::descriptors()
+        .into_iter()
+        .find(|descriptor| descriptor.id == module_id)
+        .map(|descriptor| PluginConfigSchema {
+            fields: descriptor
+                .args
+                .into_iter()
+                .map(|arg| PluginConfigField {
+                    key: arg.key,
+                    field_type: arg.arg_type,
+                    description: arg.description,
+                    required: arg.required,
+                    default: arg.default,
+                    options: Vec::new(),
+                })
+                .collect(),
+            ..Default::default()
+        }))
 }
 
 // ── I/O types (shared between host, native modules, and tests) ─────────────

@@ -7,6 +7,13 @@
 //!   entries in place. Byte-for-byte equivalent to the v1.5.0 host
 //!   helper (this is the same walker, just relocated).
 
+/// UTF-16LE encoded "VS_VERSION_INFO\0" signature used to locate the
+/// version-info resource block inside a PE binary.
+const VS_VERSION_INFO_SIG: &[u8] = &[
+    0x56, 0x00, 0x53, 0x00, 0x5F, 0x00, 0x56, 0x00, 0x45, 0x00, 0x52, 0x00, 0x53, 0x00, 0x49, 0x00,
+    0x4F, 0x00, 0x4E, 0x00, 0x5F, 0x00, 0x49, 0x00, 0x4E, 0x00, 0x46, 0x00, 0x4F, 0x00, 0x00, 0x00,
+];
+
 /// All wLength fields are in bytes, all DWORD alignment is RELATIVE to
 /// the start of the containing block (not the absolute file offset).
 ///
@@ -29,14 +36,11 @@ pub fn read_version_info(binary: &[u8]) -> std::collections::BTreeMap<String, St
     try_read(binary).unwrap_or_default()
 }
 
-/// Return the Authenticode certificate table's (file offset, size).
-/// Returns `Ok((0, 0))` for a PE with no embedded signature (catalog-
-/// signed or unsigned), `Err` for malformed PEs. The offset is a
-/// **file offset**, not an RVA (that's the one exception to PE data
-/// directories — the Security Directory holds a raw file offset).
-pub fn read_security_dir(pe: &[u8]) -> anyhow::Result<(u32, u32)> {
+/// Validate a PE's MZ/PE signature and return the offset of the
+/// optional header (`e_lfanew + 24`). Shared between [`read_security_dir`]
+/// and `cert_graft::optional_header_offset`.
+pub fn optional_header_offset(pe: &[u8]) -> anyhow::Result<usize> {
     use anyhow::{anyhow, bail};
-    const SECURITY_DATA_DIR_INDEX: usize = 4;
     if pe.len() < 0x40 || &pe[0..2] != b"MZ" {
         bail!("not a PE (missing MZ)");
     }
@@ -45,16 +49,38 @@ pub fn read_security_dir(pe: &[u8]) -> anyhow::Result<(u32, u32)> {
     if e_lfanew + 24 > pe.len() || &pe[e_lfanew..e_lfanew + 4] != b"PE\0\0" {
         bail!("not a PE (missing PE\\0\\0 signature)");
     }
-    let opt_hdr_off = e_lfanew + 24;
+    Ok(e_lfanew + 24)
+}
+
+/// Return the Authenticode certificate table's (file offset, size).
+/// Returns `Ok((0, 0))` for a PE with no embedded signature (catalog-
+/// signed or unsigned), `Err` for malformed PEs. The offset is a
+/// **file offset**, not an RVA (that's the one exception to PE data
+/// directories — the Security Directory holds a raw file offset).
+pub fn read_security_dir(pe: &[u8]) -> anyhow::Result<(u32, u32)> {
+    use anyhow::{anyhow, bail};
+    const SECURITY_DATA_DIR_INDEX: usize = 4;
+    let opt_hdr_off = optional_header_offset(pe)?;
     if opt_hdr_off + 2 > pe.len() {
         bail!("truncated optional header");
     }
     let magic = u16::from_le_bytes([pe[opt_hdr_off], pe[opt_hdr_off + 1]]);
-    let data_dir_off = match magic {
-        0x10b => opt_hdr_off + 96,
-        0x20b => opt_hdr_off + 112,
+    let (data_dir_off, num_rva_off) = match magic {
+        0x10b => (opt_hdr_off + 96, opt_hdr_off + 92),
+        0x20b => (opt_hdr_off + 112, opt_hdr_off + 108),
         other => bail!("unknown PE optional-header magic 0x{other:04x}"),
     };
+    if num_rva_off + 4 > pe.len() {
+        bail!("NumberOfRvaAndSizes truncated");
+    }
+    let num_rva = u32::from_le_bytes(
+        pe[num_rva_off..num_rva_off + 4]
+            .try_into()
+            .map_err(|_| anyhow!("NumberOfRvaAndSizes truncated"))?,
+    );
+    if num_rva <= SECURITY_DATA_DIR_INDEX as u32 {
+        bail!("PE has only {num_rva} data directory entries; security directory (index {SECURITY_DATA_DIR_INDEX}) not present");
+    }
     let sec_dir_off = data_dir_off + SECURITY_DATA_DIR_INDEX * 8;
     if sec_dir_off + 8 > pe.len() {
         bail!("data directory truncated");
@@ -79,12 +105,9 @@ fn dword_align_rel(base: usize, offset: usize) -> usize {
 }
 
 fn try_patch(binary: &mut [u8], patches: &[(&str, String)]) -> Option<bool> {
-    const SIG: &[u8] = &[
-        0x56, 0x00, 0x53, 0x00, 0x5F, 0x00, 0x56, 0x00, 0x45, 0x00, 0x52, 0x00, 0x53, 0x00, 0x49,
-        0x00, 0x4F, 0x00, 0x4E, 0x00, 0x5F, 0x00, 0x49, 0x00, 0x4E, 0x00, 0x46, 0x00, 0x4F, 0x00,
-        0x00, 0x00,
-    ];
-    let sig_pos = binary.windows(SIG.len()).position(|w| w == SIG)?;
+    let sig_pos = binary
+        .windows(VS_VERSION_INFO_SIG.len())
+        .position(|w| w == VS_VERSION_INFO_SIG)?;
     let root = sig_pos.checked_sub(6)?;
     let root_len = read_u16(binary, root) as usize;
     let root_end = root.checked_add(root_len)?;
@@ -93,7 +116,7 @@ fn try_patch(binary: &mut [u8], patches: &[(&str, String)]) -> Option<bool> {
     }
 
     let root_val_len = read_u16(binary, root + 2) as usize;
-    let key_nul = sig_pos + SIG.len() - 2;
+    let key_nul = sig_pos + VS_VERSION_INFO_SIG.len() - 2;
     let after_key = key_nul + 2;
     let after_key_aligned = dword_align_rel(root, after_key);
     let after_fixed = after_key_aligned + root_val_len;
@@ -256,12 +279,9 @@ fn find_utf16_nul(data: &[u8], start: usize, end: usize) -> Option<usize> {
 /// Read-side equivalent of [`try_patch`]. Walks VS_VERSION_INFO and
 /// collects all StringFileInfo entries.
 fn try_read(binary: &[u8]) -> Option<std::collections::BTreeMap<String, String>> {
-    const SIG: &[u8] = &[
-        0x56, 0x00, 0x53, 0x00, 0x5F, 0x00, 0x56, 0x00, 0x45, 0x00, 0x52, 0x00, 0x53, 0x00, 0x49,
-        0x00, 0x4F, 0x00, 0x4E, 0x00, 0x5F, 0x00, 0x49, 0x00, 0x4E, 0x00, 0x46, 0x00, 0x4F, 0x00,
-        0x00, 0x00,
-    ];
-    let sig_pos = binary.windows(SIG.len()).position(|w| w == SIG)?;
+    let sig_pos = binary
+        .windows(VS_VERSION_INFO_SIG.len())
+        .position(|w| w == VS_VERSION_INFO_SIG)?;
     let root = sig_pos.checked_sub(6)?;
     let root_len = read_u16(binary, root) as usize;
     let root_end = root.checked_add(root_len)?;
@@ -270,7 +290,7 @@ fn try_read(binary: &[u8]) -> Option<std::collections::BTreeMap<String, String>>
     }
 
     let root_val_len = read_u16(binary, root + 2) as usize;
-    let key_nul = sig_pos + SIG.len() - 2;
+    let key_nul = sig_pos + VS_VERSION_INFO_SIG.len() - 2;
     let after_key = key_nul + 2;
     let after_key_aligned = dword_align_rel(root, after_key);
     let after_fixed = after_key_aligned + root_val_len;
@@ -387,4 +407,84 @@ fn read_utf16le(data: &[u8], start: usize, end: usize) -> String {
         .map(|c| u16::from_le_bytes([c[0], c[1]]))
         .collect();
     String::from_utf16_lossy(&words).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn minimal_pe64() -> Vec<u8> {
+        let mut pe = vec![0u8; 512];
+        pe[0] = b'M';
+        pe[1] = b'Z';
+        let e_lfanew: u32 = 0x80;
+        pe[0x3C..0x40].copy_from_slice(&e_lfanew.to_le_bytes());
+        let pe_sig_off = e_lfanew as usize;
+        pe[pe_sig_off..pe_sig_off + 4].copy_from_slice(b"PE\0\0");
+        let opt_hdr_off = pe_sig_off + 24;
+        pe[opt_hdr_off] = 0x0b;
+        pe[opt_hdr_off + 1] = 0x02;
+        let num_rva_off = opt_hdr_off + 108;
+        pe[num_rva_off..num_rva_off + 4].copy_from_slice(&16u32.to_le_bytes());
+        pe
+    }
+
+    #[test]
+    fn read_security_dir_no_signature() {
+        let pe = minimal_pe64();
+        let (va, sz) = read_security_dir(&pe).unwrap();
+        assert_eq!(va, 0);
+        assert_eq!(sz, 0);
+    }
+
+    #[test]
+    fn read_security_dir_with_signature() {
+        let mut pe = minimal_pe64();
+        let opt_hdr_off = 0x80 + 24;
+        let data_dir_off = opt_hdr_off + 112;
+        let sec_dir_off = data_dir_off + 4 * 8;
+        pe[sec_dir_off..sec_dir_off + 4].copy_from_slice(&0x1000u32.to_le_bytes());
+        pe[sec_dir_off + 4..sec_dir_off + 8].copy_from_slice(&256u32.to_le_bytes());
+        let (va, sz) = read_security_dir(&pe).unwrap();
+        assert_eq!(va, 0x1000);
+        assert_eq!(sz, 256);
+    }
+
+    #[test]
+    fn read_security_dir_rejects_non_pe() {
+        assert!(read_security_dir(b"not a PE file").is_err());
+    }
+
+    #[test]
+    fn read_security_dir_rejects_truncated() {
+        let mut pe = minimal_pe64();
+        pe.truncate(0x80 + 24 + 2);
+        assert!(read_security_dir(&pe).is_err());
+    }
+
+    #[test]
+    fn optional_header_offset_valid_pe() {
+        let pe = minimal_pe64();
+        let off = optional_header_offset(&pe).unwrap();
+        assert_eq!(off, 0x80 + 24);
+    }
+
+    #[test]
+    fn optional_header_offset_rejects_non_pe() {
+        assert!(optional_header_offset(b"not a PE").is_err());
+    }
+
+    #[test]
+    fn read_version_info_empty() {
+        assert!(read_version_info(&[]).is_empty());
+    }
+
+    #[test]
+    fn patch_version_info_no_block() {
+        let mut pe = minimal_pe64();
+        assert!(!patch_version_info(
+            &mut pe,
+            &[("FileDescription", "test".into())]
+        ));
+    }
 }

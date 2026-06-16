@@ -11,5 +11,6 @@ examples/*/shellcode
 
 # Operator build outputs — don't accidentally commit implants or plugin packs
 *.b1n
+!examples/starter-plugins/*.b1n
 *.elf
 *.macho

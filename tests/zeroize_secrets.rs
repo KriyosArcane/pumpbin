@@ -69,11 +69,12 @@ fn deref_lets_existing_callers_use_secretbuf_as_slice() {
 
 #[test]
 fn into_vec_releases_without_zeroize() {
-    // Documented escape hatch: into_vec returns the raw Vec for paths
-    // that have to cross a serde boundary. Caller is responsible for
-    // wiping/re-wrapping.
+    // Documented escape hatch: into_vec_unzeroized returns the raw Vec
+    // for paths that must cross a serde boundary. Caller is responsible
+    // for wiping/re-wrapping.
     let s: SecretBuf = vec![1u8, 2, 3, 4].into();
-    let v = s.into_vec();
+    #[allow(deprecated)]
+    let v = s.into_vec_unzeroized();
     assert_eq!(v, vec![1u8, 2, 3, 4]);
 }
 

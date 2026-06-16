@@ -8,13 +8,14 @@
 //! same number of bytes. All occurrences are replaced by default.
 //!
 //! Example:
-//!   --post-arg byte-patch=patches=4831d2:4833d2,4831c0:4833c0
+//!   --post byte-patch:patches=4831d2:4833d2,4831c0:4833c0
 //!
 //! Args:
 //!   `patches=<from>:<to>[,<from>:<to>...]` (required)
 //!   `mode=first` | `mode=all` (optional, default `all`)
 
 use anyhow::{anyhow, bail, Result};
+use memchr::memmem;
 
 use crate::modules::post_build::parse_kv_args;
 use crate::modules::{ArgSpec, PostBuildModule};
@@ -62,6 +63,20 @@ impl PostBuildModule for BytePatch {
         };
 
         let patches = parse_patches(patches_str)?;
+
+        // Detect chain collisions: warn if any patch's output bytes appear
+        // as a substring in another patch's input pattern.
+        for (i, (_from_i, to_i)) in patches.iter().enumerate() {
+            for (j, (from_j, _to_j)) in patches.iter().enumerate() {
+                if i == j {
+                    continue;
+                }
+                if memmem::find(from_j, to_i).is_some() {
+                    tracing::warn!("byte-patch: patch {i} output may be consumed by patch {j}");
+                }
+            }
+        }
+
         for (from, to) in &patches {
             apply_patch(implant, from, to, replace_all);
         }

@@ -222,17 +222,6 @@ fn pb_e0011_max_len_zero() {
     );
 }
 
-// ── PB-E0015 PluginNotFound ──────────────────────────────────────────────
-
-#[test]
-fn pb_e0015_plugin_not_found() {
-    use pumpbin::plugin::Plugins;
-    let plugins = Plugins::default();
-    assert_pb_code(plugins.get("does-not-exist"), "PB-E0015", |e| {
-        matches!(e, PumpBinError::PluginNotFound { .. })
-    });
-}
-
 // ── Unique codes across all variants ─────────────────────────────────────
 
 #[test]
@@ -265,30 +254,10 @@ fn all_codes_are_unique_and_well_formed() {
             got: 0,
             holder_len: 0,
         },
-        PumpBinError::ConfigPathUnavailable { what: "x" },
-        PumpBinError::PluginNotFound { name: "x".into() },
-        PumpBinError::WasmCallFailed {
-            hook: "x".into(),
-            detail: "x".into(),
-        },
         PumpBinError::MakerFieldEmpty { field: "x" },
         PumpBinError::MakerSourcePrefixCollision,
         PumpBinError::MakerPreflightFailed { report: "x".into() },
         PumpBinError::MakerMaxLenInvalid { reason: "x" },
-        // v1.1.7 WASM policy variants
-        PumpBinError::WasmHostDenied {
-            module: "x".into(),
-            host: "x".into(),
-        },
-        PumpBinError::WasmSdkVersionMismatch {
-            module: "x".into(),
-            declared: 99,
-            host_version: 1,
-        },
-        PumpBinError::WasmTimeoutInvalid {
-            module: "x".into(),
-            timeout_ms: 0,
-        },
     ];
 
     use std::collections::HashSet;

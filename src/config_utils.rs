@@ -15,7 +15,7 @@ use crate::plugin_system::PluginConfigField;
 /// Expands a leading `~` to the user's home directory.
 pub fn maybe_expand_home_path(value: &str) -> PathBuf {
     if value == "~" {
-        return home_dir().unwrap_or_else(|| PathBuf::from(value));
+        return home_dir().unwrap_or_else(|| PathBuf::from("."));
     }
 
     if let Some(rest) = value.strip_prefix("~/") {

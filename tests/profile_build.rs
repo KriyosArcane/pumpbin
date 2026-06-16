@@ -43,7 +43,7 @@ fn profile_from_toml_round_trips_schema() {
         r#"
 schema = "pumpbin.profile/v1"
 
-[plugin]
+[pack]
 source = "/no/such/path.b1n"
 
 [target]
@@ -74,7 +74,7 @@ fn profile_rejects_wrong_schema() {
         r#"
 schema = "pumpbin.profile/v999"
 
-[plugin]
+[pack]
 source = "x"
 [target]
 platform = "windows"
@@ -116,7 +116,7 @@ fn profile_execute_end_to_end() {
         r#"
 schema = "pumpbin.profile/v1"
 
-[plugin]
+[pack]
 source = {plugin:?}
 
 [target]
@@ -171,7 +171,7 @@ fn profile_execute_with_hex_shellcode() {
         r#"
 schema = "pumpbin.profile/v1"
 
-[plugin]
+[pack]
 source = {plugin:?}
 
 [target]
