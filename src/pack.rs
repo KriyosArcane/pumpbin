@@ -13,7 +13,7 @@ use crate::plugin::{Plugin, PluginInfo, PluginReplace};
 use crate::{BinaryType, Platform, ShellcodeSaveType};
 
 /// Inputs to assemble a `.b1n` loader pack. Field meanings mirror the
-/// `pumpbin-cli create-b1n` CLI flags one-for-one — see that subcommand
+/// `pumpbin-cli create-b1n` CLI flags one-for-one: see that subcommand
 /// for the operator-facing names.
 pub struct B1nBuilder {
     pub template_bytes: Vec<u8>,
@@ -236,7 +236,7 @@ pub fn read_loader_metadata(crate_dir: &Path) -> Result<(String, LoaderMetadata)
     let cargo_toml_path = crate_dir.join("Cargo.toml");
     let raw = std::fs::read_to_string(&cargo_toml_path).with_context(|| {
         format!(
-            "no Cargo.toml at {} — is this a scaffolded loader crate?",
+            "no Cargo.toml at {}: is this a scaffolded loader crate?",
             cargo_toml_path.display()
         )
     })?;

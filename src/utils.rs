@@ -32,7 +32,7 @@ pub fn replace_with_rng<R: RngCore>(
         return Err(ReplaceError::ReplacementTooLong(replace_by.len(), max_len));
     }
 
-    // Find the holder before allocating — no-op if the holder is absent.
+    // Find the holder before allocating: no-op if the holder is absent.
     let position = memmem::find_iter(bin, holder)
         .next()
         .ok_or_else(|| ReplaceError::HolderNotFound(String::from_utf8_lossy(holder).to_string()))?;
@@ -84,14 +84,14 @@ pub fn atomic_write(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> 
 ///   4. Store the resulting `u32` back into the CheckSum field.
 ///
 /// The CheckSum field lives at `e_lfanew + 24 + 64` in both PE32 and
-/// PE32+ — IMAGE_OPTIONAL_HEADER and IMAGE_OPTIONAL_HEADER64 share the
+/// PE32+: IMAGE_OPTIONAL_HEADER and IMAGE_OPTIONAL_HEADER64 share the
 /// same layout up through `SizeOfHeaders` (the CheckSum offset).
 ///
 /// Why this matters: PumpBin patches the loader template in-place
 /// (writes shellcode + length into the placeholder region) without
 /// recomputing CheckSum. Stock Windows tools (`signtool verify`,
 /// Defender's static-analysis path, `CertVerifyFileSignature`) read
-/// the field and treat any mismatch as tamper evidence — increasing
+/// the field and treat any mismatch as tamper evidence: increasing
 /// detection rate on otherwise-clean builds and breaking PumpBin's
 /// own `verify` subcommand which reports `PE checksum mismatch`.
 pub fn recompute_pe_checksum(bin: &mut [u8]) -> bool {

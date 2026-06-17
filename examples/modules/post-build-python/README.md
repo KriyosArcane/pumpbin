@@ -1,4 +1,4 @@
-# post-build-python — minimal PumpBin module in pure Python
+# post-build-python: minimal PumpBin module in pure Python
 
 This is the smallest possible PumpBin post-build module. Two files,
 no dependencies, ~50 lines of Python.
@@ -28,9 +28,9 @@ pumpbin-cli generate --pack loader.b1n --shellcode sc.bin --platform linux -t ex
 
 ## Files
 
-- `pumpbin-module.toml` — manifest. Tells PumpBin: name, kind,
+- `pumpbin-module.toml`: manifest. Tells PumpBin: name, kind,
   protocol version, executable filename, supported platforms.
-- `uppercase_strings.py` — the actual module. Reads from stdin,
+- `uppercase_strings.py`: the actual module. Reads from stdin,
   writes to stdout, exits 0 on success / non-zero on failure.
 
 ## Adapting

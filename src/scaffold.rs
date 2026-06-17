@@ -114,7 +114,7 @@ lto = true
 strip = true
 codegen-units = 1
 
-# Read by `pumpbin-cli pack`. Operators don't edit this by hand — the
+# Read by `pumpbin-cli pack`. Operators don't edit this by hand: the
 # `new-loader` scaffold writes it. Optional fields you can add:
 #   author, description, plugin_version, max_len (omit = auto-measure)
 # To bake a default post-build chain into every .b1n built from this
@@ -209,7 +209,7 @@ use std::ptr;
 
 fn main() {{
     let len = shellcode_len();
-    // get_shellcode()[0] is byte 0 of the stamped shellcode — no offset needed.
+    // get_shellcode()[0] is byte 0 of the stamped shellcode: no offset needed.
     let sc = &get_shellcode()[..len];
 
     unsafe {{
@@ -257,7 +257,7 @@ use windows_sys::Win32::System::Memory::{{
 
 fn main() {{
     let len = shellcode_len();
-    // get_shellcode()[0] is byte 0 of the stamped shellcode — no offset needed.
+    // get_shellcode()[0] is byte 0 of the stamped shellcode: no offset needed.
     let sc = &get_shellcode()[..len];
 
     unsafe {{

@@ -128,16 +128,16 @@ pumpbin-cli module test byte-patch implant.exe --arg patches=4831d2:4833d2 -o pa
 ```console
 $ pumpbin-cli module list
 encrypt:
-  aes-gcm (built-in) - AES-256-GCM with random key/nonce per generation
-  xor (built-in) - Single-byte XOR with random non-zero key
+  aes-gcm (built-in): AES-256-GCM with random key/nonce per generation
+  xor (built-in): Single-byte XOR with random non-zero key
 post_build:
-  pe-version-info (built-in) - Patch VS_VERSION_INFO StringFileInfo entries in a PE
-  byte-patch (built-in) - Apply in-place hex byte substitutions to the implant (equal-length pairs only)
-  cert-graft (built-in) - Graft a donor PE's WIN_CERTIFICATE onto the implant (cert blob only; use external `trustmebro` for full clone)
+  pe-version-info (built-in): Patch VS_VERSION_INFO StringFileInfo entries in a PE
+  byte-patch (built-in): Apply in-place hex byte substitutions to the implant (equal-length pairs only)
+  cert-graft (built-in): Graft a donor PE's WIN_CERTIFICATE onto the implant (cert blob only; use external `trustmebro` for full clone)
 
 $ pumpbin-cli module list --options --id byte-patch
 post_build:
-  byte-patch (built-in) - Apply in-place hex byte substitutions to the implant (equal-length pairs only)
+  byte-patch (built-in): Apply in-place hex byte substitutions to the implant (equal-length pairs only)
     patches: string (required)
         Comma-separated <hex_from>:<hex_to> pairs; each pair must be equal length
     mode: string [default: all]
@@ -161,7 +161,7 @@ External modules live under `~/.config/pumpbin/modules/<id>/`. See [MODULES.md](
 
 ```console
 $ pumpbin-cli --help
-Implant build pipeline — stamp shellcode into a loader, apply post-build transforms, get an implant.
+Implant build pipeline: stamp shellcode into a loader, apply post-build transforms, get an implant.
 
 Usage: pumpbin-cli [OPTIONS] <COMMAND>
 

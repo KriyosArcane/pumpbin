@@ -1,8 +1,7 @@
 //! Native AES-256-GCM `EncryptModule`.
 //!
-//! Loader contract:
-//!   - 32-byte key placeholder `$$KKKKKKKKKKKKKKKKKKKKKKKKKKKK$$`
-//!   - 12-byte nonce placeholder `$$NNNNNNNN$$`
+//! Loader contract: 32-byte key placeholder `$$KKKKKKKKKKKKKKKKKKKKKKKKKKKK$$`
+//! and 12-byte nonce placeholder `$$NNNNNNNN$$`.
 //!
 //! Random key + nonce per call. The key/nonce are returned in
 //! `Pass` entries so the binary patcher can rewrite the placeholders.

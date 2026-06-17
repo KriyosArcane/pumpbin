@@ -1,8 +1,7 @@
 //! Single-byte XOR `EncryptModule`.
 //!
-//! Loader contract:
-//!   - 12-byte placeholder `$$XXXXXXXX$$`. The actual key byte
-//!     is written at offset 2; the remaining bytes are zeroed.
+//! Loader contract: 12-byte placeholder `$$XXXXXXXX$$`. The actual key byte
+//! is written at offset 2; the remaining bytes are zeroed.
 //!
 //! A non-zero random key byte is generated per call.
 

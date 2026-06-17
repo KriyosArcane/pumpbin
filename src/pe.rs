@@ -49,7 +49,7 @@ pub fn optional_header_offset(pe: &[u8]) -> anyhow::Result<usize> {
 /// Returns `Ok((0, 0))` for a PE with no embedded signature (catalog-
 /// signed or unsigned), `Err` for malformed PEs. The offset is a
 /// **file offset**, not an RVA (that's the one exception to PE data
-/// directories — the Security Directory holds a raw file offset).
+/// directories: the Security Directory holds a raw file offset).
 pub fn read_security_dir(pe: &[u8]) -> anyhow::Result<(u32, u32)> {
     use anyhow::{anyhow, bail};
     const SECURITY_DATA_DIR_INDEX: usize = 4;

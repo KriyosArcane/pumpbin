@@ -8,7 +8,7 @@ Two ready-to-use `.b1n` loader packs for trying PumpBin with your own shellcode.
 | `windows.b1n` | PE32+, x86_64 Win   | `VirtualAlloc` → `VirtualProtect` → `CreateThread` | ~150 KB |
 
 Both are unencrypted, single-stage loaders. They are intentionally
-simple — meant for smoke-testing the build pipeline and learning how
+simple: meant for smoke-testing the build pipeline and learning how
 PumpBin stamps a `.b1n` against a shellcode, not for operational use
 against modern EDR.
 

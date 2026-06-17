@@ -58,7 +58,7 @@ impl PluginReplace {
     /// Measure the contiguous run of constant padding bytes that follows
     /// `src_prefix` in `template`. Returns `None` if the prefix isn't
     /// present. Used by `create-b1n` to auto-detect a sensible `max_len`
-    /// — the default of 4096 was wrong for ~every real loader, which
+    ///: the default of 4096 was wrong for ~every real loader, which
     /// allocates 1 MiB+ of placeholder room.
     ///
     /// Algorithm: locate `src_prefix`, read the byte immediately after,
@@ -157,12 +157,12 @@ impl PluginBins {
 
     /// Pick a (platform, binary_type) pair to generate against.
     ///
-    /// - If a caller passes both `platform` and `binary_type`, those win
+    ///: If a caller passes both `platform` and `binary_type`, those win
     ///   (subject to that slot actually being populated).
-    /// - If only one side is given, the other auto-resolves against the
+    ///: If only one side is given, the other auto-resolves against the
     ///   populated slots that match it.
-    /// - If neither is given and exactly one slot is populated, pick it.
-    /// - On ambiguity (multiple candidates with no narrowing), fall back
+    ///: If neither is given and exactly one slot is populated, pick it.
+    ///: On ambiguity (multiple candidates with no narrowing), fall back
     ///   to the priority order: windows/exe, windows/lib, linux/exe,
     ///   linux/lib, darwin/exe, darwin/lib.
     pub fn auto_select_target(
@@ -586,7 +586,7 @@ impl Plugin {
                 }
 
                 // Wrap the read in SecretBuf so the heap bytes are zeroized
-                // when this scope exits — even on the success path where we
+                // when this scope exits: even on the success path where we
                 // only used the bytes to check for the placeholder marker.
                 let data: crate::secret::SecretBuf = fs::read(path)
                     .map_err(|source| PumpBinError::ShellcodeReadFailed {
@@ -697,8 +697,8 @@ impl Plugin {
     /// `#[instrument]`: every shellcode/secret argument is in `skip(...)` to
     /// keep logs free of shellcode bytes, Pass holder/replace values, and
     /// runtime config (which often contains keys/passwords).
-    /// Only metadata that's safe to leak — plugin name, save_type, binary
-    /// length — is logged.
+    /// Only metadata that's safe to leak: plugin name, save_type, binary
+    /// length: is logged.
     #[tracing::instrument(
         skip(self, bin, shellcode_src, pass, runtime_config),
         fields(
@@ -778,11 +778,11 @@ impl Plugin {
         //
         // Two encoding modes, distinguished implicitly by the holder
         // length:
-        //   - 4-byte holder: binary u32 little-endian length. Used by
+        //: 4-byte holder: binary u32 little-endian length. Used by
         //     scaffolded PIC loaders to skip the decimal-parse code
         //     path (no core::fmt drag-in). Caps at u32::MAX shellcode
-        //     bytes — way past PumpBin's max_len limits anyway.
-        //   - any other length: ASCII decimal, left-padded with '0' to
+        //     bytes: way past PumpBin's max_len limits anyway.
+        //: any other length: ASCII decimal, left-padded with '0' to
         //     fill the holder slot (e.g. "000000158" in a 9-byte
         //     holder). The historical mode; matches the
         //     `$$99999$$` default and what every existing loader

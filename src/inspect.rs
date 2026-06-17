@@ -2,7 +2,7 @@
 //!
 //! PumpBin loader packs are opaque-by-default (capnp + zlib blob). v1.3.1
 //! exposes a structured `inspect` API: load a `.b1n`, dump everything an
-//! operator needs to know before adding it to their registry — plugin
+//! operator needs to know before adding it to their registry: plugin
 //! info, replace config, supported platforms, and module ids.
 //!
 //! Plain-text output only.

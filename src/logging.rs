@@ -1,9 +1,8 @@
 //! `tracing` initialization for the PumpBin CLI.
 //!
-//! - A `fmt` layer writing human-readable lines to stderr (so stdout stays
-//!   reserved for machine output).
-//! - An `EnvFilter` driven by `PUMPBIN_LOG` (e.g. `PUMPBIN_LOG=debug` or
-//!   `PUMPBIN_LOG=pumpbin=debug`). Default level is `info`.
+//! It writes human-readable lines to stderr so stdout stays reserved for
+//! machine output. `PUMPBIN_LOG` controls the `EnvFilter`, for example
+//! `PUMPBIN_LOG=debug` or `PUMPBIN_LOG=pumpbin=debug`.
 //!
 //! # Idempotency
 //!

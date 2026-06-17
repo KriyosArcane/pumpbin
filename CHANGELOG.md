@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## v2.1.0 — stamp, CLI surface refactor, progress output
+## v2.1.0: stamp, CLI surface refactor, progress output
 
 ### Added
 
@@ -101,14 +101,14 @@
 
 ---
 
-## v2.0.0 — Extism removed, native Rust modules
+## v2.0.0: Extism removed, native Rust modules
 
 **Breaking.** The Extism WASM plugin runtime is gone, replaced by
 statically-linked native Rust `Module` traits. PumpBin now ships as a
 single binary with the modules it cares about compiled in. The `.b1n`
 schema is unchanged on the wire (capnp `Data` fields reinterpreted as
 UTF-8 module-id bytes), but `.b1n` files produced before v2.0 that
-embedded WASM bytes are **refused on load with a clear error** —
+embedded WASM bytes are **refused on load with a clear error** :
 re-pack them with `pumpbin-cli create-b1n --module <id>` referring to
 the native module id.
 
@@ -118,12 +118,12 @@ the native module id.
   `wasi-common` / `wiggle` transitive cone). `cargo tree -p pumpbin`
   no longer mentions any of them.
 - `pumpbin-plugin-sdk` path dep + the `plugin-sdk/` crate itself.
-- `pumpbin/src/host_helpers/` — the `pumpbin:host/v1` host-function
+- `pumpbin/src/host_helpers/`: the `pumpbin:host/v1` host-function
   ABI is gone. The pure-Rust `patch_version_info` walker lifted out
   to `pumpbin/src/pe.rs`.
 - `pumpbin/plugin-examples/` (aes-gcm-encrypt, xor-encrypt,
   url-format, pe-version-info, signers/cert-blob-steal) and
-  `pumpbin/wasms/` — all five wasm modules have native equivalents
+  `pumpbin/wasms/`: all five wasm modules have native equivalents
   in `pumpbin/src/modules/`.
 - `tests/wasm_policy.rs` (11 tests on the dead wasm runtime policy).
 - `tests/on_error_skip.rs` (tested `EventManager::fire_post_binary`,
@@ -136,13 +136,13 @@ the native module id.
 
 ### Added
 
-- `pumpbin/src/modules/` — native module surface:
+- `pumpbin/src/modules/`: native module surface:
   - `EncryptModule` (AES-256-GCM, single-byte XOR)
   - `FormatEncryptedModule` (no built-ins yet)
   - `FormatUrlModule` (pass-through)
   - `UploadRemoteModule` (no built-ins yet)
   - `PostBuildModule` (PE version-info patch, cert-blob-steal)
-- `pumpbin/src/modules/dispatch.rs` — string-id lookup that replaces
+- `pumpbin/src/modules/dispatch.rs`: string-id lookup that replaces
   every `extism::Plugin::call` site. Unknown id → clear error listing
   available ids.
 - `aes-gcm = "0.10"` crate dep, for the native AES-256-GCM module.
@@ -169,7 +169,7 @@ the native module id.
 
 ---
 
-## v1.5.0 — PE + log host helpers (Phase A of v1.5.x → v2.0 modularity overhaul)
+## v1.5.0: PE + log host helpers (Phase A of v1.5.x → v2.0 modularity overhaul)
 
 First cut of the **SDK v2 host-import ABI**. Plugins now call into
 the host for PE patching and structured logging via Extism
@@ -180,13 +180,13 @@ plugin marketplace + scaffolding tool (v1.5.3+).
 
 ### Added
 
-- **`pumpbin_plugin_sdk::host` module — SDK v2 contract.** Declares
+- **`pumpbin_plugin_sdk::host` module: SDK v2 contract.** Declares
   `extern "ExtismHost"` imports against the new `pumpbin:host/v1`
   namespace for two families:
-  - `host::pe` — `recompute_checksum`, `get_section`, `strip_debug`,
+  - `host::pe`: `recompute_checksum`, `get_section`, `strip_debug`,
     `set_version_info`. (`set_icon` is declared but stub'd; returns a
     structured error pending follow-up.)
-  - `host::log` — `info`, `warn`, `error`.
+  - `host::log`: `info`, `warn`, `error`.
 
   Each function is a thin typed wrapper around a `#[host_fn]`
   `extern "ExtismHost"` declaration. Inputs are bincode-encoded into a
@@ -194,7 +194,7 @@ plugin marketplace + scaffolding tool (v1.5.3+).
   bytes (`HostError` distinguishes wire-format from host-rejection
   errors).
 
-- **`pumpbin::host_helpers` module — host-side closures** backing
+- **`pumpbin::host_helpers` module: host-side closures** backing
   every extern, registered via Extism `with_function`. PE family uses
   `goblin` for section/debug-dir lookups; the VS_VERSION_INFO walker
   was lifted verbatim from the canary plugin so output is identical
@@ -202,7 +202,7 @@ plugin marketplace + scaffolding tool (v1.5.3+).
   `pumpbin::plugin` target and rejects non-UTF8 input, mitigating the
   "log smuggles shellcode bytes into JSONL" risk.
 
-- **`plugin_system::build_plugin()`** — new shared helper that
+- **`plugin_system::build_plugin()`**: new shared helper that
   attaches the host function table on every `extism::Plugin`
   construction. The three former `Plugin::new(manifest, [], true)`
   call sites switched to `PluginBuilder::new(manifest)
@@ -218,7 +218,7 @@ plugin marketplace + scaffolding tool (v1.5.3+).
 
 ### Changed
 
-- **`plugin-examples/pe-version-info` rewritten** — 277 LOC → 77 LOC
+- **`plugin-examples/pe-version-info` rewritten**: 277 LOC → 77 LOC
   (-72%). The 220-LOC hand-rolled UTF-16LE TLV walker collapsed to
   one `pe::set_version_info(...)` call. The remaining LOC is the
   `plugin_schema` config-field declarations (unchanged from v1) plus
@@ -254,7 +254,7 @@ plugin marketplace + scaffolding tool (v1.5.3+).
   `debug = "line-tables-only"` + `split-debuginfo = "unpacked"`.**
   `target/debug/` after a full `cargo test --no-run` shrinks from
   ~16 GB to ~5.1 GB (-68%). Each test binary drops from ~500 MB to
-  ~155 MB (-71%). No source change, no behavior change — panics and
+  ~155 MB (-71%). No source change, no behavior change: panics and
   backtraces still report `file:line` (line-tables retained); only
   per-type DWARF and unpacked DWARF are dropped from the executable
   itself.
@@ -279,27 +279,27 @@ plugin marketplace + scaffolding tool (v1.5.3+).
 
 ### Added
 
-- **Execute-QA harness** — `scripts/qa-execute.sh` generates a real
+- **Execute-QA harness**: `scripts/qa-execute.sh` generates a real
   implant on each platform (Linux ELF locally, Windows PE over `ssh
   pumpbin-w10`), runs it, and confirms a hand-written sentinel
   shellcode actually executed by checking for a `PB-QA-OK` file on
   disk. Catches loader regressions that unit tests can't (PEB walks,
   shadow-space layout, cross-target codegen drift).
-- **`tests/qa_execute.rs`** — Rust integration tests
+- **`tests/qa_execute.rs`**: Rust integration tests
   (`#[ignore]`-gated) that drive the harness. Windows test skips
   gracefully if the SSH host isn't reachable.
-- **`scripts/install-qa-hook.sh`** — installs a `pre-push` git hook
+- **`scripts/install-qa-hook.sh`**: installs a `pre-push` git hook
   that gates `git push <remote> v*.*.*` on the execute-QA harness
   passing. Non-tag pushes are unaffected.
-- **`tests/fixtures/qa/`** — committed sentinel shellcode (NASM
+- **`tests/fixtures/qa/`**: committed sentinel shellcode (NASM
   source + assembled blob), Linux/Windows loader `.b1n`s, README
   explaining how to rebuild each fixture and how to wire SSH for the
   Windows side.
-- **`examples/starter-plugins/{linux,windows}.b1n`** — ready-to-use
+- **`examples/starter-plugins/{linux,windows}.b1n`**: ready-to-use
   loader plugin packs so a new operator gets from `git clone` to a
   working implant in 30 seconds. Documented as smoke-test / learning
   fixtures, not for fielding against EDR. (Operator-QA finding O-1.)
-- **`OPERATOR_QA.md`** — companion to `QA_REPORT.md`: tracks
+- **`OPERATOR_QA.md`**: companion to `QA_REPORT.md`: tracks
   operator-friction findings from a junior-red-teamer drive-through.
 
 ### Fixed
@@ -340,7 +340,7 @@ plugin marketplace + scaffolding tool (v1.5.3+).
 
 **Real wasmtime CVE fix.** v1.4.5 cleared four RUSTSEC advisories but
 exposed 14 sandbox-escape / panic / data-leakage CVEs in `wasmtime`
-that the published `extism 1.21.0` cannot pick up — its dep range
+that the published `extism 1.21.0` cannot pick up: its dep range
 caps `wasmtime` at `^37` and no patched 37.x line exists upstream.
 
 The options were: ignore the CVEs in deny.toml (silent), fork extism
@@ -371,7 +371,7 @@ cargo fmt --check                           # clean
 ```
 
 `cargo deny check` not runnable locally (binary not installed); CI
-is the verifier. The patch is intentionally temporary — remove the
+is the verifier. The patch is intentionally temporary: remove the
 `[patch.crates-io]` block and the `allow-git` entry the moment
 extism publishes a release > 1.21.0 carrying the same wasmtime bump.
 
@@ -379,7 +379,7 @@ extism publishes a release > 1.21.0 carrying the same wasmtime bump.
 
 **CI advisory hotfix.** v1.4.4 cleared the `cargo deny` license gate
 but exposed the advisory gate, which had been masked by the license
-failure for weeks. The job flagged 24 errors — 20 in `wasmtime`
+failure for weeks. The job flagged 24 errors: 20 in `wasmtime`
 (transitive via `extism`), 4 in `rustls` (transitive via `ureq`),
 plus two yanked crates and one unmaintained advisory. v1.4.5 fixes
 them all via lockfile bumps; no Cargo.toml caret changes were needed.
@@ -430,17 +430,17 @@ that v1.4.3 didn't touch (it only rebuilt the demo fixture).
   `dtolnay/rust-toolchain@stable` pulls 1.95, which catches a lint
   that local 1.90 doesn't. Each `match arm => if cond { ... }` block
   was rewritten as a `match arm if cond => { ... }` guard:
-  - `src/config_utils.rs:104` — `"number"`, `"boolean"`, `"choice"`,
+  - `src/config_utils.rs:104`: `"number"`, `"boolean"`, `"choice"`,
     `"file"`/`"file_base64"` arms in `config_value_error`.
-  - `src/maker.rs:1081` — `Key::Character(ch)` + `modifiers.control()`
+  - `src/maker.rs:1081`: `Key::Character(ch)` + `modifiers.control()`
     in the keyboard-shortcut handler.
-  - `src/bin/pumpbin-cli.rs:1082` — `"choice"` arm in
+  - `src/bin/pumpbin-cli.rs:1082`: `"choice"` arm in
     `validate_module_config`.
 - **`cargo deny` rejected `CDLA-Permissive-2.0`.** Transitive dep
   `webpki-roots` (pulled in by `extism` → `ureq`) ships the Mozilla
   root CA bundle under that license. CDLA-Permissive-2.0 is a
-  permissive data license — no source-disclosure obligations, no
-  patent traps — but it wasn't in our allowlist. Added as a scoped
+  permissive data license: no source-disclosure obligations, no
+  patent traps: but it wasn't in our allowlist. Added as a scoped
   exception (`name = "webpki-roots"`) rather than a blanket allow,
   so any new dep under the same license would still trip the gate
   and need explicit review.
@@ -470,7 +470,7 @@ for v1.2.0 rebuild but slipped. v1.4.3 actually fixes it.
 
 ### Fixed
 - **`hello.b1n` rebuilt** as a working v1.4.x-style Local-mode demo
-  plugin (239 bytes — tiny because it's just the synthetic template
+  plugin (239 bytes: tiny because it's just the synthetic template
   with both placeholders, no embedded WASM modules). Generate now
   works:
   ```
@@ -569,7 +569,7 @@ the full docs site is a larger chip that needs `clap_mangen` setup +
 
 ## v1.4.0
 
-**Minor release** — Phase 2 of v2.0 plan (first chip): operator OPSEC
+**Minor release**: Phase 2 of v2.0 plan (first chip): operator OPSEC
 profile + shellcode format converter.
 
 ### Plan deviation
@@ -590,14 +590,14 @@ plugin-format break.
   `parse_hex(&str) -> Vec<u8>`. Re-exported at crate root:
   `pumpbin::OutputFormat`, `pumpbin::convert`.
 - **`pumpbin-cli convert --input <file> --format <fmt> [--output <path>]`**
-  subcommand. Pure formatting — no donut wrapping, no msfvenom
+  subcommand. Pure formatting: no donut wrapping, no msfvenom
   shimming. Output to file (atomic_write) or stdout if `--output`
   omitted. Supports `--json` envelope on file-output path.
 - **`pumpbin::opsec` module** with `OpsecProfile`, `NetworkPolicy`,
   `BuildsPolicy`, `OPSEC_SCHEMA`, `opsec_path()`, `load_opsec()`.
   Re-exported at crate root.
 - **`~/.config/pumpbin/opsec.toml`** (or `$XDG_CONFIG_HOME/pumpbin/opsec.toml`)
-  — operator-wide policy loaded by `Profile::execute` before any build
+: operator-wide policy loaded by `Profile::execute` before any build
   work. Schema:
   ```toml
   schema = "pumpbin.opsec/v1"
@@ -665,7 +665,7 @@ Next chips on the v1.4.x / v2.0 train:
 
 Third chip of v2.0 Phase 1: `--json` versioned CLI output + SBOM
 emission. This is the chip that makes PumpBin **actually scriptable**
-for CI/CD use — every CLI invocation can now emit a machine-parseable
+for CI/CD use: every CLI invocation can now emit a machine-parseable
 JSON envelope with a stable schema header, and every build can drop
 a `.pbom.json` SBOM next to the implant for provenance.
 
@@ -730,7 +730,7 @@ a `.pbom.json` SBOM next to the implant for provenance.
   `donor_pe_b64` (case-insensitive) is replaced with
   `<redacted N chars>`. So the SBOM for a cert-blob-steal build
   doesn't leak the donor PE bytes.
-- **`BuildArtifact.sbom_path: Option<PathBuf>`** — when `output.sbom`
+- **`BuildArtifact.sbom_path: Option<PathBuf>`**: when `output.sbom`
   is true, this is `Some(path/to/<output>.pbom.json)`. Surfaced in
   both the human-readable build log and the `--json` envelope.
 
@@ -798,7 +798,7 @@ what they were about to load. v1.3.1 fixes that.
   embedded WASM modules (with sha256, declared `RuntimeConfig`,
   exported config schema fields), and a flag for legacy single-WASM
   fallback fields.
-- **`pumpbin-cli inspect <file.b1n>`** — dumps the plain-text report.
+- **`pumpbin-cli inspect <file.b1n>`**: dumps the plain-text report.
   Layout:
 
   ```
@@ -819,9 +819,9 @@ what they were about to load. v1.3.1 fixes that.
     [0] 257796 bytes  sha256=6a173529...
         runtime: timeout_ms=5000 allowed_hosts=[] on_error=Abort sdk_version=Some(1)
         config fields:
-          - "donor_pe_b64" : file_base64 (required)
+          - "donor_pe_b64": file_base64 (required)
   ```
-- **`pumpbin-cli inspect <a.b1n> --diff <b.b1n>`** — human-readable
+- **`pumpbin-cli inspect <a.b1n> --diff <b.b1n>`**: human-readable
   diff: name/version/replace-config drift, added/removed module
   sha256s. Identical packs print `no differences`.
 - **`tests/inspect_b1n.rs`** (4 tests):
@@ -867,7 +867,7 @@ Next chips on the v1.3.x train:
 
 ## v1.3.0
 
-**Minor release** — first chip of v2.0 Phase 1 (profile + headless
+**Minor release**: first chip of v2.0 Phase 1 (profile + headless
 build) landed as backward-compatible additions on the 1.x line.
 Operators can now drive a full build from a single TOML file.
 
@@ -884,15 +884,15 @@ file updated to document the deferral.
 - **`pumpbin::profile` module** with `Profile`, `BuildArtifact`,
   `PROFILE_SCHEMA`. Re-exported at crate root: `pumpbin::Profile`,
   `pumpbin::BuildArtifact`, `pumpbin::PROFILE_SCHEMA`.
-- **`Profile::from_toml(path)`** — parse + validate the schema header.
+- **`Profile::from_toml(path)`**: parse + validate the schema header.
   Mismatched schema refuses load with an actionable error.
-- **`Profile::execute()`** — end-to-end build. Resolves shellcode
+- **`Profile::execute()`**: end-to-end build. Resolves shellcode
   source (file / url / base64 / hex; the latter two decode to a
   tempfile and pass through the existing Local-mode flow), validates
   plugin compatibility, runs `replace_binary` + `post_binary`, writes
   via `utils::atomic_write`. Returns a `BuildArtifact` with the
   output path and byte count.
-- **`pumpbin-cli build -f pumpbin.toml`** — new subcommand. Drives
+- **`pumpbin-cli build -f pumpbin.toml`**: new subcommand. Drives
   the profile flow through the same library code path that the
   ad-hoc-flags `generate` subcommand uses.
 - **`tests/profile_build.rs`** (4 tests):
@@ -966,7 +966,7 @@ cargo clippy --all-targets -- -D warnings -> clean
 ### Roadmap
 
 Next chips on the v1.3.x / v2.0 train:
-- `--json` versioned output (Phase 1.3) — `{"schema":"pumpbin.cli/v1",
+- `--json` versioned output (Phase 1.3): `{"schema":"pumpbin.cli/v1",
   "ok":..., "data":..., "error":...}` on stdout
 - `pumpbin-cli inspect <file.b1n>` (+ `--diff`) (Phase 1.4)
 - SBOM emission `<output>.pbom.json` (Phase 1.6)
@@ -977,7 +977,7 @@ Next chips on the v1.3.x / v2.0 train:
 
 ## v1.2.0
 
-**Minor release** — first signer plugin, picking up the slot left
+**Minor release**: first signer plugin, picking up the slot left
 empty when v1.1.2 deleted the in-core `host_self_sign`. Pure WASM,
 no host helper needed, ships under `plugin-examples/signers/`.
 
@@ -989,7 +989,7 @@ resolution) and is deferred to a follow-up release; v1.2.0 ships
 the one signer that's complete and end-to-end tested.
 
 ### Added
-- **`plugin-examples/signers/cert-blob-steal/`** — pure-WASM signer
+- **`plugin-examples/signers/cert-blob-steal/`**: pure-WASM signer
   plugin. `post_binary` hook lifts the `WIN_CERTIFICATE` blob from a
   donor signed PE (passed in as `donor_pe_b64` config) and grafts it
   onto the generated implant. Patches the implant's
@@ -1075,7 +1075,7 @@ cargo clippy --all-targets -- -D warnings -> clean
 Eighth chip of v2.0 Phase 0: Maker preflight off the UI thread (Phase
 0.8). The sync `preflight_readiness_report` call in
 `MakerMessage::GenerateClicked` was reading every platform binary
-synchronously on the Iced runtime thread — freezing the UI for the
+synchronously on the Iced runtime thread: freezing the UI for the
 duration on multi-MB templates. v1.1.13 removes the redundant sync
 call entirely; preflight is now ONLY performed inside the existing
 async `Task::perform` block, which already reads each file for the
@@ -1108,7 +1108,7 @@ actual encode step.
 The `GeneratedPluginResult.preflight_report` field now contains a
 brief per-file `READY` summary built inside the async block instead
 of the longer pre-v1.1.13 multi-line report. Format change is
-intentional — the report is informational text shown in the success
+intentional: the report is informational text shown in the success
 dialog, not parsed by anything.
 
 ### Verification
@@ -1131,7 +1131,7 @@ Remaining v2.0 Phase 0 items deferred to a later chip:
 Seventh chip of v2.0 Phase 0: `OnError::Skip` dispatcher semantics.
 The variant has existed on `RuntimeConfig::on_error` since v1.1.7 but
 the `EventManager::fire_post_binary` dispatcher always treated module
-errors as fatal. v1.1.12 actually honors the variant — a failing
+errors as fatal. v1.1.12 actually honors the variant: a failing
 module whose schema declares `on_error = Skip` logs a `warn!` and the
 chain continues with the unmodified binary.
 
@@ -1174,11 +1174,11 @@ cargo clippy --all-targets -- -D warnings -> clean
 ### Roadmap
 
 Remaining v2.0 Phase 0 items deferred to a later chip:
-- Maker `fs::read` off the UI thread (Phase 0.8 — needs `&mut self`
+- Maker `fs::read` off the UI thread (Phase 0.8: needs `&mut self`
   cache plumbing that's bigger than fits in a single chip)
 - Signature migration to `PumpBinResult<T>` (whole-codebase refactor;
   saved for the v2.0 boundary cut)
-- Collapse legacy single-WASM dispatch — deferred to v2.0 per plan
+- Collapse legacy single-WASM dispatch: deferred to v2.0 per plan
   update above
 
 ## v1.1.11
@@ -1193,17 +1193,17 @@ v1.1.11 actually lands what v1.1.9 was supposed to.
 ### Fixed
 - **`.github/workflows/rust.yml`** is now the multi-job CI matrix
   described in the v1.1.9 changelog:
-  - `fmt` (Linux) — `cargo fmt --all -- --check`
-  - `clippy` (Linux, with Iced build deps) — `cargo clippy
+  - `fmt` (Linux): `cargo fmt --all -- --check`
+  - `clippy` (Linux, with Iced build deps): `cargo clippy
     --all-targets -- -D warnings`
-  - `test-linux`, `test-macos`, `test-windows` — three separate jobs
+  - `test-linux`, `test-macos`, `test-windows`: three separate jobs
     running `cargo test --lib --tests --no-fail-fast`. The plan called
     for a matrix; the implementation is three explicit jobs because the
     repo's `Write` hook flags matrix-variable interpolation patterns
     and the explicit-job form is clearer anyway.
-  - `deny` (Linux) — `cargo deny check` against `deny.toml`
-  - `gui-build` (Linux) — `cargo build --release --bin pumpbin`
-  - `cli-smoke-linux`, `cli-smoke-macos`, `cli-smoke-windows` —
+  - `deny` (Linux): `cargo deny check` against `deny.toml`
+  - `gui-build` (Linux): `cargo build --release --bin pumpbin`
+  - `cli-smoke-linux`, `cli-smoke-macos`, `cli-smoke-windows` :
     builds `pumpbin-cli` release binary, runs `--version` + `--help`
     on every subcommand
 - **Trigger rules**: push to `main`, `hotfix/**`, `release/**`, any
@@ -1243,13 +1243,13 @@ both small and unblock CI.
   (the Maker was integrated into the main `pumpbin` GUI as a workspace
   toggle in pre-1.1.x commit `44271e1`), and an aarch64 Linux cross-
   compile that pulled an apt `sources.list` from a third-party GitHub
-  gist — an unacceptable supply-chain surface. Rewritten to ship the
+  gist: an unacceptable supply-chain surface. Rewritten to ship the
   current `pumpbin` (GUI) and `pumpbin-cli` binaries on Linux x86_64,
   macOS x86_64, and Windows x86_64. aarch64 builds deferred to a
   future chip with a clean cross-compile setup.
 
 ### Added
-- **`pumpbin::RECENT_FILES_CAP`** — `pub const usize = 20`. Single
+- **`pumpbin::RECENT_FILES_CAP`**: `pub const usize = 20`. Single
   source of truth for the recent-files cap in both `Pumpbin`
   (Generator) and `Maker` workspaces. Pre-v1.1.10 each had a private
   `truncate(10)` call hardcoded at the use site; v1.1.10 bumps the
@@ -1288,17 +1288,17 @@ the green badge was vacuous. v1.1.9 builds a real CI matrix.
 
 ### Added
 - **`.github/workflows/rust.yml`** rewritten with 6 jobs:
-  - `fmt` — `cargo fmt --all -- --check` (Linux)
-  - `clippy` — `cargo clippy --all-targets -- -D warnings` (Linux,
+  - `fmt`: `cargo fmt --all -- --check` (Linux)
+  - `clippy`: `cargo clippy --all-targets -- -D warnings` (Linux,
     installs GUI build deps so the `pumpbin` binary clippy-compiles)
-  - `test` — matrix `ubuntu-latest`, `macos-latest`, `windows-latest`,
+  - `test`: matrix `ubuntu-latest`, `macos-latest`, `windows-latest`,
     runs `cargo test --lib --tests --no-fail-fast`. GUI binary is
     *not* compiled on macOS/Windows because the Iced 0.13 wgpu deps
     are flaky to install on CI runners; the library code path the
     tests cover is what matters for parity.
-  - `deny` — `cargo deny check` (Linux, runs against `deny.toml`)
-  - `gui-build` — `cargo build --release --bin pumpbin` (Linux)
-  - `cli-smoke` — matrix Linux/macOS/Windows, builds the CLI release
+  - `deny`: `cargo deny check` (Linux, runs against `deny.toml`)
+  - `gui-build`: `cargo build --release --bin pumpbin` (Linux)
+  - `cli-smoke`: matrix Linux/macOS/Windows, builds the CLI release
     binary and runs `--version` / `--help` on every subcommand. Cheap
     sanity check that all three platforms get a working `pumpbin-cli`.
 - **`deny.toml`** at repo root: license allowlist (MIT, Apache-2.0,
@@ -1320,7 +1320,7 @@ the green badge was vacuous. v1.1.9 builds a real CI matrix.
 
 `cargo test --lib --tests` runs on macOS/Windows; `cargo test
 --all-targets` does not. The latter compiles the GUI binary, which
-needs the Iced 0.13 wgpu graphics stack — getting that to install
+needs the Iced 0.13 wgpu graphics stack: getting that to install
 reliably on macOS and Windows CI runners is its own engineering
 project. The library code path tested cross-platform IS the code that
 both the CLI and GUI delegate into (`Plugin::replace_binary`,
@@ -1361,7 +1361,7 @@ pages after the host releases it.
 PumpBin briefly holds shellcode in `Vec<u8>` heap allocations while
 checking for the placeholder marker, computing length, etc. Without
 explicit zeroization, those bytes survive in physical memory until the
-allocator hands the page to another caller — or, on swap-enabled
+allocator hands the page to another caller: or, on swap-enabled
 systems, to disk. The fix is a thin `SecretBuf` wrapper that derives
 `zeroize::ZeroizeOnDrop`, so every in-memory copy is wiped before the
 allocator reuses the page.
@@ -1378,7 +1378,7 @@ allocator reuses the page.
   re-wrapping or zeroizing the result.
 - **`Plugin::validate_shellcode_source`** (`src/plugin.rs`) now wraps
   the `fs::read` result in `SecretBuf` so the shellcode bytes are wiped
-  on scope exit — even on the success path where we only used them to
+  on scope exit: even on the success path where we only used them to
   scan for the placeholder marker.
 - **`SecretBuf` re-exported** at the crate root: `pumpbin::SecretBuf`.
 - **`tests/zeroize_secrets.rs`** (new, 6 tests):
@@ -1405,7 +1405,7 @@ allocator reuses the page.
 
 ### What zeroize does (and doesn't) buy you
 
-Wiping `Vec<u8>` on drop defeats the most common leak vector — the
+Wiping `Vec<u8>` on drop defeats the most common leak vector: the
 kernel handing the same physical page to another process, or to the
 same process after `free`. It does NOT defeat a debugger attached to
 the live process, swap-file forensics taken before the wipe runs, or
@@ -1417,15 +1417,15 @@ core dumps captured while bytes are in flight. Treat this as hygiene.
 ### Verification
 ```
 cargo test --all-targets    -> 48/48 pass + 1 wine-gated ignored (was 42)
-  - golden          : 2
-  - pass_merge      : 1
-  - preflight       : 6
-  - parity_harness  : 5
-  - cli_exit_codes  : 5
-  - error_codes     : 12
-  - log_redaction   : 1
-  - wasm_policy     : 10
-  - zeroize_secrets : 6   (new)
+  - golden: 2
+  - pass_merge: 1
+  - preflight: 6
+  - parity_harness: 5
+  - cli_exit_codes: 5
+  - error_codes: 12
+  - log_redaction: 1
+  - wasm_policy: 10
+  - zeroize_secrets: 6   (new)
 cargo fmt --check           -> clean
 cargo clippy --all-targets  -> clean of new warnings
                                (pre-existing maker.rs:951 should_persist)
@@ -1456,14 +1456,14 @@ defaults (3-second timeout, no network).
 - **Default WASM timeout drops from 5s to 3s.** Modules that need
   longer must declare `timeout_ms` in their `RuntimeConfig`. Existing
   plugins built before v1.1.7 hit the new 3s default; if your AES /
-  signing / network module was already slow it may start failing —
+  signing / network module was already slow it may start failing :
   add a runtime block with the correct `timeout_ms` to fix.
 - **Default network policy: no network.** Pre-v1.1.7, every WASM module
   was loaded with `with_allowed_host("*")`. v1.1.7 loads modules with
   zero allowed hosts. Modules that call `extism_pdk::http::request`
   now get `PB-E0021 WasmHostDenied` unless they declare the host in
   their `RuntimeConfig::allowed_hosts`. The `upload_final_shellcode_remote`
-  hook is the main affected path — those plugins must declare their
+  hook is the main affected path: those plugins must declare their
   upload endpoint explicitly.
 - **SDK version checking is now strict.** Modules that declare
   `sdk_version: Some(n)` in their `RuntimeConfig` are refused on
@@ -1486,20 +1486,20 @@ defaults (3-second timeout, no network).
   per-module policy built from `RuntimeConfig`. Two constructors:
   `from_runtime(name, &RuntimeConfig)` (validates bounds, may return
   `PB-E0023`) and `defaults(name)` (the safe baseline).
-- **`resolve_policy(wasm, name) -> ResolvedPolicy`** — bootstrap helper
+- **`resolve_policy(wasm, name) -> ResolvedPolicy`**: bootstrap helper
   that reads the schema from a WASM module and builds the policy. Used
   by `run_module` on every call so per-call policy comes from the
   module's own declaration.
-- **`manifest_from_wasm_with_policy(wasm, &ResolvedPolicy)`** —
+- **`manifest_from_wasm_with_policy(wasm, &ResolvedPolicy)`** :
   replaces the old hardcoded-host/timeout `manifest_from_wasm`. The
   legacy wrapper has been deleted; all callers go through the policy
   path.
 - **3 new `PumpBinError` variants**:
-  - `PB-E0021 WasmHostDenied { module, host }` — module tried to
+  - `PB-E0021 WasmHostDenied { module, host }`: module tried to
     contact a host not in its allowlist
   - `PB-E0022 WasmSdkVersionMismatch { module, declared, host_version }`
-    — module SDK version doesn't match host
-  - `PB-E0023 WasmTimeoutInvalid { module, timeout_ms }` — declared
+: module SDK version doesn't match host
+  - `PB-E0023 WasmTimeoutInvalid { module, timeout_ms }`: declared
     `timeout_ms` outside the 1..=600_000 ms range
 
 ### Tests
@@ -1508,11 +1508,11 @@ defaults (3-second timeout, no network).
   - `defaults_are_safe` (3s, no network)
   - `runtime_config_default_matches_resolved_defaults`
   - `host_sdk_version_is_one` (locks the constant for the 1.x line)
-  - `pre_v1_1_7_wasm_loads_under_default_policy` — proves the AES
+  - `pre_v1_1_7_wasm_loads_under_default_policy`: proves the AES
     example plugin still works under the strict defaults (backward
     compat regression guard)
   - error-message well-formedness for `PB-E0021` and `PB-E0022`
-- **`tests/error_codes.rs`** — extended the uniqueness check with all
+- **`tests/error_codes.rs`**: extended the uniqueness check with all
   3 new variants.
 
 ### Migration notes for plugin authors
@@ -1544,14 +1544,14 @@ network should add the block.
 ### Verification
 ```
 cargo test --all-targets    -> 42/42 pass + 1 wine-gated ignored (was 32)
-  - golden          : 2
-  - pass_merge      : 1
-  - preflight       : 6
-  - parity_harness  : 5
-  - cli_exit_codes  : 5
-  - error_codes     : 12
-  - log_redaction   : 1
-  - wasm_policy     : 10  (new)
+  - golden: 2
+  - pass_merge: 1
+  - preflight: 6
+  - parity_harness: 5
+  - cli_exit_codes: 5
+  - error_codes: 12
+  - log_redaction: 1
+  - wasm_policy: 10  (new)
 cargo fmt --check           -> clean
 cargo clippy --all-targets  -> clean of new warnings
 ```
@@ -1583,29 +1583,29 @@ operators can find every generate / batch / verify run in
 - **JSON log file**: one file per process invocation at
   `$XDG_DATA_HOME/PumpBin/logs/{timestamp}-{pid}.jsonl`. Append-only
   within the run; rotation is by-invocation. Log-open failure (disk
-  full, permission) degrades silently to console-only — never aborts
+  full, permission) degrades silently to console-only: never aborts
   the binary.
 - **CLI flags** (global, work on every subcommand):
-  - `--no-log` — disable the JSON file sink
-  - `--log-level <FILTER>` — override level; accepts EnvFilter syntax
+  - `--no-log`: disable the JSON file sink
+  - `--log-level <FILTER>`: override level; accepts EnvFilter syntax
     like `debug` or `info,extism=warn`
 - **Env vars**:
-  - `PUMPBIN_NO_LOG=1` — same as `--no-log`
-  - `PUMPBIN_LOG=<filter>` — same as `--log-level`, but `--log-level`
+  - `PUMPBIN_NO_LOG=1`: same as `--no-log`
+  - `PUMPBIN_LOG=<filter>`: same as `--log-level`, but `--log-level`
     wins when both are set
 - **`#[tracing::instrument]`** on every hot library function:
-  - `Plugin::replace_binary`        — `skip(self, bin, shellcode_src, pass, runtime_config)`
-  - `Plugin::validate_for_generation` — `skip(self)`
-  - `Plugin::validate_shellcode_source` — `skip(self, shellcode_src)`
-  - `PluginPlugins::run_encrypt_shellcode` — `skip(self, runtime_config)`
-  - `PluginPlugins::run_format_encrypted_shellcode` — `skip(self, shellcode, runtime_config)`
-  - `PluginPlugins::run_post_binary` — `skip(self, binary, runtime_config)`
-  - `plugin_system::run_module` — `skip(wasm, input, config)`
-  - `utils::atomic_write` — `skip(data)`
+  - `Plugin::replace_binary`: `skip(self, bin, shellcode_src, pass, runtime_config)`
+  - `Plugin::validate_for_generation`: `skip(self)`
+  - `Plugin::validate_shellcode_source`: `skip(self, shellcode_src)`
+  - `PluginPlugins::run_encrypt_shellcode`: `skip(self, runtime_config)`
+  - `PluginPlugins::run_format_encrypted_shellcode`: `skip(self, shellcode, runtime_config)`
+  - `PluginPlugins::run_post_binary`: `skip(self, binary, runtime_config)`
+  - `plugin_system::run_module`: `skip(wasm, input, config)`
+  - `utils::atomic_write`: `skip(data)`
   Every shellcode / Pass / runtime_config / key argument is in
   `skip(...)`. The `fields(...)` portion logs only safe metadata
   (plugin name, lengths, save_type, paths).
-- **`tests/log_redaction.rs`** — regression guard. Drives a full
+- **`tests/log_redaction.rs`**: regression guard. Drives a full
   generate with a distinctive `0xDEADBEEF×8` marker shellcode, captures
   every byte the tracing subscriber emits, asserts the marker never
   appears in any form (raw, Debug Vec<u8>, hex). This test is the only
@@ -1617,17 +1617,17 @@ operators can find every generate / batch / verify run in
   migrated from `println!`/`eprintln!` to `tracing::info!`/`warn!`.
   Goes to stderr so stdout is reserved for the eventual `--json`
   machine-readable output (planned in Phase 1.3).
-- **`pumpbin-cli verify` report** stays on `println!` — its stdout IS
+- **`pumpbin-cli verify` report** stays on `println!`: its stdout IS
   the subcommand's deliverable output (human-readable PE/Authenticode
   report), not progress chatter.
-- **`pumpbin-cli completions <shell>`** stays on `println!` — same
+- **`pumpbin-cli completions <shell>`** stays on `println!`: same
   reason; the shell-completion script IS the output.
 - **`src/main.rs` (GUI)** calls `pumpbin::logging::init_default()`
   before any other startup work, so config-path setup, capnp decode
   failures, and Iced runtime errors all land in the JSON log too.
 
 ### Dependencies
-- `tracing = "0.1"` — added (was claimed by the v2.0 plan to already
+- `tracing = "0.1"`: added (was claimed by the v2.0 plan to already
   exist; verified absent in Cargo.toml, added fresh).
 - `tracing-subscriber = "0.3"` with features `env-filter`, `fmt`,
   `json`, `ansi`, `std`.
@@ -1635,13 +1635,13 @@ operators can find every generate / batch / verify run in
 ### Verification
 ```
 cargo test --all-targets    -> 32/32 pass + 1 wine-gated ignored
-  - golden          : 2
-  - pass_merge      : 1
-  - preflight       : 6
-  - parity_harness  : 5
-  - cli_exit_codes  : 5
-  - error_codes     : 12
-  - log_redaction   : 1  (new)
+  - golden: 2
+  - pass_merge: 1
+  - preflight: 6
+  - parity_harness: 5
+  - cli_exit_codes: 5
+  - error_codes: 12
+  - log_redaction: 1  (new)
 cargo fmt --check           -> clean
 cargo clippy --all-targets  -> clean of new warnings
 ```
@@ -1668,12 +1668,12 @@ without parsing error strings.
 - **`pumpbin::error` module** with `PumpBinError` enum (20 variants) and
   `PumpBinResult<T>` type alias. Each variant has a stable `code()`
   method returning a `PB-Exxxx` string. Codes are flat-namespaced and
-  allocated chronologically — never reused. `error_code()` is also
+  allocated chronologically: never reused. `error_code()` is also
   embedded in the `Display` output so human consumers see the same
   identifier as machine consumers.
 - **`PumpBinError` re-exported at crate root**: `pumpbin::PumpBinError`
   and `pumpbin::PumpBinResult`.
-- **`tests/error_codes.rs`** — 12 tests asserting that every error
+- **`tests/error_codes.rs`**: 12 tests asserting that every error
   condition produces the expected code and that all codes are unique +
   well-formed (`PB-E` + 4 digits).
 
@@ -1719,12 +1719,12 @@ without parsing error strings.
 ### Verification
 ```
 cargo test --all-targets   -> 31/31 pass + 1 wine-gated ignored (was 19)
-  - golden          : 2
-  - pass_merge      : 1
-  - preflight       : 6  (updated to assert PB-E0001 + holder bytes)
-  - parity_harness  : 5
-  - cli_exit_codes  : 5
-  - error_codes     : 12 (new)
+  - golden: 2
+  - pass_merge: 1
+  - preflight: 6  (updated to assert PB-E0001 + holder bytes)
+  - parity_harness: 5
+  - cli_exit_codes: 5
+  - error_codes: 12 (new)
 cargo fmt --check          -> clean
 cargo clippy --all-targets -> clean of new warnings
                               (only pre-existing maker.rs:942
@@ -1757,7 +1757,7 @@ pass that exercised both CLI and GUI workflows (see `QA_REPORT.md` ->
   `self.is_loading` is true.
 
 ### Added
-- **`tests/cli_exit_codes.rs`** — 5 end-to-end tests that invoke the
+- **`tests/cli_exit_codes.rs`**: 5 end-to-end tests that invoke the
   built `pumpbin-cli` binary as a subprocess and assert exit codes:
     - `batch_empty_dir_exits_nonzero`
     - `batch_dir_of_non_bin_files_exits_nonzero`
@@ -1766,7 +1766,7 @@ pass that exercised both CLI and GUI workflows (see `QA_REPORT.md` ->
     - `create_b1n_with_bad_template_exits_nonzero`
   Skip cleanly (with an eprintln) if the binary hasn't been built, so
   `cargo test` in a fresh checkout still works.
-- **`examples/seed_xdg.rs`** — QA helper to pre-seed a sandboxed
+- **`examples/seed_xdg.rs`**: QA helper to pre-seed a sandboxed
   `$XDG_DATA_HOME/PumpBin/plugins` registry with a `.b1n` so the GUI
   starts with a plugin already loaded. Used during QA to test GUI
   launches without touching the operator's real plugin list.
@@ -1782,13 +1782,13 @@ Follow-up to v1.1.2 addressing the highest-severity CLI/UI parity drift
 surfaced by the QA pass documented in `QA_REPORT.md`.
 
 ### Fixed
-- **`pumpbin-cli verify` returned exit 0 on Authenticode/PE failure** —
+- **`pumpbin-cli verify` returned exit 0 on Authenticode/PE failure** :
   `verify_binary` printed `PE format: no` and `Authenticode invalid` and
   still returned `Ok(())`, breaking CI/CD pipelines that relied on exit
   status. Now tracks failures (non-PE input, checksum mismatch, Authenticode
   verify failure when a signature blob exists) and exits 1 with a summary
   of every check that failed. `AuthCheckStatus::NotApplicable` (no
-  osslsigncode, no blob) still passes — those are genuinely informational.
+  osslsigncode, no blob) still passes: those are genuinely informational.
 - **`pumpbin-cli create-b1n` produced silently-broken `.b1n` files** when the
   template binary lacked the configured `src_prefix` or `size_holder`. The
   Maker GUI enforced this preflight inline; the CLI did not, so plugins
@@ -1797,12 +1797,12 @@ surfaced by the QA pass documented in `QA_REPORT.md`.
   `PluginReplace::preflight_template` helper and called by both surfaces.
 
 ### Added
-- **`PluginReplace::preflight_template`** (`src/plugin.rs`) — shared template
+- **`PluginReplace::preflight_template`** (`src/plugin.rs`): shared template
   validation. Confirms `src_prefix` is present always; confirms `size_holder`
   is present in Local mode; skips `size_holder` in Remote mode.
-- **`tests/preflight.rs`** — 6 tests covering both modes × prefix/holder
+- **`tests/preflight.rs`**: 6 tests covering both modes × prefix/holder
   presence/absence permutations.
-- **`tests/parity_harness.rs`** — 5 tests asserting the structural
+- **`tests/parity_harness.rs`**: 5 tests asserting the structural
   invariants of `Plugin::replace_binary` that don't depend on random
   padding (output length, shellcode bytes injected verbatim, placeholders
   consumed, decimal size-string written, two runs agree on offsets). This
@@ -1819,20 +1819,20 @@ surfaced by the QA pass documented in `QA_REPORT.md`.
 ## v1.1.2
 
 ### Fixed
-- **`replace_binary` pass-clobber (silent correctness bug)** — `Plugin::replace_binary`
+- **`replace_binary` pass-clobber (silent correctness bug)**: `Plugin::replace_binary`
   unconditionally overwrote any caller-supplied `Vec<Pass>` with whatever
   `run_encrypt_shellcode` returned, silently dropping pre-encrypted holder/replacement
   pairs supplied by the GUI's two-phase encrypt-then-generate flow. Implants built
   this way ran with un-substituted holders embedded in the binary. The two lists are
   now merged with caller-wins precedence on holder collision. Regression covered by
   `tests/pass_merge.rs`.
-- **Non-atomic config / state / binary writes** — `Plugins::update_plugins`,
+- **Non-atomic config / state / binary writes**: `Plugins::update_plugins`,
   `Maker::save_state`, generated-binary saves in the GUI, and all CLI write paths now
   go through `utils::atomic_write` (tempfile in the same dir + `persist`). A crash or
   disk-full event mid-write no longer truncates the existing file to a partial state.
 
 ### Removed
-- **Host-side `host_self_sign` (ephemeral RSA + osslsigncode)** — the in-core signer
+- **Host-side `host_self_sign` (ephemeral RSA + osslsigncode)**: the in-core signer
   generated a fresh self-signed RSA cert on every build and shelled out to `openssl`
   and `osslsigncode`. It produced unverifiable signatures, polluted operator OPSEC
   with a unique signer identity per build, and forced both binaries as hard host
@@ -1841,11 +1841,11 @@ surfaced by the QA pass documented in `QA_REPORT.md`.
   The `self_sign` and `sign_cn` runtime config keys are no longer recognized.
 
 ### Added
-- **`utils::replace_with_rng`** — same semantics as `utils::replace` but takes an
+- **`utils::replace_with_rng`**: same semantics as `utils::replace` but takes an
   explicit `&mut R: RngCore`, enabling deterministic golden-output tests. Production
   callers continue to use `utils::replace`, which delegates to `thread_rng`.
-- **`utils::atomic_write`** — public helper for crash-safe file writes.
-- **First real test suite** (`tests/golden.rs`, `tests/pass_merge.rs`) — pre-1.1.2 the
+- **`utils::atomic_write`**: public helper for crash-safe file writes.
+- **First real test suite** (`tests/golden.rs`, `tests/pass_merge.rs`): pre-1.1.2 the
   source tree had zero `#[test]` while CI ran `cargo test`, producing a green badge
   with no coverage. The golden test proves seeded RNG produces stable bytes across
   machines; the pass-merge test guards the bug fix above.

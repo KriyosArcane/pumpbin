@@ -1,4 +1,4 @@
-//! `pumpbin-module-sdk` — tiny helper for Rust-authored PumpBin modules.
+//! `pumpbin-module-sdk`: tiny helper for Rust-authored PumpBin modules.
 //!
 //! Implements wire protocol **v1**: u32 LE length-prefixed JSON
 //! header + raw bytes payload, on both stdin and stdout. The host

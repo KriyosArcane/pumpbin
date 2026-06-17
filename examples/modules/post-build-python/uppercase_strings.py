@@ -63,11 +63,9 @@ def main():
             sys.exit(1)
         payload = read_frame(sys.stdin.buffer)
 
-        args = parse_args(header)  # {"key": "value", ...} — use args.get("key", default)
+        args = parse_args(header)  # {"key": "value", ...}; use args.get("key", default)
 
-        # ── your transformation goes here ──────────────────────────────
         mutated = bytes(b - 32 if 0x61 <= b <= 0x7A else b for b in payload)
-        # ──────────────────────────────────────────────────────────────
 
         resp = {"protocol": 1}
         write_frame(sys.stdout.buffer, json.dumps(resp).encode("utf-8"))

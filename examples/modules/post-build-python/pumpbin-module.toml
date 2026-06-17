@@ -1,5 +1,5 @@
 name = "uppercase-strings"
-description = "Demo: uppercase every ASCII letter in the implant (proves nothing useful — copy this template and replace the body)"
+description = "Demo: uppercase every ASCII letter in the implant (proves nothing useful: copy this template and replace the body)"
 kind = "post-build"
 version = "0.1.0"
 protocol = 1

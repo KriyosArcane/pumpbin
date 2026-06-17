@@ -1,4 +1,4 @@
-# post-build-rust — minimal PumpBin module in Rust
+# post-build-rust: minimal PumpBin module in Rust
 
 A small Cargo crate that becomes a single executable PumpBin can
 invoke as a post-build module.

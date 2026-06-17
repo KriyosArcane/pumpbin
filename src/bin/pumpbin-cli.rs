@@ -269,7 +269,7 @@ enum Commands {
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: Option<PathBuf>,
 
-        /// Skip `cargo build` — assume the artifact is already on disk.
+        /// Skip `cargo build`: assume the artifact is already on disk.
         /// Useful for repacking after a manual rebuild or when the build
         /// happens in CI.
         #[arg(long)]
@@ -399,9 +399,9 @@ fn main() -> Result<()> {
 }
 
 /// Exit codes:
-///   0 — success
-///   1 — error (bad input, I/O failure, plugin error)
-///   2 — partial batch success
+///   0: success
+///   1: error (bad input, I/O failure, plugin error)
+///   2: partial batch success
 fn dispatch(cli: &Cli) -> Result<()> {
     match &cli.command {
         Commands::Generate {
@@ -1280,7 +1280,7 @@ fn list_modules(show_options: bool, only_id: Option<&str>) -> Result<()> {
         println!("{title}:");
         for descriptor in filtered {
             println!(
-                "  {} ({}) - {}",
+                "  {} ({}): {}",
                 descriptor.id, descriptor.source, descriptor.description
             );
             if show_options {

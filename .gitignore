@@ -9,7 +9,7 @@
 # Placeholder shellcode files emitted by loader-example build.rs scripts
 examples/*/shellcode
 
-# Operator build outputs — don't accidentally commit implants or plugin packs
+# Operator build outputs: don't accidentally commit implants or plugin packs
 *.b1n
 !examples/starter-plugins/*.b1n
 *.elf

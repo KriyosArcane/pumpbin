@@ -2,7 +2,7 @@
 //! signed PE onto the generated implant. Native Rust, no subprocess.
 //!
 //! For richer signature manipulation (Authenticode + `.rsrc` clone +
-//! SIP hijack), use the external `trustmebro` module — it wraps the
+//! SIP hijack), use the external `trustmebro` module: it wraps the
 //! TrustMeBro toolkit. This built-in is the "no Python required"
 //! fallback: cert graft only.
 //!

@@ -15,7 +15,7 @@
 //!
 //! On Unix platforms, `SecretBuf` calls `mlock(2)` on construction to
 //! advise the kernel not to swap the buffer to disk. The call is
-//! best-effort — it may fail silently due to `RLIMIT_MEMLOCK` or
+//! best-effort: it may fail silently due to `RLIMIT_MEMLOCK` or
 //! insufficient privileges, in which case the buffer remains usable
 //! but is not swap-protected. On Windows (and other non-Unix targets),
 //! `mlock` is not attempted; buffer contents may be paged to disk
@@ -25,7 +25,7 @@
 //!
 //! # Limits
 //!
-//! Wiping `Vec<u8>` on drop prevents the most common leak vector — the
+//! Wiping `Vec<u8>` on drop prevents the most common leak vector: the
 //! kernel handing the same physical page to another process or to the
 //! same process after `free`. It does NOT defeat a debugger attached to
 //! the live process, swap-file forensics, or memory dumps captured before
@@ -48,7 +48,7 @@ use zeroize::Zeroize;
 #[derive(Default, Zeroize, Clone)]
 pub struct SecretBuf(Vec<u8>);
 
-/// Best-effort `mlock` — returns silently on failure or non-Unix platforms.
+/// Best-effort `mlock`: returns silently on failure or non-Unix platforms.
 #[cfg(unix)]
 fn try_mlock(buf: &[u8]) {
     if !buf.is_empty() {
@@ -57,7 +57,7 @@ fn try_mlock(buf: &[u8]) {
     }
 }
 
-/// Best-effort `munlock` — returns silently on failure or non-Unix platforms.
+/// Best-effort `munlock`: returns silently on failure or non-Unix platforms.
 #[cfg(unix)]
 fn try_munlock(buf: &[u8]) {
     if !buf.is_empty() {

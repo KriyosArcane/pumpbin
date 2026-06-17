@@ -6,7 +6,7 @@
 //! ## Manifest (`pumpbin-module.toml`)
 //!
 //! Read at module-discovery time. The executable is **never** run during
-//! discovery — only the TOML is parsed. A bad manifest logs a warning
+//! discovery: only the TOML is parsed. A bad manifest logs a warning
 //! and skips that module; the rest keep working.
 //!
 //! ## Invocation
@@ -147,7 +147,7 @@ pub struct RequestHeader {
 }
 
 /// Response header on stdout frame 0. Optional `error` short-circuits
-/// the payload — if `error.is_some()`, pumpbin reads the body anyway
+/// the payload: if `error.is_some()`, pumpbin reads the body anyway
 /// (it might contain partial output for debugging) but treats the
 /// invocation as failed.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

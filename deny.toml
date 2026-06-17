@@ -1,9 +1,9 @@
 # cargo-deny configuration for PumpBin.
 #
 # Gates the CI build on:
-# - No known security advisories in any transitive dep.
-# - No banned licenses (e.g. AGPL surprises).
-# - No duplicate crate versions (besides documented exceptions).
+# No known security advisories in any transitive dep.
+# No banned licenses (e.g. AGPL surprises).
+# No duplicate crate versions (besides documented exceptions).
 #
 # Run locally with:  cargo deny check
 

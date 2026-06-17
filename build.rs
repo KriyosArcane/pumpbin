@@ -3,7 +3,7 @@ fn main() {
     // release. The previous `#[cfg(debug_assertions)]` gate meant a release-
     // only build of a fresh checkout failed with "couldn't read
     // src/../capnp/plugin_capnp.rs" if the checked-in generated file was
-    // missing — surfaced when bundling source for a Darwin test on 2026-05-28.
+    // missing: surfaced when bundling source for a Darwin test on 2026-05-28.
     println!("cargo:rerun-if-changed=capnp/plugin.capnp");
     capnpc::CompilerCommand::new()
         .src_prefix("capnp")
