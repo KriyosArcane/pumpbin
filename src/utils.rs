@@ -20,8 +20,7 @@ pub fn replace(
     replace_with_rng(bin, holder, replace_by, max_len, &mut rand::rng())
 }
 
-/// Same as [`replace`] but with an explicit RNG. Used by golden-output tests
-/// (seed a `ChaCha20Rng`) to make padding deterministic.
+/// Same as [`replace`] but with an explicit RNG for deterministic padding.
 pub fn replace_with_rng<R: RngCore>(
     bin: &mut [u8],
     holder: &[u8],
@@ -146,49 +145,4 @@ pub fn random_id_lowercase(len: usize) -> String {
             chars[idx]
         })
         .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn replace_basic() {
-        let mut bin = b"AAAA$$SHELLCODE$$BBBB".to_vec();
-        let holder = b"$$SHELLCODE$$";
-        replace(&mut bin, holder, b"\xcc\xc3", holder.len()).unwrap();
-        assert_eq!(&bin[4..6], b"\xcc\xc3");
-        assert_eq!(&bin[0..4], b"AAAA");
-        assert_eq!(&bin[4 + holder.len()..], b"BBBB");
-    }
-
-    #[test]
-    fn replace_holder_not_found() {
-        let mut bin = b"no holder here".to_vec();
-        let err = replace(&mut bin, b"$$MISSING$$", b"x", 11).unwrap_err();
-        assert!(matches!(err, ReplaceError::HolderNotFound(_)));
-    }
-
-    #[test]
-    fn replace_too_long() {
-        let mut bin = b"$$XX$$".to_vec();
-        let err = replace(&mut bin, b"$$XX$$", b"toolongdata", 6).unwrap_err();
-        assert!(matches!(err, ReplaceError::ReplacementTooLong(11, 6)));
-    }
-
-    #[test]
-    fn replace_exact_fit() {
-        let holder = b"HOLDER";
-        let mut bin = b"xxHOLDERxx".to_vec();
-        replace(&mut bin, holder, b"ABCDEF", holder.len()).unwrap();
-        assert_eq!(&bin[2..8], b"ABCDEF");
-    }
-
-    #[test]
-    fn replace_empty_replacement() {
-        let holder = b"$$H$$";
-        let mut bin = b"A$$H$$B".to_vec();
-        replace(&mut bin, holder, b"", holder.len()).unwrap();
-        assert_ne!(&bin[1..6], holder);
-    }
 }

@@ -2,7 +2,7 @@
 
 Tiny external `encrypt` module written in Python. It XORs raw shellcode bytes with a single-byte key and returns the encrypted bytes to PumpBin.
 
-This is an authoring example, not an OPSEC recommendation.
+This is an authoring example, not production guidance.
 
 ## Install
 
@@ -22,9 +22,10 @@ pumpbin-cli module test xor-demo-encrypt /tmp/sc.bin --output /tmp/sc.xor --arg 
 
 ## Use
 
-Bake the module into a loader pack with `--encrypt-module xor-demo-encrypt`. Runtime args are scoped by module id:
+Bake the module and its args into a loader pack:
 
 ```bash
-pumpbin-cli generate --pack loader.b1n --shellcode payload.bin \
+pumpbin-cli create-b1n --template loader.exe --output loader.b1n \
+  --encrypt-module xor-demo-encrypt \
   --module-config module:xor-demo-encrypt.key=0x41
 ```

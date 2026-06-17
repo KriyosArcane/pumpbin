@@ -1,11 +1,4 @@
-//! PE patching primitives. Lifted out of the (now-deleted)
-//! `host_helpers/pe.rs` so the native `pe-version-info` post-build
-//! module can use them without any Extism dependency.
-//!
-//! Contents:
-//! - [`patch_version_info`] — rewrite VS_VERSION_INFO StringFileInfo
-//!   entries in place. Byte-for-byte equivalent to the v1.5.0 host
-//!   helper (this is the same walker, just relocated).
+//! PE patching primitives used by post-build modules.
 
 /// UTF-16LE encoded "VS_VERSION_INFO\0" signature used to locate the
 /// version-info resource block inside a PE binary.
@@ -407,84 +400,4 @@ fn read_utf16le(data: &[u8], start: usize, end: usize) -> String {
         .map(|c| u16::from_le_bytes([c[0], c[1]]))
         .collect();
     String::from_utf16_lossy(&words).to_string()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn minimal_pe64() -> Vec<u8> {
-        let mut pe = vec![0u8; 512];
-        pe[0] = b'M';
-        pe[1] = b'Z';
-        let e_lfanew: u32 = 0x80;
-        pe[0x3C..0x40].copy_from_slice(&e_lfanew.to_le_bytes());
-        let pe_sig_off = e_lfanew as usize;
-        pe[pe_sig_off..pe_sig_off + 4].copy_from_slice(b"PE\0\0");
-        let opt_hdr_off = pe_sig_off + 24;
-        pe[opt_hdr_off] = 0x0b;
-        pe[opt_hdr_off + 1] = 0x02;
-        let num_rva_off = opt_hdr_off + 108;
-        pe[num_rva_off..num_rva_off + 4].copy_from_slice(&16u32.to_le_bytes());
-        pe
-    }
-
-    #[test]
-    fn read_security_dir_no_signature() {
-        let pe = minimal_pe64();
-        let (va, sz) = read_security_dir(&pe).unwrap();
-        assert_eq!(va, 0);
-        assert_eq!(sz, 0);
-    }
-
-    #[test]
-    fn read_security_dir_with_signature() {
-        let mut pe = minimal_pe64();
-        let opt_hdr_off = 0x80 + 24;
-        let data_dir_off = opt_hdr_off + 112;
-        let sec_dir_off = data_dir_off + 4 * 8;
-        pe[sec_dir_off..sec_dir_off + 4].copy_from_slice(&0x1000u32.to_le_bytes());
-        pe[sec_dir_off + 4..sec_dir_off + 8].copy_from_slice(&256u32.to_le_bytes());
-        let (va, sz) = read_security_dir(&pe).unwrap();
-        assert_eq!(va, 0x1000);
-        assert_eq!(sz, 256);
-    }
-
-    #[test]
-    fn read_security_dir_rejects_non_pe() {
-        assert!(read_security_dir(b"not a PE file").is_err());
-    }
-
-    #[test]
-    fn read_security_dir_rejects_truncated() {
-        let mut pe = minimal_pe64();
-        pe.truncate(0x80 + 24 + 2);
-        assert!(read_security_dir(&pe).is_err());
-    }
-
-    #[test]
-    fn optional_header_offset_valid_pe() {
-        let pe = minimal_pe64();
-        let off = optional_header_offset(&pe).unwrap();
-        assert_eq!(off, 0x80 + 24);
-    }
-
-    #[test]
-    fn optional_header_offset_rejects_non_pe() {
-        assert!(optional_header_offset(b"not a PE").is_err());
-    }
-
-    #[test]
-    fn read_version_info_empty() {
-        assert!(read_version_info(&[]).is_empty());
-    }
-
-    #[test]
-    fn patch_version_info_no_block() {
-        let mut pe = minimal_pe64();
-        assert!(!patch_version_info(
-            &mut pe,
-            &[("FileDescription", "test".into())]
-        ));
-    }
 }

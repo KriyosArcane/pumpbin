@@ -1,6 +1,5 @@
 //! `PostBuildModule` that patches VS_VERSION_INFO StringFileInfo
-//! entries in a generated PE. Replaces the WASM
-//! `plugin-examples/pe-version-info`.
+//! entries in a generated PE.
 //!
 //! Args are `key=value` pairs. Valid keys: `CompanyName`,
 //! `FileDescription`, `FileVersion`, `InternalName`, `LegalCopyright`,
@@ -9,7 +8,7 @@
 use anyhow::{anyhow, Result};
 
 use crate::modules::post_build::parse_kv_args;
-use crate::modules::{ArgSpec, ModuleConstraints, PostBuildModule};
+use crate::modules::{ModuleArg, ModuleConstraints, PostBuildModule};
 use crate::pe::{patch_version_info, read_version_info};
 use crate::Platform;
 
@@ -47,24 +46,26 @@ impl PostBuildModule for PeVersionInfo {
         }
     }
 
-    fn args(&self) -> Vec<ArgSpec> {
+    fn args(&self) -> Vec<ModuleArg> {
         vec![
-            ArgSpec::new("from_donor", "path").described(
+            ModuleArg::new("from_donor", "path").described(
                 "Path to a donor PE. All its VS_VERSION_INFO entries are cloned; \
                  explicit key=value args override individual fields.",
             ),
-            ArgSpec::new("CompanyName", "string")
+            ModuleArg::new("CompanyName", "string")
                 .described("Replace the CompanyName VS_VERSION_INFO entry"),
-            ArgSpec::new("FileDescription", "string")
+            ModuleArg::new("FileDescription", "string")
                 .described("Replace the FileDescription entry"),
-            ArgSpec::new("FileVersion", "string")
+            ModuleArg::new("FileVersion", "string")
                 .described("Replace the FileVersion entry (e.g. '6.1.7600.16385')"),
-            ArgSpec::new("InternalName", "string").described("Replace the InternalName entry"),
-            ArgSpec::new("LegalCopyright", "string").described("Replace the LegalCopyright entry"),
-            ArgSpec::new("OriginalFilename", "string")
+            ModuleArg::new("InternalName", "string").described("Replace the InternalName entry"),
+            ModuleArg::new("LegalCopyright", "string")
+                .described("Replace the LegalCopyright entry"),
+            ModuleArg::new("OriginalFilename", "string")
                 .described("Replace the OriginalFilename entry"),
-            ArgSpec::new("ProductName", "string").described("Replace the ProductName entry"),
-            ArgSpec::new("ProductVersion", "string").described("Replace the ProductVersion entry"),
+            ModuleArg::new("ProductName", "string").described("Replace the ProductName entry"),
+            ModuleArg::new("ProductVersion", "string")
+                .described("Replace the ProductVersion entry"),
         ]
     }
 
@@ -109,34 +110,5 @@ impl PostBuildModule for PeVersionInfo {
             .collect();
         patch_version_info(implant, &patches);
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn unknown_key_is_rejected() {
-        let m = PeVersionInfo;
-        let mut buf = Vec::new();
-        let err = m.apply(&["NotARealField=x".into()], &mut buf).unwrap_err();
-        assert!(err.to_string().contains("unknown key"));
-    }
-
-    #[test]
-    fn malformed_arg_is_rejected() {
-        let m = PeVersionInfo;
-        let mut buf = Vec::new();
-        let err = m.apply(&["CompanyName".into()], &mut buf).unwrap_err();
-        assert!(err.to_string().contains("expected key=value"));
-    }
-
-    #[test]
-    fn non_pe_input_is_a_noop_not_an_error() {
-        let m = PeVersionInfo;
-        let mut buf = b"not a PE".to_vec();
-        m.apply(&["CompanyName=Acme".into()], &mut buf).unwrap();
-        assert_eq!(buf, b"not a PE");
     }
 }

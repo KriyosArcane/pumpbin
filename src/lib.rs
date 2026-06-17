@@ -1,4 +1,3 @@
-pub mod convert;
 pub mod error;
 pub mod inspect;
 pub mod logging;
@@ -7,8 +6,6 @@ pub mod pack;
 pub mod pe;
 pub mod plugin;
 pub mod plugin_system;
-pub mod profile;
-pub mod sbom;
 pub mod scaffold;
 pub mod secret;
 pub mod utils;
@@ -16,11 +13,8 @@ pub mod plugin_capnp {
     include!("../capnp/plugin_capnp.rs");
 }
 
-pub use convert::OutputFormat;
 pub use error::{PumpBinError, PumpBinResult};
 pub use plugin_system::Pass;
-pub use profile::{BuildArtifact, Profile, PROFILE_SCHEMA};
-pub use sbom::{Sbom, SBOM_SCHEMA};
 pub use secret::SecretBuf;
 
 use serde::{Deserialize, Serialize};

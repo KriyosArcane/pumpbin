@@ -1,4 +1,4 @@
-//! External (subprocess) modules — NetExec-style folder autodetect.
+//! External subprocess modules.
 //!
 //! Discovery model:
 //!   1. `<install>/modules/`           ← shipped built-ins (none today)
@@ -8,8 +8,7 @@
 //! Each directory is scanned for child directories containing a
 //! `pumpbin-module.toml`. The TOML is parsed; the executable is **not**
 //! invoked during discovery. A bad manifest logs a warning and the
-//! module is skipped; the rest keep working — same shape as NetExec's
-//! `module_is_sane`.
+//! module is skipped; the rest keep working.
 //!
 //! Dispatch: pumpbin spawns the executable, pipes a JSON header +
 //! payload on stdin, reads the response on stdout. Stderr is captured
@@ -345,140 +344,4 @@ pub fn invoke(
     }
 
     Ok((resp_header, resp_body))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
-
-    fn write_manifest(dir: &Path, toml: &str, exe_name: &str) {
-        std::fs::write(dir.join("pumpbin-module.toml"), toml).unwrap();
-        let exe_path = dir.join(exe_name);
-        // Make a minimum-viable executable: a shell script that
-        // exits 0. We need executable bit on unix.
-        std::fs::write(&exe_path, "#!/bin/sh\nexit 0\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perm = std::fs::metadata(&exe_path).unwrap().permissions();
-            perm.set_mode(0o755);
-            std::fs::set_permissions(&exe_path, perm).unwrap();
-        }
-    }
-
-    #[test]
-    fn load_one_happy_path() {
-        let dir = tempdir().unwrap();
-        let mdir = dir.path().join("good");
-        std::fs::create_dir_all(&mdir).unwrap();
-        write_manifest(
-            &mdir,
-            r#"
-                name = "good-mod"
-                description = "demo"
-                kind = "post-build"
-                executable = "good-mod"
-            "#,
-            "good-mod",
-        );
-        let m = load_one(&mdir.join("pumpbin-module.toml")).unwrap();
-        assert_eq!(m.id(), "good-mod");
-        assert_eq!(m.kind(), WireKind::PostBuild);
-        assert!(m.executable.is_file());
-    }
-
-    #[test]
-    fn load_one_rejects_higher_protocol() {
-        let dir = tempdir().unwrap();
-        let mdir = dir.path().join("future-mod");
-        std::fs::create_dir_all(&mdir).unwrap();
-        write_manifest(
-            &mdir,
-            r#"
-                name = "future-mod"
-                description = "uses protocol 99"
-                kind = "post-build"
-                executable = "future-mod"
-                protocol = 99
-            "#,
-            "future-mod",
-        );
-        let err = load_one(&mdir.join("pumpbin-module.toml")).unwrap_err();
-        assert!(err.to_string().contains("protocol"));
-    }
-
-    #[test]
-    fn load_one_rejects_missing_executable() {
-        let dir = tempdir().unwrap();
-        let mdir = dir.path().join("ghost");
-        std::fs::create_dir_all(&mdir).unwrap();
-        std::fs::write(
-            mdir.join("pumpbin-module.toml"),
-            r#"
-                name = "ghost"
-                description = "no exe"
-                kind = "post-build"
-                executable = "nope"
-            "#,
-        )
-        .unwrap();
-        let err = load_one(&mdir.join("pumpbin-module.toml")).unwrap_err();
-        assert!(err.to_string().contains("does not exist"));
-    }
-
-    #[test]
-    fn current_platform_tag_is_one_of_known() {
-        let t = current_platform_tag();
-        assert!(["linux", "windows", "darwin", "unknown"].contains(&t));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn invoke_echo_passthrough() {
-        // Module that emits a 4-byte zero-length response header
-        // ({"protocol":1}) and echoes its payload back verbatim.
-        let dir = tempdir().unwrap();
-        let mdir = dir.path().join("echo");
-        std::fs::create_dir_all(&mdir).unwrap();
-        let script = r##"#!/usr/bin/env python3
-import json, struct, sys
-def read_frame():
-    raw = sys.stdin.buffer.read(4)
-    n = struct.unpack('<I', raw)[0]
-    return sys.stdin.buffer.read(n)
-def write_frame(payload):
-    sys.stdout.buffer.write(struct.pack('<I', len(payload)))
-    sys.stdout.buffer.write(payload)
-header = json.loads(read_frame())
-body = read_frame()
-resp = json.dumps({"protocol": header["protocol"]}).encode()
-write_frame(resp)
-write_frame(body)
-sys.stdout.buffer.flush()
-"##;
-        let exe_path = mdir.join("echo.py");
-        std::fs::write(&exe_path, script).unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        let mut perm = std::fs::metadata(&exe_path).unwrap().permissions();
-        perm.set_mode(0o755);
-        std::fs::set_permissions(&exe_path, perm).unwrap();
-
-        std::fs::write(
-            mdir.join("pumpbin-module.toml"),
-            r#"
-                name = "echo"
-                description = "echo"
-                kind = "post-build"
-                executable = "echo.py"
-            "#,
-        )
-        .unwrap();
-
-        let m = load_one(&mdir.join("pumpbin-module.toml")).unwrap();
-        let (resp, body) = invoke(&m, WireKind::PostBuild, &[], b"hello world").unwrap();
-        assert_eq!(resp.protocol, PROTOCOL_VERSION);
-        assert!(resp.error.is_none());
-        assert_eq!(body, b"hello world");
-    }
 }

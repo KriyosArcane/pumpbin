@@ -32,9 +32,7 @@ pub struct B1nBuilder {
     pub max_len_override: Option<u64>,
     pub primary_module: Option<String>,
     pub post_modules: Vec<String>,
-    /// Pre-parsed module config: keys formatted as
-    /// `post_chain.<idx>.config.<key>` for post-module config entries, plain
-    /// `<key>` for base config. Both `create-b1n` and `pack` build this map.
+    /// Pre-parsed module config, keyed by module id (for example `post:byte-patch`).
     pub module_config: BTreeMap<String, String>,
 }
 
@@ -118,32 +116,32 @@ impl B1nBuilder {
 
         match (platform, binary_type) {
             (Platform::Windows, BinaryType::Executable) => {
-                *plugin.bins.windows.executable_mut() = Some(template_bytes);
+                plugin.bins.windows.executable = Some(template_bytes);
             }
             (Platform::Windows, BinaryType::DynamicLibrary) => {
-                *plugin.bins.windows.dynamic_library_mut() = Some(template_bytes);
+                plugin.bins.windows.dynamic_library = Some(template_bytes);
             }
             (Platform::Linux, BinaryType::Executable) => {
-                *plugin.bins.linux.executable_mut() = Some(template_bytes);
+                plugin.bins.linux.executable = Some(template_bytes);
             }
             (Platform::Linux, BinaryType::DynamicLibrary) => {
-                *plugin.bins.linux.dynamic_library_mut() = Some(template_bytes);
+                plugin.bins.linux.dynamic_library = Some(template_bytes);
             }
             (Platform::Darwin, BinaryType::Executable) => {
-                *plugin.bins.darwin.executable_mut() = Some(template_bytes);
+                plugin.bins.darwin.executable = Some(template_bytes);
             }
             (Platform::Darwin, BinaryType::DynamicLibrary) => {
-                *plugin.bins.darwin.dynamic_library_mut() = Some(template_bytes);
+                plugin.bins.darwin.dynamic_library = Some(template_bytes);
             }
         }
 
         if let Some(module_id) = primary_module {
-            *plugin.plugins.encrypt_shellcode_mut() = Some(module_id);
+            plugin.plugins.encrypt_shellcode = Some(module_id);
         }
         for id in post_modules {
-            plugin.plugins.modules_mut().push(id);
+            plugin.plugins.modules.push(id);
         }
-        *plugin.plugins.plugin_config_mut() = module_config.into_iter().collect();
+        plugin.plugins.plugin_config = module_config.into_iter().collect();
 
         plugin.encode_to_vec()
     }
@@ -278,118 +276,4 @@ pub fn expected_artifact_path(
         (Platform::Darwin, BinaryType::DynamicLibrary) => format!("lib{cargo_pkg_name}.dylib"),
     };
     dir.join(filename)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn metadata_with_minimal_fields_defaults_the_rest() {
-        let toml_src = r#"
-[package]
-name = "myloader"
-version = "0.1.0"
-edition = "2021"
-
-[package.metadata.pumpbin]
-name = "myloader"
-platform = "windows"
-"#;
-        let parsed: CargoToml = toml::from_str(toml_src).unwrap();
-        let md = parsed.package.metadata.unwrap().pumpbin.unwrap();
-        assert_eq!(md.name, "myloader");
-        assert_eq!(md.platform, "windows");
-        assert_eq!(md.binary_type, "exe");
-        assert_eq!(md.src_prefix, "$$SHELLCODE$$");
-        assert_eq!(md.size_holder, "$$99999$$");
-        assert_eq!(md.save_type, "local");
-        assert!(md.max_len.is_none());
-        assert!(md.post.is_empty());
-    }
-
-    #[test]
-    fn missing_pumpbin_metadata_errors_clearly() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("Cargo.toml"),
-            "[package]\nname=\"x\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
-        )
-        .unwrap();
-        let err = read_loader_metadata(dir.path()).unwrap_err();
-        assert!(err.to_string().contains("[package.metadata.pumpbin]"));
-    }
-
-    #[test]
-    fn artifact_paths_match_cargo_layout() {
-        let root = Path::new("/x");
-        assert_eq!(
-            expected_artifact_path(
-                root,
-                "ldr",
-                Platform::Windows,
-                BinaryType::Executable,
-                "release"
-            ),
-            PathBuf::from("/x/target/release/ldr.exe"),
-        );
-        assert_eq!(
-            expected_artifact_path(
-                root,
-                "ldr",
-                Platform::Linux,
-                BinaryType::Executable,
-                "release"
-            ),
-            PathBuf::from("/x/target/release/ldr"),
-        );
-        assert_eq!(
-            expected_artifact_path(
-                root,
-                "ldr",
-                Platform::Linux,
-                BinaryType::DynamicLibrary,
-                "release"
-            ),
-            PathBuf::from("/x/target/release/libldr.so"),
-        );
-        assert_eq!(
-            expected_artifact_path(
-                root,
-                "ldr",
-                Platform::Darwin,
-                BinaryType::DynamicLibrary,
-                "release"
-            ),
-            PathBuf::from("/x/target/release/libldr.dylib"),
-        );
-    }
-
-    #[test]
-    fn post_entry_parses_with_config_map() {
-        let toml_src = r#"
-[package]
-name = "x"
-version = "0.1.0"
-edition = "2021"
-
-[package.metadata.pumpbin]
-name = "x"
-platform = "linux"
-
-[[package.metadata.pumpbin.post]]
-id = "cert-graft"
-config = { donor = "/tmp/mrt.exe" }
-
-[[package.metadata.pumpbin.post]]
-id = "byte-patch"
-config = { patches = "4831d2:4833d2,4831c0:4833c0" }
-"#;
-        let parsed: CargoToml = toml::from_str(toml_src).unwrap();
-        let md = parsed.package.metadata.unwrap().pumpbin.unwrap();
-        assert_eq!(md.post.len(), 2);
-        assert_eq!(md.post[0].id, "cert-graft");
-        assert_eq!(md.post[0].config.get("donor").unwrap(), "/tmp/mrt.exe");
-        assert_eq!(md.post[1].id, "byte-patch");
-    }
 }

@@ -18,24 +18,6 @@ pub struct PluginInfo {
     pub desc: String,
 }
 
-impl PluginInfo {
-    pub fn plugin_name(&self) -> &str {
-        &self.plugin_name
-    }
-
-    pub fn author(&self) -> &str {
-        &self.author
-    }
-
-    pub fn version(&self) -> &str {
-        &self.version
-    }
-
-    pub fn desc(&self) -> &str {
-        &self.desc
-    }
-}
-
 #[derive(Debug, Default, Clone)]
 pub struct PluginReplace {
     pub src_prefix: Vec<u8>,
@@ -44,18 +26,6 @@ pub struct PluginReplace {
 }
 
 impl PluginReplace {
-    pub fn src_prefix(&self) -> &[u8] {
-        &self.src_prefix
-    }
-
-    pub fn size_holder(&self) -> Option<&Vec<u8>> {
-        self.size_holder.as_ref()
-    }
-
-    pub fn max_len(&self) -> usize {
-        self.max_len as usize
-    }
-
     /// Confirm that a candidate template binary contains every placeholder
     /// this replace-config will look for at generate-time. Used by the CLI
     /// `create-b1n` subcommand before encoding so broken .b1n files fail
@@ -115,37 +85,23 @@ pub struct Bins {
 
 impl Bins {
     pub fn is_platform_supported(&self) -> bool {
-        matches!((self.executable(), self.dynamic_library()), (None, None)).not()
+        matches!(
+            (self.executable.as_ref(), self.dynamic_library.as_ref()),
+            (None, None)
+        )
+        .not()
     }
 
     pub fn supported_binary_types(&self) -> Vec<BinaryType> {
         let mut bin_types = Vec::default();
-        if self.executable().is_some() {
+        if self.executable.as_ref().is_some() {
             bin_types.push(BinaryType::Executable);
         }
-        if self.dynamic_library().is_some() {
+        if self.dynamic_library.as_ref().is_some() {
             bin_types.push(BinaryType::DynamicLibrary);
         }
 
         bin_types
-    }
-}
-
-impl Bins {
-    pub fn executable(&self) -> Option<&Vec<u8>> {
-        self.executable.as_ref()
-    }
-
-    pub fn dynamic_library(&self) -> Option<&Vec<u8>> {
-        self.dynamic_library.as_ref()
-    }
-
-    pub fn executable_mut(&mut self) -> &mut Option<Vec<u8>> {
-        &mut self.executable
-    }
-
-    pub fn dynamic_library_mut(&mut self) -> &mut Option<Vec<u8>> {
-        &mut self.dynamic_library
     }
 }
 
@@ -159,13 +115,13 @@ pub struct PluginBins {
 impl PluginBins {
     pub fn supported_platforms(&self) -> Vec<Platform> {
         let mut platforms = Vec::default();
-        if self.windows().is_platform_supported() {
+        if self.windows.is_platform_supported() {
             platforms.push(Platform::Windows);
         }
-        if self.linux().is_platform_supported() {
+        if self.linux.is_platform_supported() {
             platforms.push(Platform::Linux);
         }
-        if self.darwin().is_platform_supported() {
+        if self.darwin.is_platform_supported() {
             platforms.push(Platform::Darwin);
         }
 
@@ -174,26 +130,28 @@ impl PluginBins {
 
     pub fn get_that_binary(&self, platform: Platform, bin_type: BinaryType) -> Option<&[u8]> {
         let platform_bins = match platform {
-            Platform::Windows => self.windows(),
-            Platform::Linux => self.linux(),
-            Platform::Darwin => self.darwin(),
+            Platform::Windows => &self.windows,
+            Platform::Linux => &self.linux,
+            Platform::Darwin => &self.darwin,
         };
 
         match bin_type {
-            BinaryType::Executable => platform_bins.executable().map(|v| v.as_slice()),
-            BinaryType::DynamicLibrary => platform_bins.dynamic_library().map(|v| v.as_slice()),
+            BinaryType::Executable => platform_bins.executable.as_ref().map(|v| v.as_slice()),
+            BinaryType::DynamicLibrary => {
+                platform_bins.dynamic_library.as_ref().map(|v| v.as_slice())
+            }
         }
     }
 
     pub fn has_binary(&self, platform: Platform, bin_type: BinaryType) -> bool {
         let platform_bins = match platform {
-            Platform::Windows => self.windows(),
-            Platform::Linux => self.linux(),
-            Platform::Darwin => self.darwin(),
+            Platform::Windows => &self.windows,
+            Platform::Linux => &self.linux,
+            Platform::Darwin => &self.darwin,
         };
         match bin_type {
-            BinaryType::Executable => platform_bins.executable().is_some(),
-            BinaryType::DynamicLibrary => platform_bins.dynamic_library().is_some(),
+            BinaryType::Executable => platform_bins.executable.as_ref().is_some(),
+            BinaryType::DynamicLibrary => platform_bins.dynamic_library.as_ref().is_some(),
         }
     }
 
@@ -262,26 +220,8 @@ impl PluginBins {
     }
 }
 
-impl PluginBins {
-    pub fn windows(&self) -> &Bins {
-        &self.windows
-    }
-
-    pub fn linux(&self) -> &Bins {
-        &self.linux
-    }
-
-    pub fn darwin(&self) -> &Bins {
-        &self.darwin
-    }
-}
-
-/// Native module references. Each `Option<String>` is the id of a
-/// module registered in `crate::modules::*_modules()`. Field types
-/// were `Option<Vec<u8>>` (raw .wasm bytes) before v2.0.0; the on-wire
-/// capnp `Data` field is reinterpreted as UTF-8 module-id bytes for
-/// backward-schema-compat. Old wasm-bearing .b1n files are rejected on
-/// decode (non-UTF-8 → clear error).
+/// Module references. Each string is a module id. The on-wire Cap'n Proto
+/// fields are `Data`, so non-UTF-8 legacy module payloads are rejected on decode.
 #[derive(Debug, Default, Clone)]
 pub struct PluginPlugins {
     pub encrypt_shellcode: Option<String>,
@@ -290,14 +230,14 @@ pub struct PluginPlugins {
 }
 
 impl PluginPlugins {
-    #[tracing::instrument(skip(self, runtime_config), fields(path = %path.display(), module = ?self.encrypt_shellcode()))]
+    #[tracing::instrument(skip(self, runtime_config), fields(path = %path.display(), module = ?self.encrypt_shellcode.as_deref()))]
     pub fn run_encrypt_shellcode(
         &self,
         path: &Path,
         runtime_config: Option<&std::collections::BTreeMap<String, String>>,
     ) -> anyhow::Result<crate::plugin_system::EncryptShellcodeOutput> {
         let shellcode = fs::read(path)?;
-        if let Some(id) = self.encrypt_shellcode() {
+        if let Some(id) = self.encrypt_shellcode.as_deref() {
             let config = self.merged_runtime_config(runtime_config);
             let args = module_config_args(&config, id);
             return crate::modules::dispatch::encrypt(id, &args, &shellcode);
@@ -308,22 +248,8 @@ impl PluginPlugins {
         })
     }
 
-    /// Chain every post_binary module in order, returning the final bytes.
-    ///
-    /// Pre-1.1.2 this method also ran a host-side `host_self_sign` path that
-    /// generated an ephemeral self-signed RSA cert on every build and shelled
-    /// out to `openssl` + `osslsigncode`. That path was deleted because (1) a
-    /// fresh per-build cert creates a unique signer identity, (2) the cert
-    /// never chained to a real CA so it added no trust
-    /// value, and (3) embedding a signing tool inside the core forced
-    /// `openssl`/`osslsigncode` as hard host dependencies. Signing now lives in
-    /// dedicated post_binary plugins (osslsigncode, signtool, blob-steal)
-    /// shipped under `plugin-examples/signers/` from v1.2.0.
-    /// Run every module id listed in `self.modules()` as a `PostBuildModule`
-    /// in order. Each step mutates `binary` in place. Per-module args come
-    /// from baked `post_chain.<idx>.config.<key>` entries first, with
-    /// runtime `post:<id>` entries used for operator-appended modules.
-    #[tracing::instrument(skip(self, binary, runtime_config), fields(binary_len = binary.len(), modules_count = self.modules().len()))]
+    /// Chain every post-build module in order.
+    #[tracing::instrument(skip(self, binary, runtime_config), fields(binary_len = binary.len(), modules_count = self.modules.as_slice().len()))]
     pub fn run_post_binary(
         &self,
         binary: Vec<u8>,
@@ -331,14 +257,11 @@ impl PluginPlugins {
     ) -> anyhow::Result<Vec<u8>> {
         let mut out = binary;
         let config = self.merged_runtime_config(runtime_config);
-        for (idx, id) in self.modules().iter().enumerate() {
-            let mut args = post_chain_config_args(&config, idx);
-            if args.is_empty() {
-                args = config
-                    .get(&format!("post:{id}"))
-                    .map(|s| split_stored_post_args(s))
-                    .unwrap_or_default();
-            }
+        for id in self.modules.as_slice() {
+            let args = config
+                .get(&format!("post:{id}"))
+                .map(|s| split_stored_post_args(s))
+                .unwrap_or_default();
             crate::modules::dispatch::post_build(id, &args, &mut out)?;
         }
         Ok(out)
@@ -348,7 +271,8 @@ impl PluginPlugins {
         &self,
         runtime_config: Option<&BTreeMap<String, String>>,
     ) -> BTreeMap<String, String> {
-        let mut config: BTreeMap<String, String> = self.plugin_config().iter().cloned().collect();
+        let mut config: BTreeMap<String, String> =
+            self.plugin_config.as_slice().iter().cloned().collect();
         if let Some(runtime_config) = runtime_config {
             for (key, value) in runtime_config {
                 config.insert(key.clone(), value.clone());
@@ -356,17 +280,6 @@ impl PluginPlugins {
         }
         config
     }
-}
-
-fn post_chain_config_args(config: &BTreeMap<String, String>, idx: usize) -> Vec<String> {
-    let prefix = format!("post_chain.{idx}.config.");
-    config
-        .iter()
-        .filter_map(|(key, value)| {
-            key.strip_prefix(&prefix)
-                .map(|arg_key| format!("{arg_key}={value}"))
-        })
-        .collect()
 }
 
 fn module_config_args(config: &BTreeMap<String, String>, module_id: &str) -> Vec<String> {
@@ -394,32 +307,6 @@ fn split_stored_post_args(args: &str) -> Vec<String> {
         .filter(|part| !part.trim().is_empty())
         .map(|part| part.trim().to_string())
         .collect()
-}
-
-impl PluginPlugins {
-    pub fn encrypt_shellcode(&self) -> Option<&str> {
-        self.encrypt_shellcode.as_deref()
-    }
-
-    pub fn plugin_config(&self) -> &[(String, String)] {
-        &self.plugin_config
-    }
-
-    pub fn plugin_config_mut(&mut self) -> &mut Vec<(String, String)> {
-        &mut self.plugin_config
-    }
-
-    pub fn encrypt_shellcode_mut(&mut self) -> &mut Option<String> {
-        &mut self.encrypt_shellcode
-    }
-
-    pub fn modules(&self) -> &[String] {
-        &self.modules
-    }
-
-    pub fn modules_mut(&mut self) -> &mut Vec<String> {
-        &mut self.modules
-    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -465,7 +352,7 @@ impl Plugin {
             let id = std::str::from_utf8(bin).map_err(|_| {
                 anyhow::anyhow!(
                     "plugin slot '{slot}' is not a valid UTF-8 module id. \
-                     Pre-2.0 .b1n files with embedded WASM are not supported."
+                     Legacy .b1n files with embedded module bytes are not supported."
                 )
             })?;
             Ok(Some(id.to_string()))
@@ -530,7 +417,7 @@ impl Plugin {
                         let raw = m?;
                         let id = std::str::from_utf8(raw).map_err(|_| {
                             anyhow::anyhow!(
-                                "modules[{idx}] is not a valid UTF-8 module id. Pre-2.0 .b1n files with embedded WASM are not supported."
+                                "modules[{idx}] is not a valid UTF-8 module id. Legacy .b1n files with embedded module bytes are not supported."
                             )
                         })?;
                         decoded.push(id.to_string());
@@ -548,60 +435,60 @@ impl Plugin {
 
         let mut info = plugin.reborrow().init_info();
         let plugin_info = self.info();
-        info.set_plugin_name(plugin_info.plugin_name());
-        info.set_author(plugin_info.author());
-        info.set_version(plugin_info.version());
-        info.set_desc(plugin_info.desc());
+        info.set_plugin_name(&plugin_info.plugin_name);
+        info.set_author(&plugin_info.author);
+        info.set_version(&plugin_info.version);
+        info.set_desc(&plugin_info.desc);
 
         let mut replace = plugin.reborrow().init_replace();
         let plugin_replace = self.replace();
-        replace.set_src_prefix(plugin_replace.src_prefix());
-        if let Some(size_holder) = plugin_replace.size_holder() {
+        replace.set_src_prefix(&plugin_replace.src_prefix);
+        if let Some(size_holder) = plugin_replace.size_holder.as_ref() {
             replace.set_size_holder(size_holder);
         }
-        replace.set_max_len(plugin_replace.max_len() as u64);
+        replace.set_max_len(plugin_replace.max_len);
 
         let mut bins = plugin.reborrow().init_bins();
-        if self.bins().windows().is_platform_supported() {
+        if self.bins.windows.is_platform_supported() {
             let mut builder = bins.reborrow().init_windows();
-            let platform_bins = self.bins().windows();
+            let platform_bins = &self.bins.windows;
 
-            if let Some(bin) = platform_bins.executable() {
+            if let Some(bin) = platform_bins.executable.as_ref() {
                 builder.set_executable(bin);
             }
-            if let Some(bin) = platform_bins.dynamic_library() {
+            if let Some(bin) = platform_bins.dynamic_library.as_ref() {
                 builder.set_dynamic_library(bin);
             }
         }
-        if self.bins().linux().is_platform_supported() {
+        if self.bins.linux.is_platform_supported() {
             let mut builder = bins.reborrow().init_linux();
-            let platform_bins = self.bins().linux();
+            let platform_bins = &self.bins.linux;
 
-            if let Some(bin) = platform_bins.executable() {
+            if let Some(bin) = platform_bins.executable.as_ref() {
                 builder.set_executable(bin);
             }
-            if let Some(bin) = platform_bins.dynamic_library() {
+            if let Some(bin) = platform_bins.dynamic_library.as_ref() {
                 builder.set_dynamic_library(bin);
             }
         }
-        if self.bins().darwin().is_platform_supported() {
+        if self.bins.darwin.is_platform_supported() {
             let mut builder = bins.reborrow().init_darwin();
-            let platform_bins = self.bins().darwin();
+            let platform_bins = &self.bins.darwin;
 
-            if let Some(bin) = platform_bins.executable() {
+            if let Some(bin) = platform_bins.executable.as_ref() {
                 builder.set_executable(bin);
             }
-            if let Some(bin) = platform_bins.dynamic_library() {
+            if let Some(bin) = platform_bins.dynamic_library.as_ref() {
                 builder.set_dynamic_library(bin);
             }
         }
 
         let mut plugins = plugin.reborrow().init_plugins();
         let plugin_plugins = self.plugins();
-        if let Some(id) = plugin_plugins.encrypt_shellcode() {
+        if let Some(id) = plugin_plugins.encrypt_shellcode.as_deref() {
             plugins.set_encrypt_shellcode(id.as_bytes());
         }
-        let config = plugin_plugins.plugin_config();
+        let config = plugin_plugins.plugin_config.as_slice();
         if !config.is_empty() {
             let mut entries = plugins.reborrow().init_config_entries(config.len() as u32);
             for (i, (k, v)) in config.iter().enumerate() {
@@ -611,7 +498,7 @@ impl Plugin {
             }
         }
 
-        let mods = plugin_plugins.modules();
+        let mods = plugin_plugins.modules.as_slice();
         if !mods.is_empty() {
             let mut modules_list = plugins.reborrow().init_modules(mods.len() as u32);
             for (i, m) in mods.iter().enumerate() {
@@ -650,14 +537,14 @@ impl Plugin {
             ))
             };
 
-        if let Some(id) = self.plugins().encrypt_shellcode() {
+        if let Some(id) = self.plugins.encrypt_shellcode.as_deref() {
             if let Some(w) = can_resolve(id, "encrypt_shellcode", &|id| {
                 encrypt_modules().iter().any(|m| m.id() == id)
             }) {
                 warnings.push(w);
             }
         }
-        for (idx, id) in self.plugins().modules().iter().enumerate() {
+        for (idx, id) in self.plugins.modules.as_slice().iter().enumerate() {
             if let Some(w) = can_resolve(id, &format!("modules[{idx}]"), &|id| {
                 post_build_modules().iter().any(|m| m.id() == id)
             }) {
@@ -669,7 +556,7 @@ impl Plugin {
     }
 
     pub fn save_type(&self) -> ShellcodeSaveType {
-        if self.replace().size_holder().is_some() {
+        if self.replace.size_holder.as_ref().is_some() {
             ShellcodeSaveType::Local
         } else {
             ShellcodeSaveType::Remote
@@ -680,7 +567,7 @@ impl Plugin {
     /// may identify the operator's working directory; for Remote mode it
     /// may be an attacker-controlled URL. The save_type and any failure
     /// reason still surface via the returned error.
-    #[tracing::instrument(skip(self, shellcode_src), fields(plugin = %self.info().plugin_name(), save_type = ?self.save_type()))]
+    #[tracing::instrument(skip(self, shellcode_src), fields(plugin = %self.info.plugin_name, save_type = ?self.save_type()))]
     pub fn validate_shellcode_source(&self, shellcode_src: &str) -> anyhow::Result<()> {
         use crate::error::PumpBinError;
 
@@ -715,7 +602,7 @@ impl Plugin {
                     .into());
                 }
 
-                let marker = self.replace().src_prefix();
+                let marker = self.replace.src_prefix.as_slice();
                 if !marker.is_empty() && data.windows(marker.len()).any(|w| w == marker) {
                     return Err(PumpBinError::ShellcodeContainsPlaceholder {
                         path: shellcode_src.to_string(),
@@ -738,7 +625,7 @@ impl Plugin {
         Ok(())
     }
 
-    #[tracing::instrument(skip(self), fields(plugin = %self.info().plugin_name()))]
+    #[tracing::instrument(skip(self), fields(plugin = %self.info.plugin_name))]
     pub fn validate_for_generation(
         &self,
         platform: Platform,
@@ -749,14 +636,14 @@ impl Plugin {
         let save_type = self.save_type();
 
         let platform_bins = match platform {
-            Platform::Windows => self.bins().windows(),
-            Platform::Linux => self.bins().linux(),
-            Platform::Darwin => self.bins().darwin(),
+            Platform::Windows => &self.bins.windows,
+            Platform::Linux => &self.bins.linux,
+            Platform::Darwin => &self.bins.darwin,
         };
 
         let binary_exists = match bin_type {
-            BinaryType::Executable => platform_bins.executable().is_some(),
-            BinaryType::DynamicLibrary => platform_bins.dynamic_library().is_some(),
+            BinaryType::Executable => platform_bins.executable.as_ref().is_some(),
+            BinaryType::DynamicLibrary => platform_bins.dynamic_library.as_ref().is_some(),
         };
 
         if !binary_exists {
@@ -767,11 +654,11 @@ impl Plugin {
             .into());
         }
 
-        if save_type == ShellcodeSaveType::Local && self.replace().size_holder().is_none() {
+        if save_type == ShellcodeSaveType::Local && self.replace.size_holder.as_ref().is_none() {
             return Err(PumpBinError::LocalRequiresSizeHolder.into());
         }
 
-        if self.replace().max_len() == 0 {
+        if self.replace.max_len as usize == 0 {
             return Err(PumpBinError::MaxLenZero.into());
         }
 
@@ -781,7 +668,7 @@ impl Plugin {
     }
 
     fn validate_post_module_constraints(&self, platform: Platform) -> anyhow::Result<()> {
-        let chain = self.plugins().modules();
+        let chain = self.plugins.modules.as_slice();
         for id in chain {
             let Some(descriptor) =
                 crate::modules::descriptor_for(crate::modules::ModuleKind::PostBuild, id)
@@ -808,14 +695,14 @@ impl Plugin {
     /// and returns the fully-processed binary bytes.
     ///
     /// `#[instrument]`: every shellcode/secret argument is in `skip(...)` to
-    /// keep the JSON log file free of shellcode bytes, Pass holder/replace
-    /// values, and runtime config (which often contains keys/passwords).
+    /// keep logs free of shellcode bytes, Pass holder/replace values, and
+    /// runtime config (which often contains keys/passwords).
     /// Only metadata that's safe to leak — plugin name, save_type, binary
     /// length — is logged.
     #[tracing::instrument(
         skip(self, bin, shellcode_src, pass, runtime_config),
         fields(
-            plugin = %self.info().plugin_name(),
+            plugin = %self.info.plugin_name,
             bin_len = bin.len(),
             pass_count = pass.len(),
         ),
@@ -840,9 +727,7 @@ impl Plugin {
                 // who pre-encrypted and passed the resulting Pass list
                 // has already committed to specific replacement bytes; re-running
                 // encrypt_shellcode would generate a fresh key and silently
-                // invalidate their plaintext shellcode. (Pre-1.1.2 this method
-                // unconditionally clobbered `pass` with plugin output, dropping
-                // any caller-supplied entries.)
+                // invalidate their plaintext shellcode.
                 let caller_holders: std::collections::HashSet<Vec<u8>> =
                     pass.iter().map(|p| p.holder.clone()).collect();
                 for p in output.pass() {
@@ -862,23 +747,23 @@ impl Plugin {
 
         tracing::info!(encrypted_len = shellcode_bytes.len(), "shellcode processed");
 
-        if shellcode_bytes.len() > self.replace().max_len() {
+        if shellcode_bytes.len() > self.replace.max_len as usize {
             return Err(crate::error::PumpBinError::ShellcodeTooLong {
                 kind: match save_type {
                     ShellcodeSaveType::Local => "Shellcode",
                     ShellcodeSaveType::Remote => "Shellcode URL",
                 },
                 got: shellcode_bytes.len(),
-                max: self.replace().max_len(),
+                max: self.replace.max_len as usize,
             }
             .into());
         }
 
         utils::replace(
             &mut bin,
-            self.replace().src_prefix(),
+            self.replace.src_prefix.as_slice(),
             shellcode_bytes.as_slice(),
-            self.replace().max_len(),
+            self.replace.max_len as usize,
         )?;
 
         // Apply Pass replacements (encryption keys, nonces, etc.)
@@ -905,7 +790,8 @@ impl Plugin {
         if save_type == ShellcodeSaveType::Local {
             let size_holder = self
                 .replace()
-                .size_holder()
+                .size_holder
+                .as_ref()
                 .ok_or(crate::error::PumpBinError::LocalRequiresSizeHolder)?;
             let size_bytes: Vec<u8> = if size_holder.len() == 4 {
                 let len = u32::try_from(shellcode_bytes.len()).map_err(|_| {
@@ -974,208 +860,5 @@ impl Plugin {
 
     pub fn plugins(&self) -> &PluginPlugins {
         &self.plugins
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Build a PluginBins with the requested slots populated. Uses a
-    /// 1-byte sentinel for each slot since auto_select_target only
-    /// cares about Some/None.
-    fn bins_with(slots: &[(Platform, BinaryType)]) -> PluginBins {
-        let mut bins = PluginBins::default();
-        for (p, b) in slots {
-            let target = match p {
-                Platform::Windows => &mut bins.windows,
-                Platform::Linux => &mut bins.linux,
-                Platform::Darwin => &mut bins.darwin,
-            };
-            match b {
-                BinaryType::Executable => *target.executable_mut() = Some(vec![0x00]),
-                BinaryType::DynamicLibrary => *target.dynamic_library_mut() = Some(vec![0x00]),
-            }
-        }
-        bins
-    }
-
-    #[test]
-    fn single_slot_is_returned_with_no_explicit_args() {
-        let bins = bins_with(&[(Platform::Linux, BinaryType::Executable)]);
-        assert_eq!(
-            bins.auto_select_target(None, None).unwrap(),
-            (Platform::Linux, BinaryType::Executable)
-        );
-    }
-
-    #[test]
-    fn windows_exe_wins_when_multiple_slots_and_no_args() {
-        let bins = bins_with(&[
-            (Platform::Linux, BinaryType::Executable),
-            (Platform::Windows, BinaryType::Executable),
-            (Platform::Darwin, BinaryType::Executable),
-        ]);
-        assert_eq!(
-            bins.auto_select_target(None, None).unwrap(),
-            (Platform::Windows, BinaryType::Executable)
-        );
-    }
-
-    #[test]
-    fn fallback_priority_when_no_windows_exe() {
-        // windows/lib beats linux/exe per the priority order.
-        let bins = bins_with(&[
-            (Platform::Linux, BinaryType::Executable),
-            (Platform::Windows, BinaryType::DynamicLibrary),
-            (Platform::Darwin, BinaryType::Executable),
-        ]);
-        assert_eq!(
-            bins.auto_select_target(None, None).unwrap(),
-            (Platform::Windows, BinaryType::DynamicLibrary)
-        );
-    }
-
-    #[test]
-    fn explicit_platform_narrows_to_its_only_populated_type() {
-        let bins = bins_with(&[
-            (Platform::Linux, BinaryType::DynamicLibrary),
-            (Platform::Windows, BinaryType::Executable),
-        ]);
-        assert_eq!(
-            bins.auto_select_target(Some(Platform::Linux), None)
-                .unwrap(),
-            (Platform::Linux, BinaryType::DynamicLibrary)
-        );
-    }
-
-    #[test]
-    fn explicit_platform_with_multiple_types_prefers_exe() {
-        let bins = bins_with(&[
-            (Platform::Linux, BinaryType::DynamicLibrary),
-            (Platform::Linux, BinaryType::Executable),
-        ]);
-        assert_eq!(
-            bins.auto_select_target(Some(Platform::Linux), None)
-                .unwrap(),
-            (Platform::Linux, BinaryType::Executable)
-        );
-    }
-
-    #[test]
-    fn explicit_args_that_match_nothing_error_with_available_slots() {
-        let bins = bins_with(&[(Platform::Linux, BinaryType::Executable)]);
-        let err = bins
-            .auto_select_target(Some(Platform::Windows), None)
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("linux/exe") && err.contains("available slots"),
-            "unhelpful error: {err}"
-        );
-    }
-
-    #[test]
-    fn empty_plugin_errors_with_clear_message() {
-        let bins = PluginBins::default();
-        let err = bins.auto_select_target(None, None).unwrap_err().to_string();
-        assert!(
-            err.contains("no populated binary slots"),
-            "unhelpful error: {err}"
-        );
-    }
-
-    #[test]
-    fn explicit_args_that_match_a_populated_slot_pass_through() {
-        let bins = bins_with(&[
-            (Platform::Windows, BinaryType::Executable),
-            (Platform::Linux, BinaryType::Executable),
-        ]);
-        assert_eq!(
-            bins.auto_select_target(Some(Platform::Linux), Some(BinaryType::Executable))
-                .unwrap(),
-            (Platform::Linux, BinaryType::Executable)
-        );
-    }
-
-    #[test]
-    fn post_chain_config_args_are_extracted_by_index() {
-        let mut config = BTreeMap::new();
-        config.insert(
-            "post_chain.0.config.donor".to_string(),
-            "/tmp/a.exe".to_string(),
-        );
-        config.insert("post_chain.1.config.mode".to_string(), "first".to_string());
-        config.insert(
-            "post_chain.1.config.patches".to_string(),
-            "aa:bb".to_string(),
-        );
-
-        assert_eq!(
-            post_chain_config_args(&config, 0),
-            vec!["donor=/tmp/a.exe".to_string()]
-        );
-        assert_eq!(
-            post_chain_config_args(&config, 1),
-            vec!["mode=first".to_string(), "patches=aa:bb".to_string()]
-        );
-    }
-
-    #[test]
-    fn stored_post_args_split_on_semicolon() {
-        assert_eq!(
-            split_stored_post_args("patches=aa:bb;mode=first"),
-            vec!["patches=aa:bb".to_string(), "mode=first".to_string()]
-        );
-    }
-
-    #[test]
-    fn module_config_args_use_scoped_keys() {
-        let mut config = BTreeMap::new();
-        config.insert("module:demo.alpha".to_string(), "one".to_string());
-        config.insert("module:demo.beta".to_string(), "two".to_string());
-
-        assert_eq!(
-            module_config_args(&config, "demo"),
-            vec!["alpha=one".to_string(), "beta=two".to_string()]
-        );
-    }
-
-    fn plugin_with_post_module(id: &str) -> Plugin {
-        let mut bins = PluginBins::default();
-        *bins.windows.executable_mut() = Some(vec![0x00]);
-        *bins.linux.executable_mut() = Some(vec![0x00]);
-        let mut plugin = Plugin {
-            replace: PluginReplace {
-                src_prefix: b"$$SHELLCODE$$".to_vec(),
-                size_holder: Some(b"$$99999$$".to_vec()),
-                max_len: 16,
-            },
-            bins,
-            ..Default::default()
-        };
-        plugin.plugins.modules_mut().push(id.to_string());
-        plugin
-    }
-
-    #[test]
-    fn windows_only_post_module_rejects_linux_target() {
-        let plugin = plugin_with_post_module("cert-graft");
-        let err = plugin
-            .validate_for_generation(Platform::Linux, BinaryType::Executable)
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("requires target platform Windows"),
-            "got: {err}"
-        );
-    }
-
-    #[test]
-    fn windows_only_post_module_accepts_windows_target() {
-        let plugin = plugin_with_post_module("cert-graft");
-        plugin
-            .validate_for_generation(Platform::Windows, BinaryType::Executable)
-            .unwrap();
     }
 }

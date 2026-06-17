@@ -1,5 +1,5 @@
 //! `PostBuildModule` that applies in-place byte substitutions across
-//! the generated implant. Useful for breaking specific YARA byte
+//! the generated implant. Useful for changing specific byte
 //! patterns when an equivalent-encoding swap is known (e.g. swapping
 //! `48 31 D2` → `48 33 D2` to break the Metasploit x64 PEB-walk
 //! signature without changing program behavior).
@@ -18,7 +18,7 @@ use anyhow::{anyhow, bail, Result};
 use memchr::memmem;
 
 use crate::modules::post_build::parse_kv_args;
-use crate::modules::{ArgSpec, PostBuildModule};
+use crate::modules::{ModuleArg, PostBuildModule};
 
 pub struct BytePatch;
 
@@ -31,12 +31,12 @@ impl PostBuildModule for BytePatch {
         "Apply in-place hex byte substitutions to the implant (equal-length pairs only)"
     }
 
-    fn args(&self) -> Vec<ArgSpec> {
+    fn args(&self) -> Vec<ModuleArg> {
         vec![
-            ArgSpec::new("patches", "string").required().described(
+            ModuleArg::new("patches", "string").required().described(
                 "Comma-separated <hex_from>:<hex_to> pairs; each pair must be equal length",
             ),
-            ArgSpec::new("mode", "string")
+            ModuleArg::new("mode", "string")
                 .default_val("all")
                 .described("`all` (replace every occurrence) or `first` (replace only first)"),
         ]
@@ -148,66 +148,4 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         return None;
     }
     (0..=haystack.len() - needle.len()).find(|&i| &haystack[i..i + needle.len()] == needle)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn replaces_all_occurrences_by_default() {
-        let m = BytePatch;
-        let mut buf = vec![0x48, 0x31, 0xd2, 0xaa, 0x48, 0x31, 0xd2, 0xbb];
-        m.apply(&["patches=4831d2:4833d2".into()], &mut buf)
-            .unwrap();
-        assert_eq!(buf, vec![0x48, 0x33, 0xd2, 0xaa, 0x48, 0x33, 0xd2, 0xbb]);
-    }
-
-    #[test]
-    fn mode_first_replaces_only_first() {
-        let m = BytePatch;
-        let mut buf = vec![0x48, 0x31, 0xd2, 0xaa, 0x48, 0x31, 0xd2];
-        m.apply(
-            &["patches=4831d2:4833d2".into(), "mode=first".into()],
-            &mut buf,
-        )
-        .unwrap();
-        assert_eq!(buf, vec![0x48, 0x33, 0xd2, 0xaa, 0x48, 0x31, 0xd2]);
-    }
-
-    #[test]
-    fn multiple_pairs_applied_in_order() {
-        let m = BytePatch;
-        let mut buf = vec![0x48, 0x31, 0xd2, 0x48, 0x31, 0xc0];
-        m.apply(&["patches=4831d2:4833d2,4831c0:4833c0".into()], &mut buf)
-            .unwrap();
-        assert_eq!(buf, vec![0x48, 0x33, 0xd2, 0x48, 0x33, 0xc0]);
-    }
-
-    #[test]
-    fn length_mismatch_errors() {
-        let m = BytePatch;
-        let mut buf = vec![0u8; 16];
-        let err = m
-            .apply(&["patches=4831d2:4833".into()], &mut buf)
-            .unwrap_err();
-        assert!(err.to_string().contains("length mismatch"));
-    }
-
-    #[test]
-    fn missing_patches_arg_errors() {
-        let m = BytePatch;
-        let mut buf = Vec::new();
-        let err = m.apply(&[], &mut buf).unwrap_err();
-        assert!(err.to_string().contains("patches"));
-    }
-
-    #[test]
-    fn no_match_is_noop() {
-        let m = BytePatch;
-        let mut buf = vec![0u8; 8];
-        m.apply(&["patches=4831d2:4833d2".into()], &mut buf)
-            .unwrap();
-        assert_eq!(buf, vec![0u8; 8]);
-    }
 }

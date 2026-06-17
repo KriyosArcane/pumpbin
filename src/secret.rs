@@ -1,21 +1,15 @@
 //! Memory-safe wrappers for shellcode and Pass replacement bytes.
 //!
-//! v1.1.8 adds [`SecretBuf`] — a `Vec<u8>` wrapper that zeroizes itself on
-//! drop and prints `<redacted N bytes>` in `Debug` output instead of the
-//! raw bytes. Library code that briefly holds shellcode in memory wraps it
-//! in `SecretBuf` so the heap allocation is wiped before the allocator
-//! reuses the page.
+//! [`SecretBuf`] zeroizes itself on drop and prints `<redacted N bytes>`
+//! in `Debug` output instead of raw bytes.
 //!
 //! # Scope (intentional)
 //!
 //! The on-wire serialized form of [`crate::plugin_system::Pass`] still
-//! uses `Vec<u8>` because the JSON shape is part of the WASM SDK contract
-//! and changing it would break every shipped plugin. `SecretBuf` is an
-//! *in-process* safety belt that wipes the host-side allocations once
-//! they're no longer needed. The bytes still travel through serde during
-//! WASM hook invocation; perfect in-process secrecy would require also
-//! patching `serde_json`'s scratch buffers, which is out of scope for the
-//! 1.x line.
+//! uses `Vec<u8>` because external modules exchange JSON wire frames.
+//! `SecretBuf` is an *in-process* safety belt that wipes host-side
+//! allocations once they're no longer needed. The bytes still travel
+//! through serde during external module calls.
 //!
 //! # Memory protection
 //!
@@ -29,7 +23,7 @@
 //! platform, consider running with swap disabled or on an encrypted
 //! swap partition.
 //!
-//! # What zeroize does (and doesn't) buy you
+//! # Limits
 //!
 //! Wiping `Vec<u8>` on drop prevents the most common leak vector — the
 //! kernel handing the same physical page to another process or to the

@@ -4,9 +4,8 @@
 //! `plugin_system.rs`, and `maker.rs` is represented as a `PumpBinError`
 //! variant with a stable `PB-Exxxx` code accessible via [`PumpBinError::code`].
 //!
-//! Today (v1.1.5) this type is wrapped in `anyhow::Error` at the existing
-//! library boundaries — no mass signature change. Callers that want
-//! machine-readable error matching do:
+//! Most public APIs return `anyhow::Error`; callers that want
+//! machine-readable error matching can downcast:
 //!
 //! ```ignore
 //! match plugin.replace_binary(bin, src, pass, None) {
@@ -30,9 +29,7 @@
 
 use thiserror::Error;
 
-/// Result alias for the planned (v2.0) post-migration boundary type. Today,
-/// most public APIs still return `anyhow::Result<T>` with a `PumpBinError`
-/// wrapped inside. This alias is provided so new code can opt in.
+/// Result alias for APIs that return `PumpBinError` directly.
 pub type PumpBinResult<T> = std::result::Result<T, PumpBinError>;
 
 #[derive(Debug, Error)]
@@ -208,8 +205,6 @@ impl PumpBinError {
 
 /// Bridge from the existing `utils::ReplaceError` so old callers keep
 /// working while new code can match on `PumpBinError` codes via downcast.
-/// Keep `utils::ReplaceError` exported until the v2.0 boundary migration
-/// removes it entirely.
 impl From<crate::utils::ReplaceError> for PumpBinError {
     fn from(e: crate::utils::ReplaceError) -> Self {
         match e {

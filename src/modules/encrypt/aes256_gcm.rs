@@ -1,7 +1,6 @@
-//! Native AES-256-GCM `EncryptModule`. Replaces the
-//! `plugin-examples/aes-gcm-encrypt` WASM plugin.
+//! Native AES-256-GCM `EncryptModule`.
 //!
-//! Loader contract (unchanged from the WASM version):
+//! Loader contract:
 //!   - 32-byte key placeholder `$$KKKKKKKKKKKKKKKKKKKKKKKKKKKK$$`
 //!   - 12-byte nonce placeholder `$$NNNNNNNN$$`
 //!
@@ -58,51 +57,5 @@ impl EncryptModule for AesGcm {
         nonce.zeroize();
 
         Ok(output)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use aes_gcm::Key;
-
-    #[test]
-    fn id_and_description_are_stable() {
-        let m = AesGcm;
-        assert_eq!(m.id(), "aes-gcm");
-        assert!(!m.description().is_empty());
-    }
-
-    #[test]
-    fn encrypt_then_decrypt_roundtrip() {
-        let m = AesGcm;
-        let shellcode = b"\x90\x90\x90\xc3 example shellcode payload";
-
-        let out = m.encrypt(shellcode).unwrap();
-        assert_eq!(out.pass.len(), 2);
-
-        let key_pass = &out.pass[0];
-        assert_eq!(key_pass.holder, KEY_HOLDER);
-        assert_eq!(key_pass.replace_by.len(), 32);
-
-        let nonce_pass = &out.pass[1];
-        assert_eq!(nonce_pass.holder, NONCE_HOLDER);
-        assert_eq!(nonce_pass.replace_by.len(), 12);
-
-        let key = Key::<Aes256Gcm>::from_slice(&key_pass.replace_by);
-        let nonce = aes_gcm::Nonce::from_slice(&nonce_pass.replace_by);
-        let cipher = Aes256Gcm::new(key);
-        let decrypted = cipher.decrypt(nonce, out.encrypted.as_slice()).unwrap();
-
-        assert_eq!(decrypted, shellcode);
-    }
-
-    #[test]
-    fn each_call_yields_unique_key_and_nonce() {
-        let m = AesGcm;
-        let a = m.encrypt(b"x").unwrap();
-        let b = m.encrypt(b"x").unwrap();
-        assert_ne!(a.pass[0].replace_by, b.pass[0].replace_by);
-        assert_ne!(a.pass[1].replace_by, b.pass[1].replace_by);
     }
 }

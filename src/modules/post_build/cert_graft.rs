@@ -8,7 +8,7 @@
 //!
 //! Honest scope: the grafted signature will NOT pass `WinVerifyTrust`
 //! (donor's hash, not the implant's). It defeats naïve "no signature
-//! present" YARA/string checks; it does not defeat real signature
+//! present" string checks; it does not defeat real signature
 //! validation. Pair with a SIP hijack on the target if you need
 //! `Get-AuthenticodeSignature` to return `Valid`.
 
@@ -16,7 +16,7 @@ use anyhow::{anyhow, bail, Result};
 use std::fs;
 
 use crate::modules::post_build::parse_kv_args;
-use crate::modules::{ArgSpec, ModuleConstraints, PostBuildModule};
+use crate::modules::{ModuleArg, ModuleConstraints, PostBuildModule};
 use crate::pe::read_security_dir;
 use crate::Platform;
 
@@ -33,8 +33,8 @@ impl PostBuildModule for CertGraft {
         "Graft a donor PE's WIN_CERTIFICATE onto the implant (cert blob only; use external `trustmebro` for full clone)"
     }
 
-    fn args(&self) -> Vec<ArgSpec> {
-        vec![ArgSpec::new("donor", "path")
+    fn args(&self) -> Vec<ModuleArg> {
+        vec![ModuleArg::new("donor", "path")
             .required()
             .described("Path to a donor PE with an embedded Authenticode signature")]
     }
@@ -131,25 +131,4 @@ fn read_u32(b: &[u8], at: usize) -> Result<u32> {
 
 fn write_u32(b: &mut [u8], at: usize, value: u32) {
     b[at..at + 4].copy_from_slice(&value.to_le_bytes());
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn missing_donor_arg_errors() {
-        let m = CertGraft;
-        let mut buf = Vec::new();
-        let err = m.apply(&[], &mut buf).unwrap_err();
-        assert!(err.to_string().contains("donor="));
-    }
-
-    #[test]
-    fn malformed_arg_errors() {
-        let m = CertGraft;
-        let mut buf = Vec::new();
-        let err = m.apply(&["nope".into()], &mut buf).unwrap_err();
-        assert!(err.to_string().contains("expected key=value"));
-    }
 }

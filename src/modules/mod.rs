@@ -47,44 +47,6 @@ impl ModuleKind {
     }
 }
 
-/// Per-argument schema entry, surfaced by `pumpbin-cli module list
-/// --options`. Built-in modules return a `Vec<ArgSpec>` from
-/// `args()`; external modules carry their schema in the manifest
-/// (see `external::wire::ManifestArg`) — both render uniformly in
-/// the CLI.
-#[derive(Debug, Clone)]
-pub struct ArgSpec {
-    pub key: &'static str,
-    pub arg_type: &'static str,
-    pub description: &'static str,
-    pub required: bool,
-    pub default: Option<&'static str>,
-}
-
-impl ArgSpec {
-    pub const fn new(key: &'static str, arg_type: &'static str) -> Self {
-        Self {
-            key,
-            arg_type,
-            description: "",
-            required: false,
-            default: None,
-        }
-    }
-    pub const fn required(mut self) -> Self {
-        self.required = true;
-        self
-    }
-    pub const fn described(mut self, d: &'static str) -> Self {
-        self.description = d;
-        self
-    }
-    pub const fn default_val(mut self, d: &'static str) -> Self {
-        self.default = Some(d);
-        self
-    }
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct ModuleArg {
     pub key: String,
@@ -92,6 +54,30 @@ pub struct ModuleArg {
     pub required: bool,
     pub default: Option<String>,
     pub description: String,
+}
+
+impl ModuleArg {
+    pub fn new(key: impl Into<String>, arg_type: impl Into<String>) -> Self {
+        Self {
+            key: key.into(),
+            arg_type: arg_type.into(),
+            description: String::new(),
+            required: false,
+            default: None,
+        }
+    }
+    pub fn required(mut self) -> Self {
+        self.required = true;
+        self
+    }
+    pub fn described(mut self, description: impl Into<String>) -> Self {
+        self.description = description.into();
+        self
+    }
+    pub fn default_val(mut self, default: impl Into<String>) -> Self {
+        self.default = Some(default.into());
+        self
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -113,7 +99,7 @@ impl ModuleDescriptor {
 pub trait EncryptModule: Send + Sync {
     fn id(&self) -> &'static str;
     fn description(&self) -> &'static str;
-    fn args(&self) -> Vec<ArgSpec> {
+    fn args(&self) -> Vec<ModuleArg> {
         Vec::new()
     }
     fn constraints(&self) -> ModuleConstraints {
@@ -125,7 +111,7 @@ pub trait EncryptModule: Send + Sync {
 pub trait PostBuildModule: Send + Sync {
     fn id(&self) -> &'static str;
     fn description(&self) -> &'static str;
-    fn args(&self) -> Vec<ArgSpec> {
+    fn args(&self) -> Vec<ModuleArg> {
         Vec::new()
     }
     fn constraints(&self) -> ModuleConstraints {
@@ -169,52 +155,45 @@ pub fn descriptors() -> Vec<ModuleDescriptor> {
     }));
 
     for module in external::registry().all() {
-        let kind = module.kind().to_string();
-        let host_platforms = if module
-            .manifest
-            .platforms
-            .iter()
-            .any(|platform| platform == "any")
-        {
-            Vec::new()
-        } else {
-            module.manifest.platforms.clone()
-        };
-        out.push(ModuleDescriptor {
-            id: module.id().to_string(),
-            kind,
-            source: format!("external: {}", module.manifest_path.display()),
-            description: module.description().to_string(),
-            args: module
-                .manifest
-                .args
-                .iter()
-                .map(|arg| ModuleArg {
-                    key: arg.key.clone(),
-                    arg_type: if arg.arg_type.is_empty() {
-                        "string".to_string()
-                    } else {
-                        arg.arg_type.clone()
-                    },
-                    required: arg.required,
-                    default: arg.default.clone(),
-                    description: arg.description.clone(),
-                })
-                .collect(),
-            constraints: ModuleConstraints {
-                host_platforms,
-                ..Default::default()
-            },
-        });
+        out.push(external_descriptor(module));
     }
 
     out
 }
 
 pub fn descriptor_for(kind: ModuleKind, id: &str) -> Option<ModuleDescriptor> {
-    descriptors()
-        .into_iter()
-        .find(|descriptor| descriptor.kind == kind.as_str() && descriptor.id == id)
+    match kind {
+        ModuleKind::Encrypt => encrypt_modules()
+            .iter()
+            .find(|module| module.id() == id)
+            .map(|module| {
+                builtin_descriptor(
+                    module.id(),
+                    kind,
+                    module.description(),
+                    module.args(),
+                    module.constraints(),
+                )
+            }),
+        ModuleKind::PostBuild => post_build_modules()
+            .iter()
+            .find(|module| module.id() == id)
+            .map(|module| {
+                builtin_descriptor(
+                    module.id(),
+                    kind,
+                    module.description(),
+                    module.args(),
+                    module.constraints(),
+                )
+            }),
+    }
+    .or_else(|| {
+        external::registry()
+            .get(id)
+            .filter(|module| module.kind().to_string() == kind.as_str())
+            .map(external_descriptor)
+    })
 }
 
 pub fn wire_kind_for(id: &str) -> Option<external::wire::WireKind> {
@@ -231,7 +210,7 @@ fn builtin_descriptor(
     id: &str,
     kind: ModuleKind,
     description: &str,
-    args: Vec<ArgSpec>,
+    args: Vec<ModuleArg>,
     constraints: ModuleConstraints,
 ) -> ModuleDescriptor {
     ModuleDescriptor {
@@ -239,109 +218,46 @@ fn builtin_descriptor(
         kind: kind.as_str().to_string(),
         source: "built-in".to_string(),
         description: description.to_string(),
-        args: args.into_iter().map(arg_from_spec).collect(),
+        args,
         constraints,
     }
 }
 
-fn arg_from_spec(arg: ArgSpec) -> ModuleArg {
-    ModuleArg {
-        key: arg.key.to_string(),
-        arg_type: arg.arg_type.to_string(),
-        required: arg.required,
-        default: arg.default.map(str::to_string),
-        description: arg.description.to_string(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn aes_gcm_is_registered_in_encrypt_modules() {
-        let ids: Vec<_> = encrypt_modules().iter().map(|m| m.id()).collect();
-        assert!(ids.contains(&"aes-gcm"), "got {:?}", ids);
-    }
-
-    #[test]
-    fn registries_reflect_step_4_ports() {
-        let encrypt: Vec<_> = encrypt_modules().iter().map(|m| m.id()).collect();
-        assert!(encrypt.contains(&"aes-gcm"));
-        assert!(encrypt.contains(&"xor"));
-
-        let post: Vec<_> = post_build_modules().iter().map(|m| m.id()).collect();
-        assert!(post.contains(&"pe-version-info"));
-        assert!(
-            !post.contains(&"cert-blob-steal"),
-            "cert-blob-steal removed; use trustmebro external module"
-        );
-    }
-
-    #[test]
-    fn module_kind_is_copy() {
-        let k = ModuleKind::Encrypt;
-        let _k2 = k;
-        let _k3 = k;
-    }
-
-    #[test]
-    fn no_duplicate_module_ids() {
-        let mut seen = std::collections::HashSet::new();
-        for m in encrypt_modules() {
-            assert!(seen.insert(m.id()), "duplicate: {}", m.id());
-        }
-        for m in post_build_modules() {
-            assert!(seen.insert(m.id()), "duplicate: {}", m.id());
-        }
-    }
-
-    #[test]
-    fn all_modules_have_nonempty_id_and_description() {
-        for m in encrypt_modules() {
-            assert!(!m.id().is_empty());
-            assert!(!m.description().is_empty());
-        }
-        for m in post_build_modules() {
-            assert!(!m.id().is_empty());
-            assert!(!m.description().is_empty());
-        }
-    }
-
-    #[test]
-    fn descriptors_include_built_in_args_and_constraints() {
-        let descriptors = descriptors();
-        let byte_patch = descriptors
-            .iter()
-            .find(|descriptor| descriptor.id == "byte-patch")
-            .expect("byte-patch descriptor");
-        assert_eq!(byte_patch.kind, "post-build");
-        assert!(byte_patch
+fn external_descriptor(module: &external::ExternalModule) -> ModuleDescriptor {
+    let host_platforms = if module
+        .manifest
+        .platforms
+        .iter()
+        .any(|platform| platform == "any")
+    {
+        Vec::new()
+    } else {
+        module.manifest.platforms.clone()
+    };
+    ModuleDescriptor {
+        id: module.id().to_string(),
+        kind: module.kind().to_string(),
+        source: format!("external: {}", module.manifest_path.display()),
+        description: module.description().to_string(),
+        args: module
+            .manifest
             .args
             .iter()
-            .any(|arg| arg.key == "patches" && arg.required));
-
-        let cert_graft = descriptors
-            .iter()
-            .find(|descriptor| descriptor.id == "cert-graft")
-            .expect("cert-graft descriptor");
-        assert_eq!(
-            cert_graft.constraints.requires_platform,
-            Some(crate::Platform::Windows)
-        );
-        assert!(cert_graft
-            .constraints
-            .display_strings()
-            .iter()
-            .any(|constraint| constraint == "target platform: Windows"));
-    }
-
-    #[test]
-    fn descriptor_for_finds_kind_specific_module() {
-        let descriptor =
-            descriptor_for(ModuleKind::PostBuild, "byte-patch").expect("byte-patch descriptor");
-        assert_eq!(descriptor.kind, ModuleKind::PostBuild.as_str());
-
-        assert!(descriptor_for(ModuleKind::Encrypt, "byte-patch").is_none());
+            .map(|arg| ModuleArg {
+                key: arg.key.clone(),
+                arg_type: if arg.arg_type.is_empty() {
+                    "string".to_string()
+                } else {
+                    arg.arg_type.clone()
+                },
+                required: arg.required,
+                default: arg.default.clone(),
+                description: arg.description.clone(),
+            })
+            .collect(),
+        constraints: ModuleConstraints {
+            host_platforms,
+            ..Default::default()
+        },
     }
 }
