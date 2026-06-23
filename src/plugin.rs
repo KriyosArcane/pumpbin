@@ -136,10 +136,8 @@ impl PluginBins {
         };
 
         match bin_type {
-            BinaryType::Executable => platform_bins.executable.as_ref().map(|v| v.as_slice()),
-            BinaryType::DynamicLibrary => {
-                platform_bins.dynamic_library.as_ref().map(|v| v.as_slice())
-            }
+            BinaryType::Executable => platform_bins.executable.as_deref(),
+            BinaryType::DynamicLibrary => platform_bins.dynamic_library.as_deref(),
         }
     }
 

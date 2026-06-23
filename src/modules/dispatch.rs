@@ -137,6 +137,7 @@ fn validate_args(
     }
 
     let mut values = BTreeMap::new();
+    let mut provided = std::collections::BTreeSet::new();
     for arg in args {
         let (key, value) = arg
             .split_once('=')
@@ -145,6 +146,7 @@ fn validate_args(
         if key.is_empty() {
             return Err(anyhow!("module '{module_id}': empty arg key in '{arg}'"));
         }
+        provided.insert(key.to_string());
         values.insert(key.to_string(), value.to_string());
     }
 
@@ -187,7 +189,7 @@ fn validate_args(
 
     Ok(values
         .into_iter()
-        .filter(|(_, value)| !value.is_empty())
+        .filter(|(key, value)| !value.is_empty() || provided.contains(key))
         .map(|(key, value)| format!("{key}={value}"))
         .collect())
 }

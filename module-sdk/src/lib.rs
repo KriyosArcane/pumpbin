@@ -30,6 +30,7 @@ use std::io::{Read, Write};
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 pub const PROTOCOL_VERSION: u32 = 1;
+const MAX_FRAME_SIZE: usize = 256 * 1024 * 1024;
 
 pub type Args = BTreeMap<String, String>;
 
@@ -206,12 +207,22 @@ fn read_frame<R: Read>(r: &mut R) -> Result<Option<Vec<u8>>> {
         return Err(format!("module SDK: partial length prefix ({n}/4 bytes)").into());
     }
     let len = u32::from_le_bytes(len_buf) as usize;
+    if len > MAX_FRAME_SIZE {
+        return Err(format!("module SDK: frame size {len} exceeds {MAX_FRAME_SIZE}").into());
+    }
     let mut buf = vec![0u8; len];
     r.read_exact(&mut buf)?;
     Ok(Some(buf))
 }
 
 fn write_frame<W: Write>(w: &mut W, payload: &[u8]) -> Result<()> {
+    if payload.len() > MAX_FRAME_SIZE {
+        return Err(format!(
+            "module SDK: payload too large: {} bytes > {MAX_FRAME_SIZE}",
+            payload.len()
+        )
+        .into());
+    }
     let len = u32::try_from(payload.len())
         .map_err(|_| format!("payload too large: {} bytes > u32::MAX", payload.len()))?;
     w.write_all(&len.to_le_bytes())?;

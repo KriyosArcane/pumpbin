@@ -1,6 +1,5 @@
 use memchr::memmem;
-use rand::RngCore;
-use std::iter;
+use rand::{Rng, RngCore};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -38,7 +37,7 @@ pub fn replace_with_rng<R: RngCore>(
         .ok_or_else(|| ReplaceError::HolderNotFound(String::from_utf8_lossy(holder).to_string()))?;
 
     let mut replace_by = replace_by.to_owned();
-    let mut random: Vec<u8> = iter::repeat_n(b'0', max_len - replace_by.len()).collect();
+    let mut random = vec![0u8; max_len - replace_by.len()];
     rng.fill_bytes(&mut random);
     replace_by.extend_from_slice(random.as_slice());
 
@@ -138,11 +137,11 @@ pub fn recompute_pe_checksum(bin: &mut [u8]) -> bool {
 
 pub fn random_id_lowercase(len: usize) -> String {
     let mut rng = rand::rng();
-    let chars: Vec<char> = "abcdefghijklmnopqrstuvwxyz0123456789".chars().collect();
+    const CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
     (0..len)
         .map(|_| {
-            let idx = (rng.next_u32() as usize) % chars.len();
-            chars[idx]
+            let idx = rng.random_range(0..CHARS.len());
+            CHARS[idx] as char
         })
         .collect()
 }

@@ -12,19 +12,11 @@ use tracing_subscriber::fmt::time::SystemTime;
 use tracing_subscriber::EnvFilter;
 
 /// Configuration passed by the binary entry point before calling `init`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct LoggingConfig {
     /// Override the default level. `None` means read `PUMPBIN_LOG` or fall
     /// back to `info`.
     pub level_override: Option<String>,
-}
-
-impl Default for LoggingConfig {
-    fn default() -> Self {
-        Self {
-            level_override: None,
-        }
-    }
 }
 
 /// Initialize the global tracing subscriber. Returns `Ok(())` on the first

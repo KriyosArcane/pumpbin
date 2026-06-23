@@ -429,18 +429,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 .bins()
                 .auto_select_target(explicit_platform, explicit_binary_type)?;
 
-            let target_label = format!(
-                "{}/{}",
-                match parsed_platform {
-                    Platform::Windows => "win",
-                    Platform::Linux => "linux",
-                    Platform::Darwin => "darwin",
-                },
-                match parsed_binary_type {
-                    BinaryType::Executable => "exe",
-                    BinaryType::DynamicLibrary => "lib",
-                }
-            );
+            let target_label = format_target_label(parsed_platform, parsed_binary_type);
 
             pb_info!(plugin_label, target_label, "loading pack");
 
@@ -466,25 +455,12 @@ fn dispatch(cli: &Cli) -> Result<()> {
             plugin_obj.validate_for_generation(parsed_platform, parsed_binary_type)?;
 
             // Resolve output path before dry-run so we can show it in the preview.
-            let output_path = if let Some(out) = output {
-                out.clone()
-            } else {
-                let ext = ext_for_output(parsed_platform, parsed_binary_type);
-                let base = plugin_obj
-                    .info()
-                    .plugin_name
-                    .to_lowercase()
-                    .replace(' ', "_");
-                let candidate = PathBuf::from(format!("{base}.{ext}"));
-                // Only add a timestamp if the clean name is already taken,
-                // so interactive use gets a predictable filename.
-                if candidate.exists() {
-                    let ts = Local::now().format("%Y%m%d_%H%M%S").to_string();
-                    PathBuf::from(format!("{base}_{ts}.{ext}"))
-                } else {
-                    candidate
-                }
-            };
+            let output_path = resolve_output_path(
+                output.as_ref(),
+                &plugin_obj.info.plugin_name,
+                parsed_platform,
+                parsed_binary_type,
+            );
 
             if *dry_run {
                 println!("DRY RUN: nothing will be written\n");
@@ -597,18 +573,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 );
             }
 
-            let target_label = format!(
-                "{}/{}",
-                match parsed_platform {
-                    Platform::Windows => "win",
-                    Platform::Linux => "linux",
-                    Platform::Darwin => "darwin",
-                },
-                match parsed_binary_type {
-                    BinaryType::Executable => "exe",
-                    BinaryType::DynamicLibrary => "lib",
-                }
-            );
+            let target_label = format_target_label(parsed_platform, parsed_binary_type);
 
             tracing::info!(%parsed_platform, %parsed_binary_type, "Validating plugin for target");
             plugin_obj.validate_for_generation(parsed_platform, parsed_binary_type)?;
@@ -685,9 +650,10 @@ fn dispatch(cli: &Cli) -> Result<()> {
             for (idx_0, path) in bin_files.iter().enumerate() {
                 let idx = idx_0 + 1;
                 let progress_filename = path.file_name().unwrap_or_default().to_string_lossy();
-                eprintln!(
-                    "PB  {:<20}  {}  [*] {}/{} {}",
-                    plugin_label, target_label, idx, total, progress_filename
+                pb_info!(
+                    plugin_label,
+                    target_label,
+                    "{idx}/{total} {progress_filename}"
                 );
 
                 tracing::info!(file = ?path.file_name().unwrap_or_default(), "Processing shellcode");
@@ -927,18 +893,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
             };
             let parsed_binary_type = parse_binary_type(binary_type)?;
 
-            let target_label = format!(
-                "{}/{}",
-                match parsed_platform {
-                    Platform::Windows => "win",
-                    Platform::Linux => "linux",
-                    Platform::Darwin => "darwin",
-                },
-                match parsed_binary_type {
-                    BinaryType::Executable => "exe",
-                    BinaryType::DynamicLibrary => "lib",
-                }
-            );
+            let target_label = format_target_label(parsed_platform, parsed_binary_type);
 
             eprintln!(
                 "PB  {:<20}  {}  [*] reading loader",
@@ -1029,24 +984,16 @@ fn dispatch(cli: &Cli) -> Result<()> {
             let sc_size = sc_bytes.len();
             let chain = plugin_obj.plugins.modules.as_slice().to_vec();
 
-            let output_path = if let Some(out) = output {
-                out.clone()
-            } else {
-                let ext = ext_for_output(resolved_platform, resolved_binary_type);
-                let base = loader
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("stamp")
-                    .to_lowercase()
-                    .replace(' ', "_");
-                let candidate = PathBuf::from(format!("{base}.{ext}"));
-                if candidate.exists() {
-                    let ts = Local::now().format("%Y%m%d_%H%M%S").to_string();
-                    PathBuf::from(format!("{base}_{ts}.{ext}"))
-                } else {
-                    candidate
-                }
-            };
+            let output_base = loader
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("stamp");
+            let output_path = resolve_output_path(
+                output.as_ref(),
+                output_base,
+                resolved_platform,
+                resolved_binary_type,
+            );
 
             if *dry_run {
                 println!("DRY RUN: nothing will be written\n");
@@ -1441,18 +1388,7 @@ fn pack_crate(
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("loader");
-    let target_str = format!(
-        "{}/{}",
-        match platform {
-            Platform::Windows => "win",
-            Platform::Linux => "linux",
-            Platform::Darwin => "darwin",
-        },
-        match binary_type {
-            BinaryType::Executable => "exe",
-            BinaryType::DynamicLibrary => "lib",
-        }
-    );
+    let target_str = format_target_label(platform, binary_type);
 
     // 1. Build the crate (unless --skip-build).
     if !skip_build {
@@ -1601,6 +1537,19 @@ fn parse_binary_type(s: &str) -> Result<BinaryType> {
     }
 }
 
+fn format_target_label(platform: Platform, binary_type: BinaryType) -> String {
+    let platform = match platform {
+        Platform::Windows => "win",
+        Platform::Linux => "linux",
+        Platform::Darwin => "darwin",
+    };
+    let binary_type = match binary_type {
+        BinaryType::Executable => "exe",
+        BinaryType::DynamicLibrary => "lib",
+    };
+    format!("{platform}/{binary_type}")
+}
+
 fn parse_save_type(s: &str) -> Result<ShellcodeSaveType> {
     match s.to_lowercase().as_str() {
         "local" => Ok(ShellcodeSaveType::Local),
@@ -1609,6 +1558,27 @@ fn parse_save_type(s: &str) -> Result<ShellcodeSaveType> {
             "Invalid save type '{}'. Expected: local, remote",
             s
         )),
+    }
+}
+
+fn resolve_output_path(
+    output: Option<&PathBuf>,
+    base_name: &str,
+    platform: Platform,
+    binary_type: BinaryType,
+) -> PathBuf {
+    if let Some(output) = output {
+        return output.clone();
+    }
+
+    let ext = ext_for_output(platform, binary_type);
+    let base = base_name.to_lowercase().replace(' ', "_");
+    let candidate = PathBuf::from(format!("{base}.{ext}"));
+    if candidate.exists() {
+        let ts = Local::now().format("%Y%m%d_%H%M%S").to_string();
+        PathBuf::from(format!("{base}_{ts}.{ext}"))
+    } else {
+        candidate
     }
 }
 

@@ -93,7 +93,10 @@ impl B1nBuilder {
             .unwrap_or(0);
         plugin.replace.max_len = match max_len_override {
             Some(explicit) => {
-                if explicit > detected_capacity as u64 && detected_capacity > 0 {
+                if explicit == 0 {
+                    return Err(crate::error::PumpBinError::MaxLenZero.into());
+                }
+                if explicit > detected_capacity as u64 {
                     return Err(crate::error::PumpBinError::MaxLenExceedsCapacity {
                         max_len: explicit,
                         capacity: detected_capacity,

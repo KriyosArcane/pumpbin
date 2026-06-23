@@ -130,7 +130,7 @@ fn decode_hex(s: &str) -> Result<Vec<u8>> {
 fn apply_patch(buf: &mut [u8], from: &[u8], to: &[u8], replace_all: bool) {
     let mut start = 0;
     while start + from.len() <= buf.len() {
-        if let Some(pos) = find_subslice(&buf[start..], from) {
+        if let Some(pos) = memmem::find(&buf[start..], from) {
             let abs = start + pos;
             buf[abs..abs + to.len()].copy_from_slice(to);
             if !replace_all {
@@ -141,11 +141,4 @@ fn apply_patch(buf: &mut [u8], from: &[u8], to: &[u8], replace_all: bool) {
             return;
         }
     }
-}
-
-fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() || needle.len() > haystack.len() {
-        return None;
-    }
-    (0..=haystack.len() - needle.len()).find(|&i| &haystack[i..i + needle.len()] == needle)
 }
